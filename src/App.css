@@ -23,11 +23,15 @@
   --teal-soft: #e2ebea;
   --selection: rgba(175, 76, 56, 0.2);
   --shadow: 0 18px 55px rgba(51, 43, 31, 0.11);
-  --sidebar-width: 286px;
-  --toc-width: 232px;
+  /* ~18.5% : 67.5% : 14% at 1440px (264 / 976 / 200). */
+  --sidebar-width: 264px;
+  --toc-width: 200px;
   --reader-font-size: 17px;
   --reader-line-height: 1.86;
-  --reader-measure: 760px;
+  /* Fallback; runtime may set a px cap or `none` for fluid measure. */
+  --reader-measure: none;
+  --reader-gutter-inline: 40px;
+  --reader-gutter-toc: 24px;
 }
 
 :root[data-theme="dark"] {
@@ -653,7 +657,7 @@ a:focus-visible {
   min-height: 58px;
   align-items: center;
   gap: 16px;
-  padding: 0 22px 0 28px;
+  padding: 0 22px 0 var(--reader-gutter-inline);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 93%, transparent);
   backdrop-filter: blur(14px);
@@ -732,10 +736,13 @@ a:focus-visible {
 }
 
 .article-shell {
-  width: min(calc(100% - 80px), var(--reader-measure));
+  /* Fill the middle column (like the reference site); optional max via --reader-measure. */
+  width: 100%;
+  max-width: var(--reader-measure);
   min-height: 100%;
-  margin: 0 auto;
-  padding: 52px 0 110px;
+  margin: 0;
+  padding: 52px var(--reader-gutter-toc) 110px var(--reader-gutter-inline);
+  box-sizing: border-box;
 }
 
 .article-header {
@@ -1248,7 +1255,7 @@ a:focus-visible {
 
 .toc-panel {
   min-width: 0;
-  padding: 43px 20px 28px 0;
+  padding: 43px 14px 28px 0;
   overflow: auto;
   border-left: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 95%, var(--chrome));
@@ -1264,7 +1271,7 @@ a:focus-visible {
 
 .toc-inner {
   position: relative;
-  padding-left: 24px;
+  padding-left: 18px;
 }
 
 .toc-label {
@@ -1646,20 +1653,18 @@ a:focus-visible {
 
 @media (max-width: 1180px) {
   :root {
-    --sidebar-width: 220px;
-    --toc-width: 170px;
+    --sidebar-width: 200px;
+    --toc-width: 156px;
+    --reader-gutter-inline: 28px;
+    --reader-gutter-toc: 16px;
   }
 
   .toc-panel {
-    padding-right: 12px;
+    padding-right: 10px;
   }
 
   .toc-inner {
-    padding-left: 15px;
-  }
-
-  .article-shell {
-    width: min(calc(100% - 42px), var(--reader-measure));
+    padding-left: 14px;
   }
 }
 
@@ -1718,8 +1723,8 @@ a:focus-visible {
   }
 
   .article-shell {
-    width: calc(100% - 48px);
-    padding-top: 44px;
+    width: 100%;
+    padding: 44px 24px 110px;
   }
 
   .welcome {
@@ -1738,7 +1743,7 @@ a:focus-visible {
 
 @media (max-width: 640px) {
   :root {
-    --sidebar-width: min(86vw, 286px);
+    --sidebar-width: min(86vw, 264px);
   }
 
   body {
@@ -1789,8 +1794,8 @@ a:focus-visible {
   }
 
   .article-shell {
-    width: calc(100% - 34px);
-    padding-top: 36px;
+    width: 100%;
+    padding: 36px 17px 110px;
   }
 
   .article-title {

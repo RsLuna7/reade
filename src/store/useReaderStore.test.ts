@@ -30,7 +30,7 @@ describe("reading settings", () => {
       ...DEFAULT_READING_SETTINGS,
       fontSize: 26,
       lineHeight: 1.4,
-      contentWidth: 1200,
+      contentWidth: 1600,
       paragraphSpacing: 0.5,
     });
   });

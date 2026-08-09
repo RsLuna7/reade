@@ -41,6 +41,8 @@ import {
 import { extractToc, type TocItem } from "./lib/markdown";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 import {
+  CONTENT_WIDTH_MAX,
+  CONTENT_WIDTH_MIN,
   DEFAULT_READING_SETTINGS,
   useReaderStore,
   type ReaderFontFamily,
@@ -252,13 +254,17 @@ function ReadingSettingsPanel({ onClose }: { onClose: () => void }) {
 
       <label className="setting-row">
         <span className="setting-label">
-          <span>正文宽度</span>
-          <span className="setting-value">{settings.contentWidth}px</span>
+          <span>最大正文宽度</span>
+          <span className="setting-value">
+            {settings.contentWidth >= CONTENT_WIDTH_MAX
+              ? "随窗口"
+              : `${settings.contentWidth}px`}
+          </span>
         </span>
         <input
           type="range"
-          min="560"
-          max="1200"
+          min={CONTENT_WIDTH_MIN}
+          max={CONTENT_WIDTH_MAX}
           step="20"
           value={settings.contentWidth}
           onChange={numericSetting("contentWidth")}
@@ -405,7 +411,10 @@ function App() {
   const readerStyle = {
     "--reader-font-size": `${readingSettings.fontSize}px`,
     "--reader-line-height": readingSettings.lineHeight,
-    "--reader-measure": `${readingSettings.contentWidth}px`,
+    "--reader-measure":
+      readingSettings.contentWidth >= CONTENT_WIDTH_MAX
+        ? "none"
+        : `${readingSettings.contentWidth}px`,
     "--reader-paragraph-spacing": readingSettings.paragraphSpacing,
     "--reader-font-family":
       readingSettings.fontFamily === "serif"

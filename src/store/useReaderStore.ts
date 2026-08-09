@@ -19,15 +19,19 @@ export type ReaderFontFamily = "system" | "sans" | "serif";
 export interface ReadingSettings {
   fontSize: number;
   lineHeight: number;
+  /** Max article width in px. At CONTENT_WIDTH_MAX the measure is fluid (no cap). */
   contentWidth: number;
   paragraphSpacing: number;
   fontFamily: ReaderFontFamily;
 }
 
+export const CONTENT_WIDTH_MIN = 560;
+export const CONTENT_WIDTH_MAX = 1600;
+
 export const DEFAULT_READING_SETTINGS: ReadingSettings = {
   fontSize: 17,
   lineHeight: 1.9,
-  contentWidth: 820,
+  contentWidth: CONTENT_WIDTH_MAX,
   paragraphSpacing: 1,
   fontFamily: "system",
 };
@@ -48,7 +52,11 @@ export function normalizeReadingSettings(
   return {
     fontSize: clamp(settings.fontSize ?? current.fontSize, 13, 26),
     lineHeight: clamp(settings.lineHeight ?? current.lineHeight, 1.4, 2.4),
-    contentWidth: clamp(settings.contentWidth ?? current.contentWidth, 560, 1200),
+    contentWidth: clamp(
+      settings.contentWidth ?? current.contentWidth,
+      CONTENT_WIDTH_MIN,
+      CONTENT_WIDTH_MAX,
+    ),
     paragraphSpacing: clamp(
       settings.paragraphSpacing ?? current.paragraphSpacing,
       0.5,
