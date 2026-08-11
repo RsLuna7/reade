@@ -171,7 +171,9 @@ export async function generateWebLibrary(options = {}) {
         title: extractMarkdownTitle(content, file.relativePath),
         size: metadata.size,
         modified: Math.trunc(metadata.mtimeMs),
-        isMdx: extension === ".mdx",
+        format: extension === ".mdx" ? "mdx" : "markdown",
+        indexStatus: "ready",
+        indexError: null,
       };
       documents.push(document);
       searchDocuments.push({
@@ -185,13 +187,13 @@ export async function generateWebLibrary(options = {}) {
     searchDocuments.sort((left, right) => documentCollator.compare(left.relativePath, right.relativePath));
 
     const manifest = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       title,
       generatedAt: generatedAtValue(options.generatedAt),
       documents,
     };
     const searchIndex = {
-      schemaVersion: 1,
+      schemaVersion: 2,
       documents: searchDocuments,
     };
 

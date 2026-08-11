@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { buildDocumentTree, parentDirectoryPath, type DocumentTreeNode } from "../lib/tree";
+import { cancelMotion, runMotion } from "../lib/motion";
 import { useReaderStore } from "../store/useReaderStore";
 
 interface VisibleTreeItem {
@@ -30,6 +31,7 @@ export function DocumentTree() {
   const searchQuery = useReaderStore((state) => state.searchQuery);
   const searchResults = useReaderStore((state) => state.searchResults);
   const loading = useReaderStore((state) => state.loading);
+  const motionLevel = useReaderStore((state) => state.motionLevel);
   const expandedPaths = useReaderStore((state) => state.expandedPaths);
   const toggleDirectory = useReaderStore((state) => state.toggleDirectory);
   const selectDocument = useReaderStore((state) => state.selectDocument);
@@ -42,7 +44,26 @@ export function DocumentTree() {
   );
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const itemRefs = useRef(new Map<string, HTMLButtonElement>());
+  const searchResultsRef = useRef<HTMLUListElement>(null);
   const inSearchMode = searchQuery.trim().length > 0;
+
+  useEffect(() => {
+    const element = searchResultsRef.current;
+    if (!inSearchMode || !element || searchResults.length === 0) return;
+    runMotion(
+      element,
+      "search-results",
+      motionLevel === "full"
+        ? [{ opacity: 0, transform: "translateY(4px)" }, { opacity: 1, transform: "translateY(0)" }]
+        : [{ opacity: 0 }, { opacity: 1 }],
+      {
+        duration: motionLevel === "full" ? 220 : 180,
+        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+      },
+      motionLevel,
+    );
+    return () => cancelMotion(element, "search-results");
+  }, [inSearchMode, motionLevel, searchResults]);
 
   useEffect(() => {
     if (visibleItems.length === 0) {
@@ -164,9 +185,14 @@ export function DocumentTree() {
                   {isExpanded ? "−" : "+"}
                 </span>
               ) : (
-                <span className="document-tree__file-mark" aria-hidden="true" />
+                <span className={`document-tree__format document-tree__format--${node.document.format}`} aria-hidden="true">
+                  {node.document.format === "markdown" ? "MD" : node.document.format.toUpperCase()}
+                </span>
               )}
               <span className="document-tree__name">{node.name}</span>
+              {!isDirectory && node.document.indexStatus !== "ready" && (
+                <span className={`document-tree__index document-tree__index--${node.document.indexStatus}`} title={node.document.indexError ?? `索引状态：${node.document.indexStatus}`} />
+              )}
             </button>
             {isDirectory && isExpanded && renderNodes(node.children, node.path)}
           </li>
@@ -180,19 +206,21 @@ export function DocumentTree() {
       <nav className="document-tree document-tree--search" aria-label="搜索结果">
         <h2 className="document-tree__label">搜索结果</h2>
         {searchResults.length > 0 ? (
-          <ul className="document-tree__results">
+          <ul className="document-tree__results" ref={searchResultsRef}>
             {searchResults.map((result) => {
               const isCurrent = result.relativePath === currentPath;
               return (
-                <li className="document-tree__result" key={result.relativePath}>
+                <li className="document-tree__result" key={result.resultId}>
                   <button
                     className={`document-tree__result-button${isCurrent ? " document-tree__result-button--current" : ""}`}
                     type="button"
                     aria-current={isCurrent ? "page" : undefined}
-                    onClick={() => void selectDocument(result.relativePath)}
+                    onClick={() => void selectDocument(result.relativePath, result.locator)}
                   >
                     <span className="document-tree__result-title">{result.title}</span>
                     <span className="document-tree__result-path">{result.relativePath}</span>
+                    {result.locator?.kind === "pdfPage" && <span className="document-tree__result-locator">第 {result.locator.page} 页</span>}
+                    {result.locator?.kind === "epubChapter" && <span className="document-tree__result-locator">章节命中</span>}
                     {result.snippet && (
                       <span className="document-tree__result-snippet">{result.snippet}</span>
                     )}

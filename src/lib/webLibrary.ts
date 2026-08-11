@@ -8,7 +8,7 @@ import type {
 // Relative to the document so GitHub project pages (/owner/repo/) and user
 // pages (/owner/) resolve the same generated library directory correctly.
 export const DEFAULT_WEB_LIBRARY_BASE_URL = "./reade-web/";
-export const WEB_LIBRARY_SCHEMA_VERSION = 1 as const;
+export const WEB_LIBRARY_SCHEMA_VERSION = 2 as const;
 
 export interface WebLibraryManifest {
   schemaVersion: typeof WEB_LIBRARY_SCHEMA_VERSION;
@@ -119,7 +119,9 @@ function isDocumentInfo(value: unknown): value is DocumentInfo {
     value.size >= 0 &&
     typeof value.modified === "number" &&
     Number.isFinite(value.modified) &&
-    typeof value.isMdx === "boolean"
+    (value.format === "markdown" || value.format === "mdx") &&
+    value.indexStatus === "ready" &&
+    value.indexError === null
   );
 }
 
@@ -252,10 +254,15 @@ export function searchWebDocuments(
         0,
       );
       return [{
+        resultId: `web:${document.relativePath}`,
         relativePath: document.relativePath,
         title: document.title,
         snippet: searchSnippet(document.content, terms),
         score,
+        format: document.relativePath.toLocaleLowerCase("en").endsWith(".mdx")
+          ? "mdx"
+          : "markdown",
+        locator: null,
       }];
     })
     .sort((left, right) => right.score - left.score || searchCollator.compare(left.title, right.title))
@@ -313,7 +320,7 @@ export class WebLibraryClient {
   async loadDocument(relativePath: string): Promise<DocumentContent> {
     const url = webLibraryUrl(relativePath, this.baseUrl);
     const response = await checkedResponse(this.fetcher, url, "text/markdown, text/plain");
-    return { relativePath, markdown: await response.text() };
+    return { kind: "markdown", relativePath, markdown: await response.text() };
   }
 
   async loadAsset(relativePath: string): Promise<AssetPayload> {

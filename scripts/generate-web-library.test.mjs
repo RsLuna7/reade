@@ -36,14 +36,14 @@ describe("generateWebLibrary", () => {
     const manifest = JSON.parse(await readFile(join(output, "manifest.json"), "utf8"));
     const search = JSON.parse(await readFile(join(output, "search.json"), "utf8"));
     expect(manifest).toMatchObject({
-      schemaVersion: 1,
+      schemaVersion: 2,
       title: "测试阅读库",
       generatedAt: "2026-08-09T00:00:00.000Z",
     });
     expect(manifest.documents).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ relativePath: "指南/开始.md", title: "中文开始", isMdx: false }),
-        expect.objectContaining({ relativePath: "指南/组件.mdx", title: "组件", isMdx: true }),
+        expect.objectContaining({ relativePath: "指南/开始.md", title: "中文开始", format: "markdown", indexStatus: "ready" }),
+        expect.objectContaining({ relativePath: "指南/组件.mdx", title: "组件", format: "mdx", indexStatus: "ready" }),
       ]),
     );
     expect(search.documents).toContainEqual({

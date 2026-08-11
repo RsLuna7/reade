@@ -1,14 +1,16 @@
 # Reade
 
-Reade 是一款共享同一阅读界面的 Markdown 阅读器：Windows 桌面版读取本地文档，Web 版把公开文档构建为 GitHub Pages 静态站点。它采用三栏布局，把文档树、正文和章节目录分开滚动，并围绕中文与英文长文优化留白、字号、行高和段落节奏；正文默认随窗口伸缩，也可在设置中限制最大宽度。
+Reade 是一款本地优先的长文阅读器：Windows 桌面版读取 Markdown、PDF 与可重排 EPUB，Web 版仍只把公开 Markdown 构建为 GitHub Pages 静态站点。它采用三栏布局，把文档树、正文和章节目录分开滚动，并围绕中文与英文长文优化留白、字号、行高和段落节奏。
 
 ## 当前能力
 
-- 选择本地文件夹并递归发现 `.md`、`.markdown`、`.mdx`
-- 文件树、键盘导航、自动刷新与 SQLite FTS5 全文检索
+- 选择本地文件夹并递归发现 `.md`、`.markdown`、`.mdx`、`.pdf`、`.epub`
+- PDF 原版式连续滚动、文本层、Outline、50%–300% 缩放、适宽与按页阅读模式
+- 可重排 EPUB 安全语义渲染、章节目录与 Reade 统一排版，不加载书内 HTML/CSS
+- 文件树、键盘导航、自动刷新、后台增量索引与 SQLite FTS5 全文检索
 - GFM、脚注、KaTeX 数学公式、Shiki 代码高亮、Mermaid 图表
 - 跟随阅读位置的章节目录、阅读进度和逐文档滚动位置
-- 浅色/深色主题；字号、行高、段距和字体风格调节
+- 浅色/深色主题；字号、行高、段距和字体风格调节；关闭/克制/完整三档微动效
 - 正文默认随窗口铺满中间栏；阅读设置可设最大正文宽度（最右为「随窗口」）
 - 文档内相对链接与本地图片解析
 - 桌面版完全离线；两种运行时均不执行 raw HTML
@@ -16,16 +18,24 @@ Reade 是一款共享同一阅读界面的 Markdown 阅读器：Windows 桌面�
 
 首版定位为只读阅读器，不包含编辑、批注、云同步、账号、自动更新与代码签名。
 
+## 使用文档
+
+- [Reade 新手使用说明书](docs/USER_GUIDE.md)：从安装、选择书库到 Markdown、PDF、EPUB 阅读、全文检索、设置和常见问题。
+- [Web 发布说明](docs/WEB_DEPLOY.md)：面向站点维护者的 GitHub Pages 构建与发布步骤。
+
 ## 技术结构
 
 - Desktop shell：Tauri 2 / Rust
 - UI：React 19 / TypeScript / Zustand
+- Motion：CSS + Web Animations API，无第三方动效运行时依赖
+- PDF：PDF.js `pdfjs-dist@6.2.108`；`pdf-inspector@0.1.8` 按页提取阅读文本
+- EPUB：`anydoc@0.1.8` 转换为 Reade 自有安全 DTO
 - Markdown：react-markdown + remark-gfm + remark-math + rehype-katex + rehype-slug
 - Extensions：Shiki（常用语言按需加载）与 Mermaid（懒加载、sandbox）
 - File/search：`ignore`、`notify`、SQLite FTS5 trigram
 - Web publishing：Node.js 静态库生成器、客户端延迟搜索、GitHub Actions / Pages
 
-Rust 后端只接受相对于已选文档库的路径，并在读取前进行 canonical path 校验。Markdown 单文件上限为 10 MiB，本地资源上限为 25 MiB；常见构建目录和 `.gitignore` 内容会被扫描器排除。
+Rust 后端只接受相对于已选文档库的路径，并在读取前进行 canonical path 校验。PDF 通过单次最多 4 MiB 的 Range IPC 加载；超过 128 MiB 时仍可原版式阅读，但不提取文本。EPUB 上限为 128 MiB，仅允许内嵌安全栅格图片。派生文本保存在应用缓存目录的 `reade-cache.sqlite3`，使用 1 GiB 软上限、90% 低水位和增量回收，不改写用户文档库。
 
 ## 本地开发
 
@@ -64,9 +74,10 @@ cargo test --manifest-path src-tauri/Cargo.toml
 cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
-## MVP 限制
+## 当前限制
 
-- 搜索索引当前在每次打开或刷新文档库时重建，适合约 10,000 篇的个人文档库；后续若文档正文总量达到数 GiB，应改为持久化增量索引。
+- 桌面扩展首版只支持 PDF 与可重排 EPUB；fixed-layout、DRM、密码 PDF 与 SVG 书内资源会明确提示不支持。
+- 暂不提供 OCR、批注、书签、打印、Markdown 导出和 Office 格式转换；扫描 PDF 会标明缺失页且不会冒充完整结果。
 - Web 搜索数据在构建时生成，第一次搜索时由浏览器加载；超大型公开文档库后续应改为分片索引。
 - `.mdx` 以安全的普通 Markdown 方式只读展示，不执行 JSX 或 import。
 - 外部链接需要用户确认后交给系统应用；远程图片默认不请求。

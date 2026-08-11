@@ -31,7 +31,7 @@ function response(options: {
 }
 
 const manifest: WebLibraryManifest = {
-  schemaVersion: 1,
+  schemaVersion: 2,
   title: "中文文档库",
   generatedAt: "2026-08-09T00:00:00.000Z",
   documents: [
@@ -40,7 +40,9 @@ const manifest: WebLibraryManifest = {
       title: "开始阅读",
       size: 10,
       modified: 1,
-      isMdx: false,
+      format: "markdown",
+      indexStatus: "ready",
+      indexError: null,
     },
   ],
 };
@@ -82,6 +84,7 @@ describe("WebLibraryClient", () => {
     const client = new WebLibraryClient({ baseUrl: "/reade-web/", fetcher });
 
     await expect(client.loadDocument("指南/开始 阅读.md")).resolves.toEqual({
+      kind: "markdown",
       relativePath: "指南/开始 阅读.md",
       markdown: "# 中文",
     });

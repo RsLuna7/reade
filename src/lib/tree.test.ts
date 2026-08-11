@@ -7,7 +7,7 @@ import {
 } from "./tree";
 
 function document(relativePath: string, title = ""): DocumentInfo {
-  return { relativePath, title, size: 1, modified: 1, isMdx: false };
+  return { relativePath, title, size: 1, modified: 1, format: "markdown", indexStatus: "ready", indexError: null };
 }
 
 describe("buildDocumentTree", () => {

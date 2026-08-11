@@ -1,10 +1,12 @@
 import {
   useCallback,
   useEffect,
+  lazy,
   useLayoutEffect,
   useMemo,
   useRef,
   useState,
+  Suspense,
   type CSSProperties,
   type ChangeEvent,
 } from "react";
@@ -29,29 +31,54 @@ import {
 } from "lucide-react";
 import "./App.css";
 import { DocumentTree } from "./components/DocumentTree";
+import { EpubReader } from "./components/EpubReader";
 import { MarkdownRenderer } from "./components/MarkdownRenderer";
 import {
   APP_RUNTIME,
   DEFAULT_LIBRARY_ROOT,
   assetDataUrl,
+  onDocumentIndexStatus,
   onLibraryChanged,
+  onLibraryIndexProgress,
   openExternalLink,
   readAsset,
 } from "./lib/backend";
 import { extractToc, type TocItem } from "./lib/markdown";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
+import { scrollElementWithinContainer } from "./lib/scroll";
 import {
   CONTENT_WIDTH_MAX,
   CONTENT_WIDTH_MIN,
-  DEFAULT_READING_SETTINGS,
   useReaderStore,
   type ReaderFontFamily,
+  type ReaderMotionLevel,
 } from "./store/useReaderStore";
+import { cancelMotion, runMotion } from "./lib/motion";
 
 const LAST_LIBRARY_KEY = "reade-last-library";
 const IS_WEB_RUNTIME = APP_RUNTIME === "web";
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
 const ABSOLUTE_PROTOCOL = /^[a-z][a-z\d+.-]*:/i;
+const PdfReader = lazy(() => import("./components/PdfReader").then((module) => ({ default: module.PdfReader })));
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = useState(() =>
+    typeof window !== "undefined" && typeof window.matchMedia === "function"
+      ? window.matchMedia(query).matches
+      : false,
+  );
+
+  useEffect(() => {
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia(query);
+    const update = () => setMatches(media.matches);
+    update();
+    media.addEventListener?.("change", update);
+    return () => media.removeEventListener?.("change", update);
+  }, [query]);
+
+  return matches;
+}
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -153,7 +180,7 @@ function Welcome({
               : "这个文件夹中暂时没有 Markdown 文档，可以换一个文件夹继续。"
             : isWeb
               ? "Reade Web 从 GitHub Pages 按需读取公开 Markdown，并保留桌面版的排版、目录、检索与安全渲染体验。"
-              : "Reade 专注本地 Markdown 的阅读体验。选择一个文件夹，即可在不上传内容、不依赖网络的前提下浏览、检索与阅读。"}
+              : "Reade 专注本地长文的阅读体验。选择一个文件夹，即可在不上传内容、不依赖网络的前提下浏览、检索与阅读。"}
         </p>
         <div className="welcome-actions">
           <button className="primary-button" type="button" onClick={onOpen}>
@@ -162,7 +189,7 @@ function Welcome({
               ? "重新加载在线文档"
               : hasLibrary
                 ? "更换文档库"
-                : "选择 Markdown 文件夹"}
+                : "选择文档文件夹"}
           </button>
           <span
             className="secondary-button"
@@ -203,9 +230,110 @@ function Welcome({
   );
 }
 
-function ReadingSettingsPanel({ onClose }: { onClose: () => void }) {
+export function MotionNotice({
+  id,
+  message,
+  kind = "status",
+  motionLevel,
+  autoDismiss = false,
+  onClose,
+}: {
+  id: number | string;
+  message: string;
+  kind?: "status" | "error";
+  motionLevel: ReaderMotionLevel;
+  autoDismiss?: boolean;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const closingRef = useRef(false);
+
+  const closeWithMotion = useCallback(() => {
+    if (closingRef.current) return;
+    closingRef.current = true;
+    const element = ref.current;
+    if (!element || motionLevel === "off") {
+      onClose();
+      return;
+    }
+    const scale = motionLevel === "full" ? 0.98 : 0.99;
+    const animation = runMotion(
+      element,
+      "notice-exit",
+      [
+        { opacity: 1, transform: "scale(1)" },
+        { opacity: 0, transform: `scale(${scale})` },
+      ],
+      {
+        duration: motionLevel === "full" ? 220 : 180,
+        easing: "cubic-bezier(0.4, 0, 1, 1)",
+        fill: "forwards",
+      },
+      motionLevel,
+    );
+    if (!animation) {
+      onClose();
+      return;
+    }
+    void animation.finished.then(onClose).catch(() => undefined);
+  }, [motionLevel, onClose]);
+
+  useEffect(() => {
+    const element = ref.current;
+    if (!element) return;
+    closingRef.current = false;
+    const scale = motionLevel === "full" ? 0.98 : 0.99;
+    runMotion(
+      element,
+      "notice-enter",
+      [
+        { opacity: 0, transform: `scale(${scale})` },
+        { opacity: 1, transform: "scale(1)" },
+      ],
+      {
+        duration: motionLevel === "full" ? 220 : 180,
+        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
+      },
+      motionLevel,
+    );
+    return () => cancelMotion(element);
+  }, [id, motionLevel]);
+
+  useEffect(() => {
+    if (!autoDismiss) return;
+    const timer = window.setTimeout(closeWithMotion, 4200);
+    return () => window.clearTimeout(timer);
+  }, [autoDismiss, closeWithMotion, id]);
+
+  return (
+    <div ref={ref} className={`notice${kind === "error" ? " error" : ""}`} role={kind === "error" ? "alert" : "status"}>
+      {kind === "error" ? <AlertCircle size={17} aria-hidden="true" /> : <ShieldCheck size={17} aria-hidden="true" />}
+      <span>{message}</span>
+      {kind === "error" && (
+        <button className="icon-button" type="button" onClick={closeWithMotion} aria-label="关闭错误提示">
+          <X size={14} aria-hidden="true" />
+        </button>
+      )}
+    </div>
+  );
+}
+
+export function ReadingSettingsPanel({
+  open,
+  onClose,
+  onNotice,
+}: {
+  open: boolean;
+  onClose: () => void;
+  onNotice: (message: string) => void;
+}) {
   const settings = useReaderStore((state) => state.readingSettings);
   const update = useReaderStore((state) => state.updateReadingSettings);
+  const motionLevel = useReaderStore((state) => state.motionLevel);
+  const setMotionLevel = useReaderStore((state) => state.setMotionLevel);
+  const resetReaderPreferences = useReaderStore((state) => state.resetReaderPreferences);
+  const clearDocumentCache = useReaderStore((state) => state.clearDocumentCache);
+  const [clearingCache, setClearingCache] = useState(false);
 
   const numericSetting =
     (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing") =>
@@ -214,7 +342,14 @@ function ReadingSettingsPanel({ onClose }: { onClose: () => void }) {
     };
 
   return (
-    <div className="settings-popover" role="dialog" aria-label="阅读设置">
+    <div
+      className="settings-popover reade-motion-panel"
+      role="dialog"
+      aria-label="阅读设置"
+      aria-hidden={!open}
+      data-open={open}
+      inert={!open}
+    >
       <div className="settings-heading">
         <span>阅读设置</span>
         <button className="icon-button" type="button" onClick={onClose} aria-label="关闭阅读设置">
@@ -301,14 +436,50 @@ function ReadingSettingsPanel({ onClose }: { onClose: () => void }) {
         </select>
       </label>
 
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">动态效果</legend>
+        <div className="motion-level-control" role="group" aria-label="动态效果级别">
+          {([
+            ["off", "关闭"],
+            ["subtle", "克制"],
+            ["full", "完整"],
+          ] as const).map(([level, label]) => (
+            <button
+              type="button"
+              key={level}
+              aria-pressed={motionLevel === level}
+              className={motionLevel === level ? "active" : undefined}
+              onClick={() => setMotionLevel(level)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      </fieldset>
+
       <button
         className="settings-reset"
         type="button"
-        onClick={() => update(DEFAULT_READING_SETTINGS)}
+        onClick={resetReaderPreferences}
       >
         <RotateCcw size={13} aria-hidden="true" />
         恢复默认
       </button>
+      {!IS_WEB_RUNTIME && <button
+        className="settings-reset settings-cache-clear"
+        type="button"
+        disabled={clearingCache}
+        onClick={() => {
+          if (clearingCache) return;
+          setClearingCache(true);
+          void clearDocumentCache().then((succeeded) => {
+            if (succeeded) onNotice("文档索引缓存已清理，将在后台重新建立索引。");
+          }).finally(() => setClearingCache(false));
+        }}
+      >
+        <RotateCcw size={13} aria-hidden="true" />
+        {clearingCache ? "正在清理缓存…" : "清理文档索引缓存"}
+      </button>}
     </div>
   );
 }
@@ -360,10 +531,13 @@ function App() {
   const documents = useReaderStore((state) => state.documents);
   const currentPath = useReaderStore((state) => state.currentPath);
   const currentContent = useReaderStore((state) => state.currentContent);
+  const currentLocator = useReaderStore((state) => state.currentLocator);
+  const indexProgress = useReaderStore((state) => state.indexProgress);
   const searchQuery = useReaderStore((state) => state.searchQuery);
   const searchResults = useReaderStore((state) => state.searchResults);
   const theme = useReaderStore((state) => state.theme);
   const readingSettings = useReaderStore((state) => state.readingSettings);
+  const motionLevel = useReaderStore((state) => state.motionLevel);
   const loading = useReaderStore((state) => state.loading);
   const error = useReaderStore((state) => state.error);
   const chooseAndOpenLibrary = useReaderStore((state) => state.chooseAndOpenLibrary);
@@ -374,18 +548,25 @@ function App() {
   const runSearch = useReaderStore((state) => state.runSearch);
   const toggleTheme = useReaderStore((state) => state.toggleTheme);
   const clearError = useReaderStore((state) => state.clearError);
+  const applyDocumentIndexStatus = useReaderStore((state) => state.applyDocumentIndexStatus);
+  const setIndexProgress = useReaderStore((state) => state.setIndexProgress);
+  const retryCurrentDocumentIndex = useReaderStore((state) => state.retryCurrentDocumentIndex);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [compactTocOpen, setCompactTocOpen] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
-  const [toc, setToc] = useState<TocItem[]>([]);
-  const [activeHeading, setActiveHeading] = useState<string | null>(null);
+  const [tocState, setTocState] = useState<{ path: string; items: TocItem[] } | null>(null);
+  const [activeHeadingState, setActiveHeadingState] = useState<{ path: string; id: string | null } | null>(null);
   const [progress, setProgress] = useState(0);
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ id: number; message: string } | null>(null);
+  const compactLibraryLayout = useMediaQuery("(max-width: 640px)");
   const readerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLDivElement>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const statusDetailRef = useRef<HTMLSpanElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
+  const noticeSequence = useRef(0);
   const scrollFrame = useRef<number | null>(null);
   const scrollPositions = useRef(new Map<string, number>());
   const initialWebRoute = useRef(
@@ -404,9 +585,17 @@ function App() {
     [currentPath, documents],
   );
   const renderedMarkdown = useMemo(
-    () => displayMarkdown(currentContent?.markdown ?? ""),
+    () => displayMarkdown(currentContent?.kind === "markdown" ? currentContent.markdown : ""),
     [currentContent],
   );
+  const toc = tocState?.path === currentPath ? tocState.items : [];
+  const activeHeading = activeHeadingState?.path === currentPath ? activeHeadingState.id : null;
+  const handleTocChange = useCallback((items: TocItem[]) => {
+    if (currentPath) setTocState({ path: currentPath, items });
+  }, [currentPath]);
+  const handleActiveHeadingChange = useCallback((id: string | null) => {
+    if (currentPath) setActiveHeadingState({ path: currentPath, id });
+  }, [currentPath]);
 
   const readerStyle = {
     "--reader-font-size": `${readingSettings.fontSize}px`,
@@ -425,9 +614,16 @@ function App() {
   } as CSSProperties;
 
   const showNotice = useCallback((message: string) => {
-    setNotice(message);
-    window.setTimeout(() => setNotice((current) => (current === message ? null : current)), 4200);
+    noticeSequence.current += 1;
+    setNotice({ id: noticeSequence.current, message });
   }, []);
+
+  const dismissNotice = useCallback((id: number) => {
+    setNotice((current) => (current?.id === id ? null : current));
+  }, []);
+  const closeCurrentNotice = useCallback(() => {
+    if (notice) dismissNotice(notice.id);
+  }, [dismissNotice, notice]);
 
   const replaceWebRoute = useCallback(
     (relativePath: string, heading?: string | null) => {
@@ -447,6 +643,10 @@ function App() {
     const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
     themeColor?.setAttribute("content", theme === "dark" ? "#1e2222" : "#f5f1e8");
   }, [theme]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.motion = motionLevel;
+  }, [motionLevel]);
 
   useEffect(() => {
     if (restoredLibrary.current) return;
@@ -484,6 +684,15 @@ function App() {
       unlisten?.();
     };
   }, [refreshLibrary, snapshot]);
+
+  useEffect(() => {
+    if (IS_WEB_RUNTIME || !snapshot) return;
+    let disposed = false;
+    const stops: Array<() => void> = [];
+    void onLibraryIndexProgress(setIndexProgress).then((stop) => disposed ? stop() : stops.push(stop));
+    void onDocumentIndexStatus(applyDocumentIndexStatus).then((stop) => disposed ? stop() : stops.push(stop));
+    return () => { disposed = true; stops.forEach((stop) => stop()); };
+  }, [applyDocumentIndexStatus, setIndexProgress, snapshot]);
 
   useEffect(() => {
     if (snapshot && documents.length > 0 && !currentPath && !loading) {
@@ -533,7 +742,7 @@ function App() {
   }, [chooseAndOpenLibrary]);
 
   useEffect(() => {
-    if (!currentContent || !currentPath) {
+    if (!currentContent || currentContent.kind !== "markdown" || !currentPath) {
       setAssetUrls({});
       return;
     }
@@ -563,15 +772,11 @@ function App() {
 
   useEffect(() => {
     const article = articleRef.current;
-    if (!article || !currentContent) {
-      setToc([]);
-      setActiveHeading(null);
-      return;
-    }
+    if (!article || currentContent?.kind !== "markdown" || !currentPath) return;
     const nextToc = extractToc(article);
-    setToc(nextToc);
-    setActiveHeading(nextToc[0]?.id ?? null);
-  }, [currentContent, renderedMarkdown]);
+    setTocState({ path: currentPath, items: nextToc });
+    setActiveHeadingState({ path: currentPath, id: nextToc[0]?.id ?? null });
+  }, [currentContent, currentPath, renderedMarkdown]);
 
   useLayoutEffect(() => {
     const reader = readerRef.current;
@@ -593,16 +798,18 @@ function App() {
   }, [currentDocument, currentPath, replaceWebRoute, snapshot?.rootPath]);
 
   useEffect(() => {
-    if (!currentContent || !pendingHash.current) return;
+    if (currentContent?.kind !== "markdown" || !pendingHash.current) return;
     const id = pendingHash.current;
     pendingHash.current = null;
     window.requestAnimationFrame(() => {
-      articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)?.scrollIntoView({
-        behavior: "smooth",
-        block: "start",
-      });
+      const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
+      scrollElementWithinContainer(
+        readerRef.current,
+        target,
+        motionLevel === "off" ? "auto" : "smooth",
+      );
     });
-  }, [currentContent]);
+  }, [currentContent, motionLevel]);
 
   useEffect(() => {
     setCompactTocOpen(false);
@@ -621,6 +828,7 @@ function App() {
       const range = reader.scrollHeight - reader.clientHeight;
       setProgress(range <= 0 ? 0 : Math.min(100, (reader.scrollTop / range) * 100));
 
+      if (currentContent?.kind !== "markdown") return;
       const headings = Array.from(
         article.querySelectorAll<HTMLElement>("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]"),
       );
@@ -630,9 +838,9 @@ function App() {
         if (heading.getBoundingClientRect().top <= threshold) nextActive = heading.id;
         else break;
       }
-      setActiveHeading(nextActive);
+      if (currentPath) setActiveHeadingState({ path: currentPath, id: nextActive });
     });
-  }, [currentPath]);
+  }, [currentContent?.kind, currentPath]);
 
   useEffect(
     () => () => {
@@ -654,10 +862,12 @@ function App() {
     async (href: string) => {
       if (href.startsWith("#")) {
         const id = decodePath(href.slice(1));
-        articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)?.scrollIntoView({
-          behavior: "smooth",
-          block: "start",
-        });
+        const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
+        scrollElementWithinContainer(
+          readerRef.current,
+          target,
+          motionLevel === "off" ? "auto" : "smooth",
+        );
         if (currentPath) replaceWebRoute(currentPath, id);
         return;
       }
@@ -687,17 +897,19 @@ function App() {
       if (IS_WEB_RUNTIME) replaceWebRoute(target.relativePath, pendingHash.current);
       await selectDocument(target.relativePath);
     },
-    [currentPath, documents, replaceWebRoute, selectDocument, showNotice],
+    [currentPath, documents, motionLevel, replaceWebRoute, selectDocument, showNotice],
   );
 
   const scrollToHeading = useCallback((id: string) => {
-    articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`)?.scrollIntoView({
-      behavior: "smooth",
-      block: "start",
-    });
+    const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
+    scrollElementWithinContainer(
+      readerRef.current,
+      target,
+      currentContent?.kind === "pdf" || motionLevel === "off" ? "auto" : "smooth",
+    );
     if (currentPath) replaceWebRoute(currentPath, id);
     setCompactTocOpen(false);
-  }, [currentPath, replaceWebRoute]);
+  }, [currentContent?.kind, currentPath, motionLevel, replaceWebRoute]);
 
   const libraryName = snapshot
     ? IS_WEB_RUNTIME
@@ -707,12 +919,58 @@ function App() {
       ? "在线文档库"
       : "选择文档库";
   const pathParts = currentPath?.replace(/\\/g, "/").split("/") ?? [];
+  const statusDetail = searchQuery
+    ? `${searchResults.length} 条搜索结果`
+    : indexProgress && indexProgress.completed < indexProgress.total
+      ? `索引 ${indexProgress.completed}/${indexProgress.total} · 部分 ${indexProgress.partial} · 失败 ${indexProgress.failed}`
+      : IS_WEB_RUNTIME
+        ? "GitHub Pages · 公开阅读"
+        : "完全本地 · 离线可用";
+
+  useEffect(() => {
+    const element = statusDetailRef.current;
+    if (!element || motionLevel !== "full") return;
+    runMotion(
+      element,
+      "status-change",
+      [{ opacity: 0.46 }, { opacity: 1 }],
+      { duration: 150, easing: "ease-out" },
+      motionLevel,
+    );
+    return () => cancelMotion(element, "status-change");
+  }, [motionLevel, statusDetail]);
+
+  const handleRetryIndex = useCallback(async () => {
+    const succeeded = await retryCurrentDocumentIndex();
+    if (succeeded) {
+      showNotice("已将当前文档重新加入索引队列。");
+      return;
+    }
+    const button = retryButtonRef.current;
+    if (!button || motionLevel !== "full") return;
+    runMotion(
+      button,
+      "retry-failed",
+      [
+        { transform: "translateX(0)" },
+        { transform: "translateX(-2px)" },
+        { transform: "translateX(2px)" },
+        { transform: "translateX(-2px)" },
+        { transform: "translateX(0)" },
+      ],
+      { duration: 220, easing: "ease-in-out" },
+      motionLevel,
+    );
+  }, [motionLevel, retryCurrentDocumentIndex, showNotice]);
 
   return (
-    <div className="reader-shell" style={readerStyle}>
+    <div className="reader-shell" data-motion={motionLevel} style={readerStyle}>
       <aside
-        className={`sidebar${mobileLibraryOpen ? " mobile-open" : ""}`}
+        className="library-sidebar"
         aria-label="文档库"
+        aria-hidden={compactLibraryLayout && !mobileLibraryOpen}
+        data-open={mobileLibraryOpen}
+        inert={compactLibraryLayout && !mobileLibraryOpen}
       >
         <header className="sidebar-header">
           <div className="brand">
@@ -735,7 +993,7 @@ function App() {
               title={
                 IS_WEB_RUNTIME
                   ? "重新加载在线文档"
-                  : snapshot?.rootPath ?? "选择 Markdown 文件夹"
+                  : snapshot?.rootPath ?? "选择文档文件夹"
               }
             >
               {IS_WEB_RUNTIME ? (
@@ -783,13 +1041,7 @@ function App() {
         <footer className="sidebar-footer">
           <div className="sidebar-status">
             <strong>{snapshot ? `${documents.length.toLocaleString()} 篇文档` : "尚未打开文档库"}</strong>
-            <span>
-              {searchQuery
-                ? `${searchResults.length} 条搜索结果`
-                : IS_WEB_RUNTIME
-                  ? "GitHub Pages · 公开阅读"
-                  : "完全本地 · 离线可用"}
-            </span>
+            <span ref={statusDetailRef}>{statusDetail}</span>
           </div>
           <button
             className="icon-button"
@@ -798,19 +1050,23 @@ function App() {
             title={theme === "light" ? "深色主题" : "浅色主题"}
             onClick={toggleTheme}
           >
-            {theme === "light" ? <Moon size={16} /> : <Sun size={16} />}
+            <span className="theme-state-icon" aria-hidden="true">
+              <Moon className={theme === "light" ? "active" : undefined} size={16} />
+              <Sun className={theme === "dark" ? "active" : undefined} size={16} />
+            </span>
           </button>
         </footer>
       </aside>
 
-      {mobileLibraryOpen && (
-        <button
-          className="sidebar-drawer-backdrop"
-          type="button"
-          aria-label="关闭文档库"
-          onClick={() => setMobileLibraryOpen(false)}
-        />
-      )}
+      <button
+        className="sidebar-drawer-backdrop reade-motion-backdrop"
+        type="button"
+        aria-label="关闭文档库"
+        aria-hidden={!mobileLibraryOpen}
+        data-open={mobileLibraryOpen}
+        tabIndex={mobileLibraryOpen ? 0 : -1}
+        onClick={() => setMobileLibraryOpen(false)}
+      />
 
       <main className="workspace">
         <header className="topbar">
@@ -864,19 +1120,22 @@ function App() {
             >
               <Settings2 size={16} aria-hidden="true" />
             </button>
-            {settingsOpen && <ReadingSettingsPanel onClose={() => setSettingsOpen(false)} />}
+            <ReadingSettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onNotice={showNotice} />
           </div>
           <div className="reading-progress" aria-hidden="true">
-            <div className="reading-progress-bar" style={{ width: `${progress}%` }} />
+            <div
+              className="reading-progress-bar"
+              style={{ "--reading-progress": Math.min(1, Math.max(0, progress / 100)) } as CSSProperties}
+            />
           </div>
         </header>
 
         {currentContent && currentDocument ? (
           <div className="content-grid">
             <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
-              <div className="article-shell" ref={articleRef}>
+              <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 <header className="article-header">
-                  <div className="article-kicker">Markdown document</div>
+                  <div className="article-kicker">{currentContent.kind === "pdf" ? "Portable document" : currentContent.kind === "epub" ? "Reflowable book" : "Markdown document"}</div>
                   <h1 className="article-title">{currentDocument.title}</h1>
                   <div className="article-meta">
                     <span>
@@ -889,15 +1148,34 @@ function App() {
                     </span>
                     <span>
                       <Type size={12} aria-hidden="true" />
-                      {currentDocument.isMdx ? "MDX（只读 Markdown）" : "Markdown"}
+                      {currentDocument.format === "mdx" ? "MDX（只读 Markdown）" : currentDocument.format.toUpperCase()}
                     </span>
                   </div>
+                  {(currentDocument.indexStatus === "failed" || currentDocument.indexStatus === "partial" || currentDocument.indexStatus === "unsupported") && <div className="article-index-status">
+                    <span>{currentDocument.indexError ?? (currentDocument.indexStatus === "partial" ? "部分内容不可检索" : "该文档未建立索引")}</span>
+                    {currentDocument.indexStatus !== "unsupported" && <button ref={retryButtonRef} type="button" onClick={() => void handleRetryIndex()}>重试索引</button>}
+                  </div>}
                 </header>
-                <MarkdownRenderer
-                  content={renderedMarkdown}
-                  resolveImageSrc={resolveImageSrc}
-                  onNavigate={(href) => void handleNavigate(href)}
-                />
+                {currentContent.kind === "markdown" && <MarkdownRenderer content={renderedMarkdown} resolveImageSrc={resolveImageSrc} onNavigate={(href) => void handleNavigate(href)} />}
+                {currentContent.kind === "pdf" && <Suspense fallback={<div className="pdf-state"><span className="spinner" />正在加载 PDF 阅读器…</div>}><PdfReader
+                  relativePath={currentContent.relativePath}
+                  size={currentContent.size}
+                  modified={currentDocument.modified}
+                  indexStatus={currentContent.indexStatus}
+                  indexError={currentContent.indexError}
+                  locator={currentLocator}
+                  motionLevel={motionLevel}
+                  onTocChange={handleTocChange}
+                  onActiveChange={handleActiveHeadingChange}
+                /></Suspense>}
+                {currentContent.kind === "epub" && <EpubReader
+                  relativePath={currentContent.relativePath}
+                  document={currentContent.document}
+                  locator={currentLocator}
+                  motionLevel={motionLevel}
+                  onTocChange={handleTocChange}
+                  onActiveChange={handleActiveHeadingChange}
+                />}
               </div>
             </div>
 
@@ -916,19 +1194,24 @@ function App() {
           />
         )}
 
-        {currentContent && compactTocOpen && (
-          <>
-            <button
-              className="toc-drawer-backdrop"
-              type="button"
-              aria-label="关闭本文目录"
-              onClick={() => setCompactTocOpen(false)}
-            />
-            <aside className="toc-drawer" aria-label="本文目录">
-              <TocNavigation items={toc} activeId={activeHeading} onSelect={scrollToHeading} />
-            </aside>
-          </>
-        )}
+        <button
+          className="toc-drawer-backdrop reade-motion-backdrop"
+          type="button"
+          aria-label="关闭本文目录"
+          aria-hidden={!currentContent || !compactTocOpen}
+          data-open={Boolean(currentContent && compactTocOpen)}
+          tabIndex={currentContent && compactTocOpen ? 0 : -1}
+          onClick={() => setCompactTocOpen(false)}
+        />
+        <aside
+          className="toc-drawer reade-motion-panel"
+          aria-label="本文目录"
+          aria-hidden={!currentContent || !compactTocOpen}
+          data-open={Boolean(currentContent && compactTocOpen)}
+          inert={!currentContent || !compactTocOpen}
+        >
+          <TocNavigation items={toc} activeId={activeHeading} onSelect={scrollToHeading} />
+        </aside>
 
         {loading && (
           <div className="loading-overlay" aria-live="polite">
@@ -939,22 +1222,16 @@ function App() {
           </div>
         )}
 
-        {error && (
-          <div className="notice error" role="alert">
-            <AlertCircle size={17} aria-hidden="true" />
-            <span>{error}</span>
-            <button className="icon-button" type="button" onClick={clearError} aria-label="关闭错误提示">
-              <X size={14} aria-hidden="true" />
-            </button>
-          </div>
-        )}
+        {error && <MotionNotice key={`error-${error}`} id={error} message={error} kind="error" motionLevel={motionLevel} onClose={clearError} />}
 
-        {notice && !error && (
-          <div className="notice" role="status">
-            <ShieldCheck size={17} aria-hidden="true" />
-            <span>{notice}</span>
-          </div>
-        )}
+        {notice && !error && <MotionNotice
+          key={notice.id}
+          id={notice.id}
+          message={notice.message}
+          motionLevel={motionLevel}
+          autoDismiss
+          onClose={closeCurrentNotice}
+        />}
       </main>
     </div>
   );
