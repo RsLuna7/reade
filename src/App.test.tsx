@@ -8,6 +8,7 @@ import {
   detectMovedDocuments,
   findRelatedPassages,
   listAnnotations,
+  listCollections,
   listDocumentLinks,
   listReadingSessions,
   listReviewQueue,
@@ -41,6 +42,8 @@ vi.mock("./lib/backend", async () => {
     searchAnnotations: vi.fn(async () => []),
     findRelatedPassages: vi.fn(async () => []),
     listDocumentLinks: vi.fn(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 })),
+    // 命令面板打开时拉合集;jsdom 无 Tauri 后端,默认空列表。
+    listCollections: vi.fn(async () => []),
     // 回顾探测与队列在 jsdom 中没有 Tauri 后端;默认零数据。
     reviewSummary: vi.fn(async () => ({ dueCount: 0, reviewedToday: 0 })),
     listReviewQueue: vi.fn(async () => []),
@@ -114,6 +117,7 @@ beforeEach(() => {
   vi.mocked(listDocumentLinks)
     .mockReset()
     .mockImplementation(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 }));
+  vi.mocked(listCollections).mockReset().mockImplementation(async () => []);
   vi.mocked(reviewSummary)
     .mockReset()
     .mockImplementation(async () => ({ dueCount: 0, reviewedToday: 0 }));
@@ -1677,5 +1681,90 @@ describe("reading position persistence (H0)", () => {
     await waitFor(() => {
       expect(reader.scrollTop).toBe(120);
     });
+  });
+});
+
+describe("command palette (CP)", () => {
+  function setPaletteState() {
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/palette-lib", documents: [] },
+      documents: [
+        markdownDocument("guide.md", "Guide"),
+        markdownDocument("notes/palette.md", "命令面板笔记"),
+      ],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\nBody",
+      },
+      motionLevel: "off",
+    });
+  }
+
+  it("opens on Ctrl+P with preventDefault and closes on Escape", async () => {
+    setPaletteState();
+    render(<App />);
+
+    // preventDefault 拦掉 WebView2/浏览器的默认打印(fireEvent 返回 false)。
+    expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
+    const dialog = await screen.findByRole("dialog", { name: "命令面板" });
+    expect(within(dialog).getByRole("combobox")).toHaveFocus();
+
+    fireEvent.keyDown(within(dialog).getByRole("combobox"), { key: "Escape" });
+    expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+
+  it("switches documents from a filtered entry via Enter", async () => {
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# 命令面板\n\n正文",
+    }));
+    setPaletteState();
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    fireEvent.change(input, { target: { value: "命令面板笔记" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("notes/palette.md");
+    });
+    expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+
+  it("lists collections and executes commands (theme toggle)", async () => {
+    vi.mocked(listCollections).mockResolvedValue([
+      {
+        id: "col-1",
+        name: "考研数学",
+        createdAt: 1,
+        updatedAt: 1,
+        itemCount: 3,
+        presentCount: 2,
+      },
+    ]);
+    setPaletteState();
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    await screen.findByRole("option", { name: /考研数学/ });
+
+    fireEvent.change(input, { target: { value: "深色" } });
+    fireEvent.click(screen.getByRole("option", { name: /切换到深色主题/ }));
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+  });
+
+  it("toggles closed on a second Ctrl+P", async () => {
+    setPaletteState();
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    await screen.findByRole("dialog", { name: "命令面板" });
+    expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
+    expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
   });
 });

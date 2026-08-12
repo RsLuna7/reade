@@ -82,6 +82,8 @@ export interface CollectionsSectionProps {
   documents: DocumentInfo[];
   /** App 在 popover 写操作后递增;分区已加载时随之静默重拉。 */
   refreshToken: number;
+  /** 命令面板"切换到合集"(CP-D2):token 递增时展开分区与目标合集。 */
+  reveal?: { id: string; token: number } | null;
   onNotice: (message: string) => void;
   onSelectDocument: (relativePath: string) => void;
 }
@@ -90,6 +92,7 @@ export function CollectionsSection({
   rootPath,
   documents,
   refreshToken,
+  reveal,
   onNotice,
   onSelectDocument,
 }: CollectionsSectionProps) {
@@ -161,6 +164,21 @@ export function CollectionsSection({
       return current;
     });
   }, [refreshToken, reloadCollections, reloadItems]);
+
+  // 命令面板"切换到合集"(CP-D2):展开分区与目标合集并加载条目;
+  // reveal 的对象身份随 token 变化,重复执行同一合集也会重新触发。
+  useEffect(() => {
+    if (!reveal) return;
+    setExpanded(true);
+    refreshPositions();
+    setOpenIds((current) => {
+      if (current.has(reveal.id)) return current;
+      const next = new Set(current);
+      next.add(reveal.id);
+      return next;
+    });
+    void reloadItems(reveal.id);
+  }, [refreshPositions, reloadItems, reveal]);
 
   const toggleOpen = (collectionId: string) => {
     setOpenIds((current) => {

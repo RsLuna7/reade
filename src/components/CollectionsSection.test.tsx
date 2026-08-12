@@ -195,6 +195,28 @@ describe("CollectionsSection", () => {
     expect(missing.closest(".collection-item")).toHaveClass("collection-item--missing");
   });
 
+  it("expands the section and the target collection on a reveal request (CP-D2)", async () => {
+    vi.mocked(listCollections).mockResolvedValue([summary()]);
+    vi.mocked(listCollectionItems).mockResolvedValue([item()]);
+    const view = renderSection();
+    expect(listCollections).not.toHaveBeenCalled();
+
+    // 命令面板执行"切换到合集":无需任何点击,分区与目标合集直接展开。
+    view.rerender(
+      <CollectionsSection
+        rootPath={ROOT}
+        documents={documents}
+        refreshToken={0}
+        reveal={{ id: "col-1", token: 1 }}
+        onNotice={vi.fn()}
+        onSelectDocument={vi.fn()}
+      />,
+    );
+
+    expect(await screen.findByTitle("math/notes.md")).toBeInTheDocument();
+    expect(listCollectionItems).toHaveBeenCalledWith("col-1");
+  });
+
   it("reorders through the move buttons with a full-order commit (CO-D4)", async () => {
     vi.mocked(listCollections).mockResolvedValue([summary()]);
     vi.mocked(listCollectionItems).mockResolvedValue([

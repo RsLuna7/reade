@@ -60,6 +60,7 @@ import {
   findRelatedPassages,
   importAnnotations,
   listAnnotations,
+  listCollections,
   listDocumentLinks,
   listAnnotationsForTransfer,
   listDocumentFingerprints,
@@ -79,11 +80,14 @@ import {
   searchAnnotations,
   type Annotation,
   type AnnotationColor,
+  type CollectionSummary,
   type LibrarySnapshot,
   type MovedDocumentCandidate,
   type ReviewSummary,
   type SearchResult,
 } from "./lib/backend";
+import { CommandPalette } from "./components/CommandPalette";
+import type { PaletteEntry } from "./lib/commandPalette";
 import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
 import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
@@ -198,6 +202,8 @@ import type { ReviewSession } from "./components/ReviewView";
 
 const LAST_LIBRARY_KEY = "reade-last-library";
 const IS_WEB_RUNTIME = APP_RUNTIME === "web";
+/** 命令面板条目 + 执行动作(plan-command-palette §3.3):匹配纯数据进 lib,动作留在 App。 */
+type AppPaletteEntry = PaletteEntry & { run: () => void };
 /** data-annotation-id of the temporary relocate preview mark (§5.6 B). */
 const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
 /** PDF 阅读模式的大小上限,与 PdfReader 工具栏的禁用判定保持一致(RA-D5)。 */
@@ -1087,6 +1093,7 @@ function App() {
   const setSearchQuery = useReaderStore((state) => state.setSearchQuery);
   const runSearch = useReaderStore((state) => state.runSearch);
   const toggleTheme = useReaderStore((state) => state.toggleTheme);
+  const setThemeSeries = useReaderStore((state) => state.setThemeSeries);
   const clearError = useReaderStore((state) => state.clearError);
   const applyDocumentIndexStatus = useReaderStore((state) => state.applyDocumentIndexStatus);
   const setIndexProgress = useReaderStore((state) => state.setIndexProgress);
@@ -1104,6 +1111,13 @@ function App() {
   // 合集(CO-D2):topbar popover 开关;写操作后 version 递增驱动分区重拉。
   const [collectionsPopoverOpen, setCollectionsPopoverOpen] = useState(false);
   const [collectionsVersion, setCollectionsVersion] = useState(0);
+  // 命令面板(plan-command-palette):开关、打开时拉取的合集快照、
+  // 以及"切换到合集"对侧栏分区的展开请求(CP-D2)。
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [paletteCollections, setPaletteCollections] = useState<CollectionSummary[]>([]);
+  const [collectionsReveal, setCollectionsReveal] = useState<
+    { id: string; token: number } | null
+  >(null);
   // 分栏对照(plan-split-view,SP-D1):session-only App state,不进 store。
   // splitState 在窄窗退化时保留,窗口恢复 ≥1080px 自动回到分栏(SP-D6)。
   const [splitState, setSplitState] = useState<{ path: string } | null>(null);
@@ -1724,6 +1738,205 @@ function App() {
     [],
   );
 
+
+  // ---- 命令面板(plan-command-palette) ----
+  // 打开面板时拉一次合集(collectionsVersion 变化代表写操作,顺带重拉);
+  // 失败静默为空,面板降级为文档 + 命令。
+  useEffect(() => {
+    setPaletteCollections([]);
+  }, [snapshot?.rootPath]);
+
+  useEffect(() => {
+    if (!commandPaletteOpen || !snapshot) return;
+    let cancelled = false;
+    listCollections().then(
+      (collections) => {
+        if (!cancelled) setPaletteCollections(collections);
+      },
+      () => {
+        if (!cancelled) setPaletteCollections([]);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [commandPaletteOpen, collectionsVersion, snapshot]);
+
+  // 条目构建:文档 → 合集 → 命令(空查询默认顺序);命令只列当前可执行的
+  // (CP-D3),动作全部复用既有回调,面板自身不新增任何能力。
+  const paletteEntries = useMemo<AppPaletteEntry[]>(() => {
+    const entries: AppPaletteEntry[] = documents.map((document) => ({
+      kind: "document" as const,
+      id: `doc:${document.relativePath}`,
+      title: document.title,
+      subtitle: document.relativePath,
+      badge: document.format === "markdown" ? "MD" : document.format.toUpperCase(),
+      run: () => {
+        setMobileLibraryOpen(false);
+        void selectDocument(document.relativePath);
+      },
+    }));
+    if (snapshot) {
+      for (const collection of paletteCollections) {
+        entries.push({
+          kind: "collection",
+          id: `col:${collection.id}`,
+          title: collection.name,
+          subtitle: `${collection.presentCount}/${collection.itemCount} 在库`,
+          badge: "合集",
+          run: () => {
+            // 展开侧栏合集分区(搜索模式下分区隐藏,先清空搜索)。
+            setSearchQuery("");
+            if (compactLibraryLayout) setMobileLibraryOpen(true);
+            setCollectionsReveal((current) => ({
+              id: collection.id,
+              token: (current?.token ?? 0) + 1,
+            }));
+          },
+        });
+      }
+    }
+    const commands: Array<AppPaletteEntry | null> = [
+      {
+        kind: "command" as const,
+        id: "cmd:toggle-theme",
+        title: themeMode === "light" ? "切换到深色主题" : "切换到浅色主题",
+        keywords: "theme dark light 明暗 深色 浅色 主题",
+        badge: "命令",
+        run: toggleTheme,
+      },
+      ...THEME_SERIES.map((series) => ({
+        kind: "command" as const,
+        id: `cmd:series-${series.id}`,
+        title: `界面风格：${series.label}`,
+        keywords: "theme style series 主题 风格 系列",
+        badge: "命令",
+        run: () => setThemeSeries(series.id),
+      })),
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:home",
+            title: homeOpen ? "返回阅读" : "打开主页",
+            keywords: "home 主页 首页",
+            badge: "命令",
+            run: () => {
+              setActiveView(homeOpen ? "reader" : "home");
+              setMobileLibraryOpen(false);
+            },
+          }
+        : null,
+      !IS_WEB_RUNTIME
+        ? {
+            kind: "command" as const,
+            id: "cmd:stats",
+            title: statsOpen ? "关闭阅读统计" : "打开阅读统计",
+            keywords: "stats statistics 统计 时长",
+            badge: "命令",
+            run: () => {
+              setActiveView(statsOpen ? "reader" : "stats");
+              setMobileLibraryOpen(false);
+            },
+          }
+        : null,
+      currentContent && (splitState || splitWide)
+        ? {
+            kind: "command" as const,
+            id: "cmd:split",
+            title: splitState ? "退出分栏对照" : "开启分栏对照",
+            keywords: "split view 分栏 对照 双栏",
+            badge: "命令",
+            run: handleToggleSplit,
+          }
+        : null,
+      currentContent && !readAloudDisabledReason
+        ? {
+            kind: "command" as const,
+            id: "cmd:read-aloud",
+            title: readAloud.barOpen ? "停止朗读" : "开始朗读",
+            keywords: "tts speech read aloud 朗读 语音",
+            badge: "命令",
+            run: handleReadAloudButton,
+          }
+        : null,
+      {
+        kind: "command" as const,
+        id: "cmd:reading-settings",
+        title: "打开阅读设置",
+        keywords: "settings font size 设置 字号 行高",
+        badge: "命令",
+        run: () => {
+          setSettingsOpen(true);
+          setAnnotationPanelOpen(false);
+        },
+      },
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:focus-search",
+            title: "聚焦全文搜索",
+            keywords: "search find 搜索 检索",
+            badge: "命令",
+            run: () => {
+              if (compactLibraryLayout) setMobileLibraryOpen(true);
+              // 窄窗抽屉解除 inert 后才能聚焦,推迟到下一帧。
+              window.requestAnimationFrame(() => searchRef.current?.focus());
+            },
+          }
+        : null,
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:refresh-library",
+            title: "刷新文档库",
+            keywords: "refresh reload rescan 刷新 重扫",
+            badge: "命令",
+            run: () => void refreshLibrary(),
+          }
+        : null,
+      !IS_WEB_RUNTIME
+        ? {
+            kind: "command" as const,
+            id: "cmd:choose-library",
+            title: "选择文档库",
+            keywords: "open library folder 打开 书库 文件夹",
+            badge: "命令",
+            run: () => void chooseAndOpenLibrary(),
+          }
+        : null,
+    ];
+    for (const command of commands) {
+      if (command) entries.push(command);
+    }
+    return entries;
+  }, [
+    chooseAndOpenLibrary,
+    compactLibraryLayout,
+    currentContent,
+    documents,
+    handleReadAloudButton,
+    handleToggleSplit,
+    homeOpen,
+    paletteCollections,
+    readAloud.barOpen,
+    readAloudDisabledReason,
+    refreshLibrary,
+    selectDocument,
+    setActiveView,
+    setSearchQuery,
+    setThemeSeries,
+    snapshot,
+    splitState,
+    splitWide,
+    statsOpen,
+    themeMode,
+    toggleTheme,
+  ]);
+
+  const handleExecutePaletteEntry = useCallback((entry: AppPaletteEntry) => {
+    setCommandPaletteOpen(false);
+    entry.run();
+  }, []);
 
   const readingScrollRatio = useCallback(() => {
     const reader = readerRef.current;
@@ -3224,6 +3437,7 @@ function App() {
           setStylePickerOpen(false);
           setAnnotationPanelOpen(false);
           setCollectionsPopoverOpen(false);
+          setCommandPaletteOpen(false);
           setCompactTocOpen(false);
           setMobileLibraryOpen(false);
           setPendingSelection(null);
@@ -3257,6 +3471,10 @@ function App() {
       } else if (event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchRef.current?.focus();
+      } else if (event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) {
+        // WebView2/浏览器把 Ctrl+P 默认给系统打印;开与关都要拦掉。
+        event.preventDefault();
+        setCommandPaletteOpen((open) => !open);
       } else if (event.key.toLowerCase() === "b") {
         if (!currentPath || !currentContent) return;
         event.preventDefault();
@@ -3638,6 +3856,7 @@ function App() {
               rootPath={snapshot.rootPath}
               documents={documents}
               refreshToken={collectionsVersion}
+              reveal={collectionsReveal}
               onNotice={showNotice}
               onSelectDocument={(path) => {
                 setMobileLibraryOpen(false);
@@ -4269,6 +4488,14 @@ function App() {
             />
           </Suspense>
         )}
+
+        <CommandPalette
+          open={commandPaletteOpen}
+          entries={paletteEntries}
+          onExecute={handleExecutePaletteEntry}
+          onClose={() => setCommandPaletteOpen(false)}
+        />
+
 
         {readAloud.barOpen && !overlayViewOpen && (
           <ReadAloudBar
