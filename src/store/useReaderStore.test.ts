@@ -51,7 +51,12 @@ describe("reading settings", () => {
       theme: "light",
       readingSettings: DEFAULT_READING_SETTINGS,
       motionLevel: "subtle",
+      annotationTool: "view",
+      highlightColor: "yellow",
+      underlineColor: "blue",
       expandedPaths: [],
+      activeView: "reader",
+      dailyGoalMinutes: 0,
       currentPath: null,
       currentContent: null,
       documents: [],
@@ -89,7 +94,11 @@ describe("reading settings", () => {
     useReaderStore.getState().toggleTheme();
     useReaderStore.getState().updateReadingSettings({ contentWidth: 960 });
     useReaderStore.getState().setMotionLevel("full");
+    useReaderStore.getState().setAnnotationTool("underline");
+    useReaderStore.getState().setHighlightColor("green");
+    useReaderStore.getState().setUnderlineColor("pink");
     useReaderStore.getState().toggleDirectory("正文");
+    useReaderStore.getState().setActiveView("stats");
 
     const stored = JSON.parse(
       localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
@@ -100,10 +109,25 @@ describe("reading settings", () => {
       theme: "dark",
       readingSettings: { contentWidth: 960 },
       motionLevel: "full",
+      highlightColor: "green",
+      underlineColor: "pink",
       expandedPaths: ["正文"],
     });
+    // The armed annotation tool is session-only: persisting it would turn the
+    // first selection after the next launch into an unwanted annotation.
+    expect(stored.state).not.toHaveProperty("annotationTool");
     expect(stored.state).not.toHaveProperty("documents");
     expect(stored.state).not.toHaveProperty("currentContent");
+    // The workspace view is session-only: launching into the statistics
+    // dashboard instead of the reading surface would be surprising.
+    expect(stored.state).not.toHaveProperty("activeView");
+  });
+
+  it("sets an explicit theme id and ignores unknown values", () => {
+    useReaderStore.getState().setTheme("dark");
+    expect(useReaderStore.getState().theme).toBe("dark");
+    useReaderStore.getState().setTheme("sepia" as "light");
+    expect(useReaderStore.getState().theme).toBe("dark");
   });
 
   it("applies background index status without replacing the open PDF", () => {
@@ -138,6 +162,7 @@ describe("reading settings", () => {
           theme: "dark",
           readingSettings: { ...DEFAULT_READING_SETTINGS, fontSize: 20 },
           expandedPaths: ["正文"],
+          annotationTool: "highlight",
           documents: [{ relativePath: "private.pdf" }],
         },
         1,
@@ -170,6 +195,27 @@ describe("reading settings", () => {
       motionLevel: "subtle",
       expandedPaths: ["旧目录"],
     });
+  });
+
+  it("rehydrates legacy data containing annotationTool as view while restoring colors", async () => {
+    useReaderStore.getState().setAnnotationTool("underline");
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: {
+          annotationTool: "highlight",
+          highlightColor: "green",
+          underlineColor: "pink",
+        },
+      }),
+    );
+
+    await useReaderStore.persist.rehydrate();
+
+    expect(useReaderStore.getState().annotationTool).toBe("view");
+    expect(useReaderStore.getState().highlightColor).toBe("green");
+    expect(useReaderStore.getState().underlineColor).toBe("pink");
   });
 
   it("keeps an explicitly persisted motion level ahead of the system", async () => {
@@ -228,6 +274,36 @@ describe("reading settings", () => {
     backendMocks.clearConversionCache.mockRejectedValueOnce(new Error("clear failed"));
     await expect(useReaderStore.getState().clearDocumentCache()).resolves.toBe(false);
     expect(useReaderStore.getState().error).toBe("clear failed");
+  });
+
+  it("persists and clamps the daily reading goal", () => {
+    useReaderStore.getState().setDailyGoalMinutes(45);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ dailyGoalMinutes: 45 });
+
+    useReaderStore.getState().setDailyGoalMinutes(99_999);
+    expect(useReaderStore.getState().dailyGoalMinutes).toBe(1_440);
+    useReaderStore.getState().setDailyGoalMinutes(Number.NaN);
+    expect(useReaderStore.getState().dailyGoalMinutes).toBe(1_440);
+    useReaderStore.getState().setDailyGoalMinutes(0);
+    expect(useReaderStore.getState().dailyGoalMinutes).toBe(0);
+  });
+
+  it("switches the workspace view and normalizes unknown values", () => {
+    expect(useReaderStore.getState().activeView).toBe("reader");
+    useReaderStore.getState().setActiveView("stats");
+    expect(useReaderStore.getState().activeView).toBe("stats");
+    useReaderStore.getState().setActiveView("dashboard" as "stats");
+    expect(useReaderStore.getState().activeView).toBe("reader");
+  });
+
+  it("returns to the reading surface when a document is opened from stats", async () => {
+    useReaderStore.getState().setActiveView("stats");
+    await useReaderStore.getState().selectDocument("paper.pdf");
+    expect(useReaderStore.getState().activeView).toBe("reader");
+    expect(useReaderStore.getState().currentPath).toBe("paper.pdf");
   });
 
   it("clones repeated search locators so the reader can replay positioning", async () => {

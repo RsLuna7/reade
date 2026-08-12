@@ -17,11 +17,18 @@ import {
   type SearchResult,
 } from "../lib/backend";
 import type { ReaderMotionLevel } from "../lib/motion";
+import {
+  type ReaderTheme,
+  isReaderTheme,
+  normalizeReaderTheme,
+  toggleThemeMode,
+} from "../lib/themes";
 import { buildDocumentTree, reconcileExpandedPaths } from "../lib/tree";
 
 export type { ReaderMotionLevel } from "../lib/motion";
+export type { ReaderTheme } from "../lib/themes";
+export { THEME_IDS, THEME_META, THEME_SERIES, normalizeReaderTheme } from "../lib/themes";
 
-export type ReaderTheme = "light" | "dark";
 export type ReaderFontFamily = "system" | "sans" | "serif";
 
 export interface ReadingSettings {
@@ -45,14 +52,47 @@ export const DEFAULT_READING_SETTINGS: ReadingSettings = {
 };
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
-export const READER_PREFERENCES_VERSION = 2;
+export const READER_PREFERENCES_VERSION = 3;
+
+export type AnnotationToolPreference = "view" | "highlight" | "underline";
+export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
+/** Workspace view: reading surface or the reading statistics dashboard. */
+export type ReaderView = "reader" | "stats";
+
+const ANNOTATION_TOOLS = new Set<AnnotationToolPreference>(["view", "highlight", "underline"]);
+const ANNOTATION_COLORS = new Set<AnnotationColorPreference>(["yellow", "green", "blue", "pink"]);
+
+export function normalizeAnnotationTool(
+  value: unknown,
+  fallback: AnnotationToolPreference = "view",
+): AnnotationToolPreference {
+  return typeof value === "string" && ANNOTATION_TOOLS.has(value as AnnotationToolPreference)
+    ? (value as AnnotationToolPreference)
+    : fallback;
+}
+
+export function normalizeAnnotationColor(
+  value: unknown,
+  fallback: AnnotationColorPreference = "yellow",
+): AnnotationColorPreference {
+  return typeof value === "string" && ANNOTATION_COLORS.has(value as AnnotationColorPreference)
+    ? (value as AnnotationColorPreference)
+    : fallback;
+}
 
 const FONT_FAMILIES = new Set<ReaderFontFamily>(["system", "sans", "serif"]);
 const MOTION_LEVELS = new Set<ReaderMotionLevel>(["off", "subtle", "full"]);
+export const MAX_DAILY_GOAL_MINUTES = 24 * 60;
 
 function clamp(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
   return Math.min(maximum, Math.max(minimum, value));
+}
+
+/** Daily reading goal in minutes; 0 disables the goal. */
+export function normalizeDailyGoalMinutes(value: unknown, fallback = 0): number {
+  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
+  return Math.round(clamp(value, 0, MAX_DAILY_GOAL_MINUTES));
 }
 
 export function normalizeReadingSettings(
@@ -112,7 +152,16 @@ export function normalizeMotionLevel(
 }
 
 type PersistedReaderPreferences = Partial<
-  Pick<ReaderState, "theme" | "readingSettings" | "expandedPaths" | "motionLevel">
+  Pick<
+    ReaderState,
+    | "theme"
+    | "readingSettings"
+    | "expandedPaths"
+    | "motionLevel"
+    | "highlightColor"
+    | "underlineColor"
+    | "dailyGoalMinutes"
+  >
 >;
 
 export function migrateReaderPreferences(
@@ -123,9 +172,7 @@ export function migrateReaderPreferences(
 
   const state = persistedState as PersistedReaderPreferences;
   return {
-    ...(state.theme === "light" || state.theme === "dark"
-      ? { theme: state.theme }
-      : {}),
+    ...(isReaderTheme(state.theme) ? { theme: state.theme } : {}),
     ...(state.readingSettings && typeof state.readingSettings === "object"
       ? { readingSettings: state.readingSettings }
       : {}),
@@ -134,6 +181,17 @@ export function migrateReaderPreferences(
       : {}),
     ...(MOTION_LEVELS.has(state.motionLevel as ReaderMotionLevel)
       ? { motionLevel: state.motionLevel as ReaderMotionLevel }
+      : {}),
+    // annotationTool is deliberately not migrated: a leftover value from older
+    // persisted data must not re-arm the annotation mode on launch.
+    ...(ANNOTATION_COLORS.has(state.highlightColor as AnnotationColorPreference)
+      ? { highlightColor: state.highlightColor }
+      : {}),
+    ...(ANNOTATION_COLORS.has(state.underlineColor as AnnotationColorPreference)
+      ? { underlineColor: state.underlineColor }
+      : {}),
+    ...(typeof state.dailyGoalMinutes === "number"
+      ? { dailyGoalMinutes: state.dailyGoalMinutes }
       : {}),
   };
 }
@@ -155,7 +213,14 @@ interface ReaderState {
   theme: ReaderTheme;
   readingSettings: ReadingSettings;
   motionLevel: ReaderMotionLevel;
+  annotationTool: AnnotationToolPreference;
+  highlightColor: AnnotationColorPreference;
+  underlineColor: AnnotationColorPreference;
   expandedPaths: string[];
+  /** Session-only; intentionally left out of the persisted preferences. */
+  activeView: ReaderView;
+  /** Daily reading goal in minutes; 0 disables the goal. Persisted. */
+  dailyGoalMinutes: number;
   loading: boolean;
   error: string | null;
   chooseAndOpenLibrary: () => Promise<void>;
@@ -169,8 +234,14 @@ interface ReaderState {
   setSearchQuery: (query: string) => void;
   runSearch: (query?: string) => Promise<void>;
   toggleTheme: () => void;
+  setTheme: (theme: ReaderTheme) => void;
   updateReadingSettings: (settings: Partial<ReadingSettings>) => void;
   setMotionLevel: (level: ReaderMotionLevel) => void;
+  setAnnotationTool: (tool: AnnotationToolPreference) => void;
+  setHighlightColor: (color: AnnotationColorPreference) => void;
+  setUnderlineColor: (color: AnnotationColorPreference) => void;
+  setActiveView: (view: ReaderView) => void;
+  setDailyGoalMinutes: (minutes: number) => void;
   resetReaderPreferences: () => void;
   toggleDirectory: (path: string) => void;
   clearError: () => void;
@@ -234,7 +305,12 @@ export const useReaderStore = create<ReaderState>()(
         theme: preferredTheme(),
         readingSettings: DEFAULT_READING_SETTINGS,
         motionLevel: getSystemMotionLevel(),
+        annotationTool: "view",
+        highlightColor: "yellow",
+        underlineColor: "blue",
         expandedPaths: [],
+        activeView: "reader",
+        dailyGoalMinutes: 0,
         loading: false,
         error: null,
 
@@ -287,6 +363,9 @@ export const useReaderStore = create<ReaderState>()(
                 currentPath: relativePath,
                 currentContent: content,
                 currentLocator: locator ? { ...locator } : null,
+                // Opening a document always returns to the reading surface,
+                // e.g. from the statistics ranking or search results.
+                activeView: "reader",
               });
             }
           } catch (error) {
@@ -376,7 +455,11 @@ export const useReaderStore = create<ReaderState>()(
         },
 
         toggleTheme: () => {
-          set((state) => ({ theme: state.theme === "light" ? "dark" : "light" }));
+          set((state) => ({ theme: toggleThemeMode(state.theme) }));
+        },
+
+        setTheme: (theme) => {
+          set({ theme: normalizeReaderTheme(theme, get().theme) });
         },
 
         updateReadingSettings: (settings) => {
@@ -391,10 +474,35 @@ export const useReaderStore = create<ReaderState>()(
           }));
         },
 
+        setAnnotationTool: (tool) => {
+          set({ annotationTool: normalizeAnnotationTool(tool) });
+        },
+
+        setHighlightColor: (color) => {
+          set({ highlightColor: normalizeAnnotationColor(color) });
+        },
+
+        setUnderlineColor: (color) => {
+          set({ underlineColor: normalizeAnnotationColor(color, "blue") });
+        },
+
+        setActiveView: (view) => {
+          set({ activeView: view === "stats" ? "stats" : "reader" });
+        },
+
+        setDailyGoalMinutes: (minutes) => {
+          set((state) => ({
+            dailyGoalMinutes: normalizeDailyGoalMinutes(minutes, state.dailyGoalMinutes),
+          }));
+        },
+
         resetReaderPreferences: () => {
           set({
             readingSettings: { ...DEFAULT_READING_SETTINGS },
             motionLevel: getSystemMotionLevel(),
+            annotationTool: "view",
+            highlightColor: "yellow",
+            underlineColor: "blue",
           });
         },
 
@@ -418,6 +526,9 @@ export const useReaderStore = create<ReaderState>()(
         readingSettings: state.readingSettings,
         motionLevel: state.motionLevel,
         expandedPaths: state.expandedPaths,
+        highlightColor: state.highlightColor,
+        underlineColor: state.underlineColor,
+        dailyGoalMinutes: state.dailyGoalMinutes,
       }),
       migrate: migrateReaderPreferences,
       merge: (persisted, current) => {
@@ -427,10 +538,7 @@ export const useReaderStore = create<ReaderState>()(
         );
         return {
           ...current,
-          theme:
-            preferences.theme === "light" || preferences.theme === "dark"
-              ? preferences.theme
-              : current.theme,
+          theme: normalizeReaderTheme(preferences.theme, current.theme),
           readingSettings: normalizeReadingSettings(
             preferences.readingSettings ?? {},
             current.readingSettings,
@@ -439,11 +547,27 @@ export const useReaderStore = create<ReaderState>()(
             preferences.motionLevel,
             current.motionLevel,
           ),
+          // Always start a session in "view": persisting an armed
+          // highlight/underline tool would turn any selection made right
+          // after launch (even a copy gesture) into an annotation.
+          annotationTool: "view",
+          highlightColor: normalizeAnnotationColor(
+            preferences.highlightColor,
+            current.highlightColor,
+          ),
+          underlineColor: normalizeAnnotationColor(
+            preferences.underlineColor,
+            current.underlineColor,
+          ),
           expandedPaths: Array.isArray(preferences.expandedPaths)
             ? preferences.expandedPaths.filter(
                 (path): path is string => typeof path === "string",
               )
             : current.expandedPaths,
+          dailyGoalMinutes: normalizeDailyGoalMinutes(
+            preferences.dailyGoalMinutes,
+            current.dailyGoalMinutes,
+          ),
         };
       },
     },
