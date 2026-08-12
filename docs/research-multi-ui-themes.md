@@ -3,7 +3,7 @@
 - 日期：2026-08-12
 - 范围：主流阅读类软件的主题/皮肤体系调研；Reade 多套 UI 风格切换的设计规格、技术架构与分阶段计划
 - 状态：**仅调研与方案设计，未改动任何产品代码、配置或依赖**（本文档为唯一交付物）
-- 决策状态：**2026-08-12 用户已拍板 D1–D6**（结果见第 7 节决策记录，其中 D4、D5 采用非推荐项）；**一期 M0–M2 已实施（2026-08-12）**，实施备注与 A5 实测结论见第 7 节
+- 决策状态：**2026-08-12 用户已拍板 D1–D6**（结果见第 7 节决策记录，其中 D4、D5 采用非推荐项）；**一期 M0–M2 已实施（2026-08-12）**；**二期 M3（青瓷系列 + 切换渐变）已实施（2026-08-12），至此全部规划范围完成**，实施备注与 A5 实测结论见第 7 节
 - 证据标注约定：
   - **【已核实】**＝直接读取本仓库源码/配置，或产品官方文档、官网、官方仓库源码确认，附链接
   - **【二手】**＝第三方评测/社区资料，可核实但非官方，附链接
@@ -205,7 +205,21 @@
 
 组件风格要点：唯一带「非色彩差异」的系列——阴影明显更轻（上表已体现，仍走 `--shadow` token，无需新 token），无暖色偏移，整体更冷更平。字体排印维持系统无衬线栈。
 
-**青瓷 celadon（二期，只给方向）**：light 底 `#edf4ea`（Thorium contrast4 `#C5E7CD` 与 Kindle 浅绿之间取低饱和值）、墨绿文字、茶褐或青绿 accent；dark 为深青 `#141f1c` 系。定稿放到二期。
+**青瓷 celadon**（护眼绿；方向为 light 底 `#edf4ea`——Thorium contrast4 `#C5E7CD` 与 Kindle 浅绿之间取低饱和值、墨绿文字，dark 为深青 `#141f1c` 系。以下色值为 **2026-08-12 M3 定稿**）
+
+| token | light | dark |
+|-------|-------|------|
+| `--theme-color` / `--paper` | `#e3ede0` / `#edf4ea` | `#141f1c` / `#141f1c` |
+| `--paper-raised` | `#f6faf3` | `#1d2a25` |
+| `--chrome` / `--chrome-strong` | `#e3ede0` / `#d7e4d3` | `#0f1815` / `#2a3a34` |
+| `--ink` / `--ink-soft` / `--muted` | `#1f2b24` / `#4c5f53` / `#6f8177` | `#d8e4dc` / `#9cb0a4` / `#6d8177` |
+| `--line` / `--line-strong` | `rgba(31,43,36,.14)` / `.24` | `rgba(216,228,220,.11)` / `.19` |
+| `--accent` / `--accent-soft` / `--accent-ink` | `#8a6138` / `#ece4d2` / `#6d4a28` | `#c69c66` / `#332c22` / `#e0c39a` |
+| `--teal` / `--teal-soft` | `#3e7268` / `#d9eae2` | `#6cb0a3` / `#1e322d` |
+| `--selection` | `rgba(138,97,56,.2)` | `rgba(198,156,102,.3)` |
+| `--shadow` | `0 18px 55px rgba(35,48,40,.12)` | `0 20px 60px rgba(0,0,0,.34)` |
+
+组件风格要点：底色取低饱和暖绿（HSL 饱和度约 31%），墨色为带绿相的深灰绿，避免荧光感。**accent 定为茶褐而非青绿**：固定批注绿 `#78dc8c`（hue≈132°）必须保持页面上唯一的饱和绿，茶褐（hue≈30–34°）与其在色相上完全分离，选区、热力图（`color-mix` 派生为茶褐阶梯）与批注四色互不混淆；5.2 原文的「青绿 accent」备选因此放弃。青绿色相保留给 `--teal`（低饱和，仅辅助角色）。字体预设为系统均衡（D4 只给墨韵配衬线）。
 
 ### 5.3 哪些维度随套切换、哪些全局一致
 
@@ -305,10 +319,10 @@
 验收：3 系列 × 明暗 × 宽窄 12 张截图；`pnpm test` + `tsc` + `cargo` 检查全绿（Rust 侧无改动，跑通即可）。
 风险：低——机制已在 M1 验证，本阶段纯定色与打磨。
 
-### M3（二期，范围已按 D1/D5 拍板）——量级各 M
+### M3（二期，范围已按 D1/D5 拍板）——量级各 M ——**已实施（2026-08-12）**
 
-- 青瓷护眼系列（D1 拍板排期；同 M2 流程，色值二期定稿）。
-- 切换动效（D5 拍板）：`motionLevel === "full"` 时用 `document.startViewTransition` 做全屏 crossfade（特性检测 + 局部类型声明，规避 ES2020 lib 限制；`off/subtle` 维持瞬切；需补动效回归确认不违反 AppCss 测试对 PDF/EPUB 层的禁动效约束）。
+- 青瓷护眼系列（D1 拍板排期；同 M2 流程，色值二期定稿）。**已实施**：色值定稿见 5.2，对比度实测与定色依据见第 7 节 M3 实施备注。
+- 切换动效（D5 拍板）：`motionLevel === "full"` 时用 `document.startViewTransition` 做全屏 crossfade（特性检测 + 局部类型声明，规避 ES2020 lib 限制；`off/subtle` 维持瞬切；需补动效回归确认不违反 AppCss 测试对 PDF/EPUB 层的禁动效约束）。**已实施**：实现要点见第 7 节 M3 实施备注。
 - ~~风格附带「推荐排版」提示条~~——已被 D4 拍板的「系列内建字体预设」取代，不再单独立项。
 - 明确不做【推断，与定位冲突】：用户自定义配色编辑器（Koodo/Readest 有，但对单用户本地应用是过度工程）、社区主题加载（引入任意 CSS 与安全边界冲突）、OLED 纯黑档。
 
@@ -336,7 +350,7 @@
 | D5 | 切换瞬间过渡 | 一期瞬切；**M3 增加 View Transition crossfade**（仅 `motion=full`） | **用户改选**（原推荐仅瞬切） |
 | D6 | 墨韵 accent 取色 | 靛青 `#205ea6` 家族 | 采纳推荐 |
 
-启动方式：~~仅锁定方案，暂不实施~~ → **2026-08-12 一期 M0–M2 已实施**。A5 已先行实机复现（结论见上），boot 脚本采用完整版。
+启动方式：~~仅锁定方案，暂不实施~~ → **2026-08-12 一期 M0–M2 已实施**。A5 已先行实机复现（结论见上），boot 脚本采用完整版。**同日二期 M3 亦已实施**（青瓷系列 + 切换渐变，备注见下）。
 
 **实施备注（2026-08-12）：**
 
@@ -345,7 +359,14 @@
 - 切换 UI 无障碍语义按 WAI-ARIA radio group 规范实现：容器 `role="radiogroup"`，色卡 tile `role="radio"` + `aria-checked` + roving tabindex + 方向键循环选择（5.5 原文的 `aria-pressed` 与 radiogroup 语义冲突，未采用）。
 - `[data-theme]` 全量块除 17 个语义 token 外统一携带 `color-scheme`；`--code-bg/--code-chrome` 只在 `:root` 定义一次（AppCss 测试锁定）。
 
----
+**实施备注（2026-08-12 二期 M3）：**
+
+- **青瓷定色依据**：light 底 `#edf4ea` 落在 Thorium contrast4 与 Kindle 浅绿之间且饱和度压到约 31%（无荧光感）；dark 底沿用方向值 `#141f1c`。accent 弃用「青绿」备选、定为茶褐 `#8a6138`/`#c69c66`（hue≈30–34°），确保固定批注绿 `#78dc8c`（hue≈132°）保持页面唯一饱和绿——由 accent 派生的选区色与热力图阶梯随之全部落在茶褐系，与批注四色零冲突（浏览器实测四色高亮 + 选区同屏可辨，明暗两态均确认）。
+- **青瓷对比度实测**（Chromium computed style + WCAG 相对亮度，与一期同法）：light `--ink` 13.10:1、`--ink-soft` 6.10:1、`--muted` 3.69:1；dark `--ink` 12.92:1、`--ink-soft` 7.37:1、`--muted` 4.07:1（目标 ≥7 / ≥4.5 / ≥3，全部达标）。accent 对 paper 为 4.87:1（light）/ 6.72:1（dark）。热力图 `color-mix` 阶梯实测单调过渡（light 由浅绿灰到茶褐、dark 由深橄榄到琥珀），第 1–2 档凭色相偏移可辨，与既有系列表现一致。
+- **切换渐变（D5）实现**：新增纯函数模块 `src/lib/themeTransition.ts` 的 `applyThemeMutation(mutate, motionLevel)`——仅当 `motionLevel === "full"` 且 `typeof document.startViewTransition === "function"` 时把落盘回调交给 `startViewTransition`（浏览器默认全屏 crossfade），否则同步执行、与 M3 前瞬切逐字节一致。View Transitions 类型未进 ES2020 lib，模块内局部 `Document` 交叉类型扩宽解决，tsconfig 不动。
+- **接线位置**：`App.tsx` 写 `documentElement.dataset.theme` 的 effect 改经 `applyThemeMutation`；effect 首次运行（theme-boot.ts 已写好 `data-theme`）与 motionLevel 变更触发的重跑因「DOM 已是目标值」直接瞬时落盘——冷启动首帧路径零过渡，只有真实主题切换才可能 crossfade。`theme-boot.ts` 本身不经过该模块。
+- **零 CSS 增量**：未添加任何 `::view-transition-*` 规则，crossfade 用 UA 默认时长（约 0.25 s）；`off/subtle` 根本不调 API，故 `data-motion="off"` 下无任何动画，AppCss 测试对 PDF/EPUB 层的禁动效断言不受影响（App.css 无改动）。
+- **行为实测**（浏览器 wrap 计数 `startViewTransition`）：full 档 4 次切换（含系列切换与明暗翻转）恰好各调用 1 次；subtle/off 档切换 0 次调用、主题即时落盘；删除 `Document.prototype.startViewTransition` 后 full 档切换仍即时落盘且控制台零报错。单元测试（`themeTransition.test.ts` + `App.test.tsx`）覆盖同三档与挂载不渐变契约。
 
 ## 8. 参考来源列表
 
