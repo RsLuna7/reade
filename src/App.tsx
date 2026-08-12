@@ -9,6 +9,7 @@ import {
   Suspense,
   type CSSProperties,
   type ChangeEvent,
+  type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
 import {
   AlertCircle,
@@ -34,7 +35,10 @@ import {
 import {
   getThemeColor,
   getThemeSeriesLabel,
+  SERIES_FONT_PRESET,
   THEME_META,
+  THEME_SERIES,
+  type ThemeSeriesId,
 } from "./lib/themes";
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
@@ -543,6 +547,128 @@ export function ReadingSettingsPanel({
   );
 }
 
+/**
+ * 「界面风格」popover: one swatch tile per theme series (5.5). Selecting a tile
+ * applies the series immediately, keeping the current light/dark mode; the
+ * series' typography preset lands with it (D4) and a hint line explains the
+ * serif preset. Reuses the settings-popover / reade-motion-panel pattern.
+ */
+export function ThemeStylePicker({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const theme = useReaderStore((state) => state.theme);
+  const setThemeSeries = useReaderStore((state) => state.setThemeSeries);
+  const [hint, setHint] = useState<string | null>(null);
+  const groupRef = useRef<HTMLDivElement>(null);
+  const activeSeries = THEME_META[theme].series;
+  const mode = THEME_META[theme].mode;
+
+  useEffect(() => {
+    if (!open) setHint(null);
+  }, [open]);
+
+  const pickSeries = (series: ThemeSeriesId) => {
+    if (series === activeSeries) return;
+    setThemeSeries(series);
+    setHint(
+      SERIES_FONT_PRESET[series] === "serif"
+        ? "已切换为书刊衬线，可在阅读设置中调整"
+        : null,
+    );
+  };
+
+  // Radio-group keyboard pattern: arrows cycle (with wrap) and select as they
+  // move — the instant-preview behavior of the tiles — Home/End jump.
+  const onGroupKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const { key } = event;
+    if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(key)) {
+      return;
+    }
+    event.preventDefault();
+    const focused = groupRef.current?.querySelector<HTMLButtonElement>(
+      ".theme-style-tile:focus",
+    );
+    const focusedIndex = THEME_SERIES.findIndex(
+      (series) => series.id === focused?.dataset.series,
+    );
+    const currentIndex =
+      focusedIndex >= 0
+        ? focusedIndex
+        : THEME_SERIES.findIndex((series) => series.id === activeSeries);
+    let nextIndex = currentIndex;
+    if (key === "Home") nextIndex = 0;
+    else if (key === "End") nextIndex = THEME_SERIES.length - 1;
+    else {
+      const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
+      nextIndex = (currentIndex + delta + THEME_SERIES.length) % THEME_SERIES.length;
+    }
+    const nextSeries = THEME_SERIES[nextIndex].id;
+    groupRef.current
+      ?.querySelector<HTMLButtonElement>(`.theme-style-tile[data-series="${nextSeries}"]`)
+      ?.focus();
+    pickSeries(nextSeries);
+  };
+
+  return (
+    <div
+      className="settings-popover reade-motion-panel theme-style-popover"
+      role="dialog"
+      aria-label="界面风格"
+      aria-hidden={!open}
+      data-open={open}
+      inert={!open}
+    >
+      <div className="settings-heading">
+        <span>界面风格</span>
+        <button className="icon-button" type="button" onClick={onClose} aria-label="关闭界面风格">
+          <X size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <div
+        ref={groupRef}
+        className="theme-style-options"
+        role="radiogroup"
+        aria-label="界面风格系列"
+        onKeyDown={onGroupKeyDown}
+      >
+        {THEME_SERIES.map((series) => {
+          const meta = THEME_META[`${series.id}-${mode}`];
+          const active = series.id === activeSeries;
+          return (
+            <button
+              key={series.id}
+              type="button"
+              role="radio"
+              aria-checked={active}
+              data-series={series.id}
+              tabIndex={active ? 0 : -1}
+              className={`theme-style-tile${active ? " active" : ""}`}
+              aria-label={`${series.label}系列${active ? "（当前使用）" : ""}`}
+              onClick={() => pickSeries(series.id)}
+            >
+              <span className="theme-style-swatch" aria-hidden="true">
+                <i style={{ background: meta.swatch.paper }} />
+                <i style={{ background: meta.swatch.chrome }} />
+                <i style={{ background: meta.swatch.accent }} />
+              </span>
+              <span className="theme-style-name">{series.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {hint && (
+        <p className="theme-style-hint" role="status">
+          {hint}
+        </p>
+      )}
+    </div>
+  );
+}
+
 function TocNavigation({
   items,
   activeId,
@@ -730,6 +856,7 @@ function App() {
   const setActiveView = useReaderStore((state) => state.setActiveView);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [stylePickerOpen, setStylePickerOpen] = useState(false);
   const [annotationPanelOpen, setAnnotationPanelOpen] = useState(false);
   const [compactTocOpen, setCompactTocOpen] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
@@ -811,6 +938,7 @@ function App() {
     [currentPath, documents],
   );
   const statsOpen = !IS_WEB_RUNTIME && activeView === "stats";
+  const themeMode = THEME_META[theme].mode;
 
   // 阅读时长追踪:仅桌面端;窗口聚焦可见且近期有交互才计时。
   useEffect(() => {
@@ -1823,6 +1951,7 @@ function App() {
             setAnnotationTool("view");
           }
           setSettingsOpen(false);
+          setStylePickerOpen(false);
           setAnnotationPanelOpen(false);
           setCompactTocOpen(false);
           setMobileLibraryOpen(false);
@@ -2185,12 +2314,17 @@ function App() {
             <span ref={statusDetailRef}>{statusDetail}</span>
           </div>
           <div className="theme-controls">
-            <span
+            <button
               className="theme-series-label"
-              title={`${THEME_META[theme].label}（后续可在此扩展更多主题系列）`}
+              type="button"
+              aria-haspopup="dialog"
+              aria-expanded={stylePickerOpen}
+              aria-label={`界面风格：${getThemeSeriesLabel(theme)}，点击选择界面风格`}
+              title={`界面风格：${THEME_META[theme].label}`}
+              onClick={() => setStylePickerOpen((open) => !open)}
             >
               {getThemeSeriesLabel(theme)}
-            </span>
+            </button>
             {!IS_WEB_RUNTIME && (
               <button
                 className={`icon-button${statsOpen ? " is-armed" : ""}`}
@@ -2209,16 +2343,17 @@ function App() {
             <button
               className="icon-button"
               type="button"
-              aria-label={theme === "light" ? "切换到深色主题" : "切换到浅色主题"}
-              title={theme === "light" ? "深色主题" : "浅色主题"}
+              aria-label={themeMode === "light" ? "切换到深色主题" : "切换到浅色主题"}
+              title={themeMode === "light" ? "深色主题" : "浅色主题"}
               onClick={toggleTheme}
             >
               <span className="theme-state-icon" aria-hidden="true">
-                <Moon className={theme === "light" ? "active" : undefined} size={16} />
-                <Sun className={theme === "dark" ? "active" : undefined} size={16} />
+                <Moon className={themeMode === "light" ? "active" : undefined} size={16} />
+                <Sun className={themeMode === "dark" ? "active" : undefined} size={16} />
               </span>
             </button>
           </div>
+          <ThemeStylePicker open={stylePickerOpen} onClose={() => setStylePickerOpen(false)} />
         </footer>
       </aside>
 

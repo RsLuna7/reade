@@ -14,6 +14,13 @@
 
   <body>
     <div id="root"></div>
+    <!-- Pre-paint theme boot: the reade:theme-boot plugin in vite.config.ts
+         injects <script type="module" src="/src/theme-boot.ts"> (dev) or the
+         equivalent hashed chunk (build) into <head>, ahead of this main
+         entry. It must stay a same-origin external module: the desktop CSP
+         script-src 'self' blocks inline scripts, and listing it as a second
+         module script here would make Vite merge it into the main bundle,
+         re-introducing the cold-start flash it exists to prevent. -->
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

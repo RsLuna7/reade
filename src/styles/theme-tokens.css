@@ -1,12 +1,17 @@
 /*
   Reade semantic color tokens.
+  Structure: `:root` carries the paper-light defaults (defends against a
+  missing data-theme attribute); every registered theme then has one full
+  `:root[data-theme="${series}-${mode}"]` block with all 17 theme tokens.
+  The 17 token names are the shared contract across every series — new series
+  must not invent new token names.
   Radix Colors scale mapping (guide for adding themes):
     1–2 app / paper backgrounds     → --paper, --theme-color
     2–3 raised / chrome surfaces    → --paper-raised, --chrome, --chrome-strong
     6–7 borders                     → --line, --line-strong
     9 / 3 / 11 accent solid/soft/ink → --accent, --accent-soft, --accent-ink
     11–12 text                      → --ink-soft/--muted, --ink
-  Non-theme surfaces (intentionally fixed):
+  Non-theme surfaces (intentionally fixed, defined once on :root only):
     --code-bg / --code-chrome stay dark in every UI theme.
   TweakCN/shadcn names map roughly as:
     --background→--paper, --card→--paper-raised, --border→--line,
@@ -38,7 +43,7 @@
 
 /*
   Reading statistics heatmap ladder (level 0–4). Values reference the theme
-  tokens above, so they follow light/dark automatically.
+  tokens above, so they follow every series and mode automatically.
 */
 :root {
   --stats-scale-0: var(--chrome-strong);
@@ -48,15 +53,34 @@
   --stats-scale-4: var(--accent);
 }
 
-:root[data-theme="light"] {
+/* ---------- 纸感 paper: warm reading surfaces, terracotta accent ---------- */
+
+:root[data-theme="paper-light"] {
   color-scheme: light;
+  --theme-color: #f5f1e8;
+  --paper: #fffefa;
+  --paper-raised: #ffffff;
+  --chrome: #f3efe6;
+  --chrome-strong: #ebe5d8;
+  --ink: #202729;
+  --ink-soft: #596264;
+  --muted: #8b9290;
+  --line: rgba(55, 62, 61, 0.12);
+  --line-strong: rgba(55, 62, 61, 0.2);
+  --accent: #af4c38;
+  --accent-soft: #f3e2dc;
+  --accent-ink: #873727;
+  --teal: #47676b;
+  --teal-soft: #e2ebea;
+  --selection: rgba(175, 76, 56, 0.2);
+  --shadow: 0 18px 55px rgba(51, 43, 31, 0.11);
 }
 
 /*
   Dark preset: warm olive reading surface (Radix olive/sand ladder),
   coral accent with clearer bg → chrome → line → ink steps.
 */
-:root[data-theme="dark"] {
+:root[data-theme="paper-dark"] {
   color-scheme: dark;
   --theme-color: #1a1d1b;
   --paper: #1a1d1b;
@@ -75,6 +99,98 @@
   --teal-soft: #253536;
   --selection: rgba(224, 133, 108, 0.3);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
-  --code-bg: #202626;
-  --code-chrome: #1a1f1f;
+}
+
+/*
+  ---------- 墨韵 ink: warm paper-and-ink surfaces (Flexoki-derived),
+  indigo accent (D6). Deeper ink, warmer paper than 纸感. ----------
+*/
+
+:root[data-theme="ink-light"] {
+  color-scheme: light;
+  --theme-color: #f2f0e5;
+  --paper: #fffcf0;
+  --paper-raised: #fffdf6;
+  --chrome: #f2f0e5;
+  --chrome-strong: #e6e4d9;
+  --ink: #100f0f;
+  --ink-soft: #575653;
+  --muted: #878580;
+  --line: rgba(16, 15, 15, 0.13);
+  --line-strong: rgba(16, 15, 15, 0.22);
+  --accent: #205ea6;
+  --accent-soft: #e1eaf5;
+  --accent-ink: #1a4f8c;
+  --teal: #24837b;
+  --teal-soft: #def0ee;
+  --selection: rgba(32, 94, 166, 0.18);
+  --shadow: 0 18px 55px rgba(28, 27, 26, 0.12);
+}
+
+:root[data-theme="ink-dark"] {
+  color-scheme: dark;
+  --theme-color: #1c1b1a;
+  --paper: #1c1b1a;
+  --paper-raised: #282726;
+  --chrome: #161514;
+  --chrome-strong: #343331;
+  --ink: #cecdc3;
+  --ink-soft: #9f9d96;
+  --muted: #6f6e69;
+  --line: rgba(206, 205, 195, 0.1);
+  --line-strong: rgba(206, 205, 195, 0.18);
+  --accent: #4385be;
+  --accent-soft: #253340;
+  --accent-ink: #a9c8e4;
+  --teal: #3aa99f;
+  --teal-soft: #20302f;
+  --selection: rgba(67, 133, 190, 0.3);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+}
+
+/*
+  ---------- 清透 mist: cool minimal gray (Radix Slate + Blue ladder),
+  cool blue accent, lighter shadow — no warm shift anywhere. ----------
+*/
+
+:root[data-theme="mist-light"] {
+  color-scheme: light;
+  --theme-color: #f0f1f3;
+  --paper: #fcfcfd;
+  --paper-raised: #ffffff;
+  --chrome: #f1f2f4;
+  --chrome-strong: #e7e9ec;
+  --ink: #1c2024;
+  --ink-soft: #5c6570;
+  --muted: #8b939e;
+  --line: rgba(28, 32, 36, 0.1);
+  --line-strong: rgba(28, 32, 36, 0.18);
+  --accent: #3b6fd4;
+  --accent-soft: #e3ebfa;
+  --accent-ink: #2b57ab;
+  --teal: #4d7a82;
+  --teal-soft: #e2edee;
+  --selection: rgba(59, 111, 212, 0.16);
+  --shadow: 0 14px 40px rgba(23, 28, 36, 0.08);
+}
+
+:root[data-theme="mist-dark"] {
+  color-scheme: dark;
+  --theme-color: #16181b;
+  --paper: #16181b;
+  --paper-raised: #1d2024;
+  --chrome: #101214;
+  --chrome-strong: #26292e;
+  --ink: #e6e8ea;
+  --ink-soft: #aeb4bb;
+  --muted: #7b8288;
+  --line: rgba(230, 232, 234, 0.09);
+  --line-strong: rgba(230, 232, 234, 0.16);
+  --accent: #6ea2f5;
+  --accent-soft: #22314a;
+  --accent-ink: #a8c7fa;
+  --teal: #7fb0b8;
+  --teal-soft: #223336;
+  --selection: rgba(110, 162, 245, 0.28);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }

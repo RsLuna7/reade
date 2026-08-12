@@ -345,6 +345,8 @@ a:focus-visible {
 }
 
 .sidebar-footer {
+  /* Anchor for the upward-opening theme style popover. */
+  position: relative;
   display: flex;
   flex-shrink: 0;
   min-height: 61px;
@@ -362,9 +364,12 @@ a:focus-visible {
   gap: 4px;
 }
 
+/* Series label, now the「界面风格」popover trigger — always visible. */
 .theme-series-label {
-  display: none;
+  display: inline-flex;
   max-width: 4.5em;
+  height: 28px;
+  align-items: center;
   overflow: hidden;
   padding: 0 6px;
   border: 1px solid transparent;
@@ -377,15 +382,93 @@ a:focus-visible {
   text-overflow: ellipsis;
   text-transform: uppercase;
   white-space: nowrap;
-  cursor: default;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
 }
 
-@media (min-width: 920px) {
-  .theme-series-label {
-    display: inline-flex;
-    align-items: center;
-    height: 28px;
-  }
+.theme-series-label:hover,
+.theme-series-label[aria-expanded="true"] {
+  border-color: var(--line-strong);
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+/* 「界面风格」picker: reuses the settings-popover shell, opens upward from
+   the sidebar footer and stays inside the sidebar bounds. The compound
+   selector must outweigh .settings-popover's own top/right placement,
+   which is declared later in this file. */
+.settings-popover.theme-style-popover {
+  top: auto;
+  right: 10px;
+  bottom: calc(100% + 9px);
+  left: 10px;
+  width: auto;
+  padding: 14px;
+}
+
+.theme-style-options {
+  display: grid;
+  gap: 8px;
+}
+
+.theme-style-tile {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: var(--chrome);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.theme-style-tile:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.theme-style-tile.active,
+.theme-style-tile[aria-checked="true"] {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--paper-raised);
+}
+
+.theme-style-swatch {
+  display: inline-flex;
+  overflow: hidden;
+  width: 42px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.theme-style-swatch i {
+  display: block;
+  width: 14px;
+  height: 100%;
+}
+
+.theme-style-name {
+  font-weight: 600;
+}
+
+.theme-style-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
 }
 
 .sidebar-status {

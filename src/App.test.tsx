@@ -10,7 +10,11 @@ import {
   upsertAnnotation,
   type Annotation,
 } from "./lib/backend";
-import { DEFAULT_READING_SETTINGS, useReaderStore } from "./store/useReaderStore";
+import {
+  DEFAULT_READING_SETTINGS,
+  READER_PREFERENCES_STORAGE_KEY,
+  useReaderStore,
+} from "./store/useReaderStore";
 
 vi.mock("./lib/backend", async () => {
   const actual = await vi.importActual<typeof import("./lib/backend")>("./lib/backend");
@@ -88,7 +92,7 @@ beforeEach(() => {
     indexProgress: null,
     searchQuery: "",
     searchResults: [],
-    theme: "light",
+    theme: "paper-light",
     readingSettings: { ...DEFAULT_READING_SETTINGS },
     motionLevel: "subtle",
     expandedPaths: [],
@@ -134,6 +138,64 @@ describe("motion integration", () => {
     view.rerender(<MotionNotice id={2} message="已完成" motionLevel="subtle" onClose={() => undefined} />);
     expect(cancel).toHaveBeenCalledTimes(1);
     expect(animate).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("theme style picker (M1)", () => {
+  it("switches the series from the sidebar popover and persists the choice", async () => {
+    render(<App />);
+
+    // While closed the popover is aria-hidden + inert: no reachable tiles.
+    expect(screen.queryByRole("radio", { name: /墨韵系列/ })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: /界面风格/ }));
+    const inkTile = await screen.findByRole("radio", { name: /墨韵系列/ });
+    fireEvent.click(inkTile);
+
+    expect(useReaderStore.getState().theme).toBe("ink-light");
+    // D4: the ink series carries the serif preset and surfaces a hint line.
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+    expect(
+      screen.getByText("已切换为书刊衬线，可在阅读设置中调整"),
+    ).toBeInTheDocument();
+    expect(inkTile).toHaveAttribute("aria-checked", "true");
+
+    await waitFor(() => {
+      expect(document.documentElement.dataset.theme).toBe("ink-light");
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ theme: "ink-light" });
+
+    // Mode toggling stays orthogonal: the sun/moon button keeps the series.
+    fireEvent.click(screen.getByRole("button", { name: "切换到深色主题" }));
+    expect(useReaderStore.getState().theme).toBe("ink-dark");
+  });
+
+  it("cycles and selects series with arrow keys inside the radiogroup (M2)", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: /界面风格/ }));
+    const group = await screen.findByRole("radiogroup", { name: "界面风格系列" });
+
+    screen.getByRole("radio", { name: /纸感系列/ }).focus();
+    fireEvent.keyDown(group, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("ink-light");
+    fireEvent.keyDown(group, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("mist-light");
+    // Cycling wraps from the last tile back to the first.
+    fireEvent.keyDown(group, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("paper-light");
+    fireEvent.keyDown(group, { key: "ArrowUp" });
+    expect(useReaderStore.getState().theme).toBe("mist-light");
+    fireEvent.keyDown(group, { key: "Home" });
+    expect(useReaderStore.getState().theme).toBe("paper-light");
+    fireEvent.keyDown(group, { key: "End" });
+    expect(useReaderStore.getState().theme).toBe("mist-light");
+
+    // Roving tabindex follows the selection.
+    expect(screen.getByRole("radio", { name: /清透系列/ })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: /纸感系列/ })).toHaveAttribute("tabindex", "-1");
   });
 });
 

@@ -18,15 +18,20 @@ import {
 } from "../lib/backend";
 import type { ReaderMotionLevel } from "../lib/motion";
 import {
+  LEGACY_THEME_ID_MAP,
+  SERIES_FONT_PRESET,
+  THEME_META,
   type ReaderTheme,
+  type ThemeSeriesId,
   isReaderTheme,
   normalizeReaderTheme,
+  setSeries,
   toggleThemeMode,
 } from "../lib/themes";
 import { buildDocumentTree, reconcileExpandedPaths } from "../lib/tree";
 
 export type { ReaderMotionLevel } from "../lib/motion";
-export type { ReaderTheme } from "../lib/themes";
+export type { ReaderTheme, ThemeSeriesId } from "../lib/themes";
 export { THEME_IDS, THEME_META, THEME_SERIES, normalizeReaderTheme } from "../lib/themes";
 
 export type ReaderFontFamily = "system" | "sans" | "serif";
@@ -52,7 +57,7 @@ export const DEFAULT_READING_SETTINGS: ReadingSettings = {
 };
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
-export const READER_PREFERENCES_VERSION = 3;
+export const READER_PREFERENCES_VERSION = 4;
 
 export type AnnotationToolPreference = "view" | "highlight" | "underline";
 export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
@@ -121,9 +126,11 @@ export function normalizeReadingSettings(
 
 function preferredTheme(): ReaderTheme {
   if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return "light";
+    return "paper-light";
   }
-  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches
+    ? "paper-dark"
+    : "paper-light";
 }
 
 export function getSystemMotionLevel(): ReaderMotionLevel {
@@ -171,8 +178,14 @@ export function migrateReaderPreferences(
   if (!persistedState || typeof persistedState !== "object") return {};
 
   const state = persistedState as PersistedReaderPreferences;
+  // v3 → v4: single-word theme ids became `${series}-${mode}` (D2 one-time map).
+  const rawTheme: unknown = state.theme;
+  const theme =
+    typeof rawTheme === "string" && rawTheme in LEGACY_THEME_ID_MAP
+      ? LEGACY_THEME_ID_MAP[rawTheme]
+      : rawTheme;
   return {
-    ...(isReaderTheme(state.theme) ? { theme: state.theme } : {}),
+    ...(isReaderTheme(theme) ? { theme } : {}),
     ...(state.readingSettings && typeof state.readingSettings === "object"
       ? { readingSettings: state.readingSettings }
       : {}),
@@ -235,6 +248,7 @@ interface ReaderState {
   runSearch: (query?: string) => Promise<void>;
   toggleTheme: () => void;
   setTheme: (theme: ReaderTheme) => void;
+  setThemeSeries: (series: ThemeSeriesId) => void;
   updateReadingSettings: (settings: Partial<ReadingSettings>) => void;
   setMotionLevel: (level: ReaderMotionLevel) => void;
   setAnnotationTool: (tool: AnnotationToolPreference) => void;
@@ -460,6 +474,23 @@ export const useReaderStore = create<ReaderState>()(
 
         setTheme: (theme) => {
           set({ theme: normalizeReaderTheme(theme, get().theme) });
+        },
+
+        setThemeSeries: (series) => {
+          set((state) => {
+            // Re-picking the current series must not clobber a manual
+            // fontFamily override — only a real series switch applies presets.
+            if (THEME_META[state.theme].series === series) return {};
+            return {
+              theme: setSeries(state.theme, series),
+              // D4: the new series' typography preset lands with the switch;
+              // manual overrides afterwards stick until the next series switch.
+              readingSettings: normalizeReadingSettings(
+                { fontFamily: SERIES_FONT_PRESET[series] },
+                state.readingSettings,
+              ),
+            };
+          });
         },
 
         updateReadingSettings: (settings) => {

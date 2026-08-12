@@ -64,7 +64,7 @@ import {
 } from "../lib/readingStats";
 import { chartMotionProps, useCountUp, useEntranceFlag } from "../lib/statsMotion";
 import { runMotion, type ReaderMotionLevel } from "../lib/motion";
-import { useReaderStore } from "../store/useReaderStore";
+import { THEME_META, useReaderStore } from "../store/useReaderStore";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEATMAP_DAYS = 365;
@@ -903,7 +903,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
             <div className="stats-heatmap-scroll">
               <ActivityCalendar
                 data={heatmapData}
-                colorScheme={theme === "dark" ? "dark" : "light"}
+                colorScheme={THEME_META[theme].mode}
                 theme={{ light: HEATMAP_SCALE, dark: HEATMAP_SCALE }}
                 blockSize={11}
                 blockMargin={3}

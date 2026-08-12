@@ -48,7 +48,7 @@ describe("reading settings", () => {
     backendMocks.readDocument.mockReset().mockImplementation(async (relativePath) => ({ kind: "markdown", relativePath, markdown: "# Test" }));
     backendMocks.retryDocumentIndex.mockReset().mockResolvedValue(undefined);
     useReaderStore.setState({
-      theme: "light",
+      theme: "paper-light",
       readingSettings: DEFAULT_READING_SETTINGS,
       motionLevel: "subtle",
       annotationTool: "view",
@@ -106,7 +106,7 @@ describe("reading settings", () => {
 
     expect(stored.version).toBe(READER_PREFERENCES_VERSION);
     expect(stored.state).toMatchObject({
-      theme: "dark",
+      theme: "paper-dark",
       readingSettings: { contentWidth: 960 },
       motionLevel: "full",
       highlightColor: "green",
@@ -124,10 +124,55 @@ describe("reading settings", () => {
   });
 
   it("sets an explicit theme id and ignores unknown values", () => {
-    useReaderStore.getState().setTheme("dark");
-    expect(useReaderStore.getState().theme).toBe("dark");
-    useReaderStore.getState().setTheme("sepia" as "light");
-    expect(useReaderStore.getState().theme).toBe("dark");
+    useReaderStore.getState().setTheme("paper-dark");
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    useReaderStore.getState().setTheme("sepia" as "paper-light");
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    // Legacy single-word ids are only accepted through migration, not setTheme.
+    useReaderStore.getState().setTheme("light" as "paper-light");
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+  });
+
+  it("keeps the reading settings intact when re-picking the current series", () => {
+    useReaderStore.getState().updateReadingSettings({ fontFamily: "sans" });
+    useReaderStore.getState().setThemeSeries("paper");
+    expect(useReaderStore.getState().theme).toBe("paper-light");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("sans");
+  });
+
+  it("applies the series typography preset on series switch only (D4)", () => {
+    useReaderStore.getState().setThemeSeries("ink");
+    expect(useReaderStore.getState().theme).toBe("ink-light");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+
+    // Flipping light/dark never touches the preset.
+    useReaderStore.getState().toggleTheme();
+    expect(useReaderStore.getState().theme).toBe("ink-dark");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+
+    // A manual override sticks across mode toggles…
+    useReaderStore.getState().updateReadingSettings({ fontFamily: "system" });
+    useReaderStore.getState().toggleTheme();
+    expect(useReaderStore.getState().theme).toBe("ink-light");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("system");
+
+    // …until the next series switch applies that series' preset, keeping mode.
+    useReaderStore.getState().setThemeSeries("paper");
+    expect(useReaderStore.getState().theme).toBe("paper-light");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("system");
+    useReaderStore.getState().setThemeSeries("ink");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+  });
+
+  it("persists the switched series and preset like any other preference", () => {
+    useReaderStore.getState().setThemeSeries("ink");
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({
+      theme: "ink-light",
+      readingSettings: { fontFamily: "serif" },
+    });
   });
 
   it("applies background index status without replacing the open PDF", () => {
@@ -168,7 +213,7 @@ describe("reading settings", () => {
         1,
       ),
     ).toEqual({
-      theme: "dark",
+      theme: "paper-dark",
       readingSettings: { ...DEFAULT_READING_SETTINGS, fontSize: 20 },
       expandedPaths: ["正文"],
     });
@@ -190,11 +235,51 @@ describe("reading settings", () => {
     await useReaderStore.persist.rehydrate();
 
     expect(useReaderStore.getState()).toMatchObject({
-      theme: "dark",
+      theme: "paper-dark",
       readingSettings: { ...DEFAULT_READING_SETTINGS, fontSize: 22 },
       motionLevel: "subtle",
       expandedPaths: ["旧目录"],
     });
+  });
+
+  it("migrates persisted v3 single-word theme ids to the series-mode ids (v4)", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 3,
+        state: {
+          theme: "dark",
+          readingSettings: { ...DEFAULT_READING_SETTINGS, fontSize: 18 },
+        },
+      }),
+    );
+
+    await useReaderStore.persist.rehydrate();
+
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    expect(useReaderStore.getState().readingSettings.fontSize).toBe(18);
+
+    // The upgraded id is written back under the current schema version.
+    useReaderStore.getState().updateReadingSettings({ fontSize: 19 });
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown>; version: number };
+    expect(stored.version).toBe(READER_PREFERENCES_VERSION);
+    expect(stored.state).toMatchObject({ theme: "paper-dark" });
+  });
+
+  it("drops an unknown persisted theme id instead of inventing one", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 3,
+        state: { theme: "sepia" },
+      }),
+    );
+
+    await useReaderStore.persist.rehydrate();
+
+    expect(useReaderStore.getState().theme).toBe("paper-light");
   });
 
   it("rehydrates legacy data containing annotationTool as view while restoring colors", async () => {

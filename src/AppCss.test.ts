@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { THEME_IDS, THEME_META } from "./lib/themes";
 
 const css = readFileSync(new URL("./App.css", import.meta.url), "utf8");
 const themeTokens = readFileSync(
@@ -86,14 +87,39 @@ describe("application CSS isolation", () => {
     expect(forcedSizeSelectors.join("\n")).not.toMatch(/\.pdf-text-layer\b|\.textLayer\b/);
   });
 
-  it("keeps semantic color tokens in theme-tokens.css for light and dark", () => {
+  it("keeps semantic color tokens in theme-tokens.css for every registered theme", () => {
+    // 17 tokens vary per theme; --code-bg/--code-chrome stay dark everywhere
+    // (D3) and live once on :root, never inside a theme block.
+    const perThemeTokens = REQUIRED_TOKENS.filter(
+      (token) => token !== "--code-bg" && token !== "--code-chrome",
+    );
+
+    // :root carries the paper-light defaults plus the fixed code chrome.
     expect(themeTokens).toContain(":root {");
-    expect(themeTokens).toContain(':root[data-theme="dark"]');
     for (const token of REQUIRED_TOKENS) {
       expect(themeTokens).toContain(`${token}:`);
     }
-    expect(themeTokens).toMatch(/:root\[data-theme="dark"\][\s\S]*--paper:\s*#1a1d1b/);
-    expect(themeTokens).toMatch(/:root\[data-theme="dark"\][\s\S]*--theme-color:\s*#1a1d1b/);
+
+    for (const id of THEME_IDS) {
+      const block = themeTokens.match(
+        new RegExp(`:root\\[data-theme="${id}"\\]\\s*\\{([^}]*)\\}`),
+      )?.[1];
+      expect(block, `missing :root[data-theme="${id}"] block`).toBeTruthy();
+      for (const token of perThemeTokens) {
+        expect(block, `theme ${id} is missing ${token}`).toContain(`${token}:`);
+      }
+      // Registry ↔ CSS consistency: meta theme-color, mode and the picker
+      // swatch colors must match the tokens the theme actually renders with.
+      expect(block).toContain(`--theme-color: ${THEME_META[id].themeColor}`);
+      expect(block).toContain(`color-scheme: ${THEME_META[id].mode}`);
+      expect(block).toContain(`--paper: ${THEME_META[id].swatch.paper}`);
+      expect(block).toContain(`--chrome: ${THEME_META[id].swatch.chrome}`);
+      expect(block).toContain(`--accent: ${THEME_META[id].swatch.accent}`);
+      expect(block).not.toContain("--code-bg");
+      expect(block).not.toContain("--code-chrome");
+    }
+
+    expect(themeTokens).toMatch(/:root\[data-theme="paper-dark"\][\s\S]*--paper:\s*#1a1d1b/);
   });
 
   it("does not redefine semantic color tokens inside App.css", () => {
