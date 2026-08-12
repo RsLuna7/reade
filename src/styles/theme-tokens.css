@@ -1,0 +1,80 @@
+/*
+  Reade semantic color tokens.
+  Radix Colors scale mapping (guide for adding themes):
+    1–2 app / paper backgrounds     → --paper, --theme-color
+    2–3 raised / chrome surfaces    → --paper-raised, --chrome, --chrome-strong
+    6–7 borders                     → --line, --line-strong
+    9 / 3 / 11 accent solid/soft/ink → --accent, --accent-soft, --accent-ink
+    11–12 text                      → --ink-soft/--muted, --ink
+  Non-theme surfaces (intentionally fixed):
+    --code-bg / --code-chrome stay dark in every UI theme.
+  TweakCN/shadcn names map roughly as:
+    --background→--paper, --card→--paper-raised, --border→--line,
+    --foreground→--ink, --primary→--accent.
+*/
+
+:root {
+  --theme-color: #f5f1e8;
+  --paper: #fffefa;
+  --paper-raised: #ffffff;
+  --chrome: #f3efe6;
+  --chrome-strong: #ebe5d8;
+  --ink: #202729;
+  --ink-soft: #596264;
+  --muted: #8b9290;
+  --line: rgba(55, 62, 61, 0.12);
+  --line-strong: rgba(55, 62, 61, 0.2);
+  --accent: #af4c38;
+  --accent-soft: #f3e2dc;
+  --accent-ink: #873727;
+  --teal: #47676b;
+  --teal-soft: #e2ebea;
+  --selection: rgba(175, 76, 56, 0.2);
+  --shadow: 0 18px 55px rgba(51, 43, 31, 0.11);
+  /* Always-dark code chrome (PDF pages also stay white — not theme-driven). */
+  --code-bg: #202626;
+  --code-chrome: #1a1f1f;
+}
+
+/*
+  Reading statistics heatmap ladder (level 0–4). Values reference the theme
+  tokens above, so they follow light/dark automatically.
+*/
+:root {
+  --stats-scale-0: var(--chrome-strong);
+  --stats-scale-1: color-mix(in srgb, var(--accent) 24%, var(--paper));
+  --stats-scale-2: color-mix(in srgb, var(--accent) 46%, var(--paper));
+  --stats-scale-3: color-mix(in srgb, var(--accent) 70%, var(--paper));
+  --stats-scale-4: var(--accent);
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+/*
+  Dark preset: warm olive reading surface (Radix olive/sand ladder),
+  coral accent with clearer bg → chrome → line → ink steps.
+*/
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --theme-color: #1a1d1b;
+  --paper: #1a1d1b;
+  --paper-raised: #232724;
+  --chrome: #141716;
+  --chrome-strong: #2a2f2c;
+  --ink: #ebe8e0;
+  --ink-soft: #b4b7b0;
+  --muted: #7f8580;
+  --line: rgba(235, 232, 220, 0.1);
+  --line-strong: rgba(235, 232, 220, 0.18);
+  --accent: #e0856c;
+  --accent-soft: #3f2d29;
+  --accent-ink: #f3b5a1;
+  --teal: #91b4b2;
+  --teal-soft: #253536;
+  --selection: rgba(224, 133, 108, 0.3);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+  --code-bg: #202626;
+  --code-chrome: #1a1f1f;
+}
