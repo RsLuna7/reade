@@ -1,6 +1,12 @@
+import { readFileSync } from "node:fs";
 import { fileURLToPath, URL } from "node:url";
 import { defineConfig, type Plugin } from "vite";
 import react from "@vitejs/plugin-react";
+
+// App version for the annotation export "generator" field (reade/<version>).
+const packageVersion: string = JSON.parse(
+  readFileSync(fileURLToPath(new URL("./package.json", import.meta.url)), "utf8"),
+).version;
 
 // @ts-expect-error process is a nodejs global
 const host = process.env.TAURI_DEV_HOST;
@@ -79,6 +85,7 @@ export default defineConfig(async ({ mode }) => ({
   base: mode === "web" ? "./" : undefined,
   define: {
     __READE_RUNTIME__: JSON.stringify(mode === "web" ? "web" : "desktop"),
+    __READE_VERSION__: JSON.stringify(packageVersion),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

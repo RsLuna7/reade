@@ -19,10 +19,17 @@ function sameIdList(a: string[], b: string[]): boolean {
   return true;
 }
 
+export interface MarkdownPaintResult {
+  broken: string[];
+  /** Ids anchored through a non-exact step (normalized/fuzzy weak hint). */
+  approximate: string[];
+}
+
 export function paintMarkdownAnnotations(
   markdownRoot: HTMLElement,
   annotations: Annotation[],
-): string[] {
+  options?: { fuzzy?: boolean },
+): MarkdownPaintResult {
   clearAnnotationMarks(markdownRoot);
   // One walk for the whole paint: quote search, heading hints and range
   // construction all reuse this index instead of re-walking per annotation.
@@ -50,11 +57,14 @@ export function paintMarkdownAnnotations(
       quote: annotation.locator.quote,
       prefix: annotation.locator.prefix,
       suffix: annotation.locator.suffix,
-      // The stored heading disambiguates quotes repeated across sections.
-      hintStart: headingOffset(annotation.locator.headingId),
+      // The persisted position hint resolves directly (quote-verified);
+      // older annotations without it fall back to the stored heading, which
+      // disambiguates quotes repeated across sections.
+      hintStart: annotation.locator.start ?? headingOffset(annotation.locator.headingId),
     });
   }
-  const broken = paintTextQuoteMarks(markdownRoot, marks, index);
+  const painted = paintTextQuoteMarks(markdownRoot, marks, index, { fuzzy: options?.fuzzy });
+  const broken = [...painted.broken];
   for (const annotation of annotations) {
     if (annotation.kind === "bookmark" && annotation.locator.kind === "bookmark") {
       const headingId =
@@ -66,7 +76,10 @@ export function paintMarkdownAnnotations(
       }
     }
   }
-  return Array.from(new Set(broken));
+  return {
+    broken: Array.from(new Set(broken)),
+    approximate: Array.from(painted.approximate.keys()),
+  };
 }
 
 interface AnnotatedMarkdownProps extends Pick<
@@ -74,24 +87,36 @@ interface AnnotatedMarkdownProps extends Pick<
   "content" | "resolveImageSrc" | "onNavigate"
 > {
   annotations: Annotation[];
+  /** Enables the fuzzy last-resort anchoring step (global preference). */
+  fuzzyAnchoring?: boolean;
   onBrokenIdsChange?: (ids: string[]) => void;
+  onApproximateIdsChange?: (ids: string[]) => void;
 }
 
 export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
   content,
   annotations,
+  fuzzyAnchoring = false,
   resolveImageSrc,
   onNavigate,
   onBrokenIdsChange,
+  onApproximateIdsChange,
 }: AnnotatedMarkdownProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const lastBrokenRef = useRef<string[]>([]);
-  const lastPaintRef = useRef<{ annotations: Annotation[]; content: string; text: string } | null>(null);
+  const lastApproximateRef = useRef<string[]>([]);
+  const lastPaintRef = useRef<{
+    annotations: Annotation[];
+    content: string;
+    text: string;
+    fuzzy: boolean;
+  } | null>(null);
 
   // Intentionally no dependency array: repainting on every render is what
   // catches async Shiki/Mermaid DOM swaps. The skip below only avoids the
-  // paint cost when annotations, source content and flattened DOM text are
-  // all unchanged (marks themselves never alter the flattened text).
+  // paint cost when annotations, source content, the fuzzy switch and the
+  // flattened DOM text are all unchanged (marks never alter the flattened
+  // text).
   useLayoutEffect(() => {
     const markdownRoot = hostRef.current?.querySelector<HTMLElement>(".markdown-body");
     if (!markdownRoot) return;
@@ -100,15 +125,25 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
       last &&
       last.annotations === annotations &&
       last.content === content &&
+      last.fuzzy === fuzzyAnchoring &&
       collectElementText(markdownRoot) === last.text
     ) {
       return;
     }
-    const broken = paintMarkdownAnnotations(markdownRoot, annotations);
-    lastPaintRef.current = { annotations, content, text: collectElementText(markdownRoot) };
-    if (!sameIdList(lastBrokenRef.current, broken)) {
-      lastBrokenRef.current = broken;
-      onBrokenIdsChange?.(broken);
+    const painted = paintMarkdownAnnotations(markdownRoot, annotations, { fuzzy: fuzzyAnchoring });
+    lastPaintRef.current = {
+      annotations,
+      content,
+      text: collectElementText(markdownRoot),
+      fuzzy: fuzzyAnchoring,
+    };
+    if (!sameIdList(lastBrokenRef.current, painted.broken)) {
+      lastBrokenRef.current = painted.broken;
+      onBrokenIdsChange?.(painted.broken);
+    }
+    if (!sameIdList(lastApproximateRef.current, painted.approximate)) {
+      lastApproximateRef.current = painted.approximate;
+      onApproximateIdsChange?.(painted.approximate);
     }
   });
 

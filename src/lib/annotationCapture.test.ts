@@ -60,43 +60,60 @@ describe("quote-first pdf highlight replay", () => {
 
   it("re-anchors rects from the quote against the live text layer", () => {
     const { textLayer } = buildPdfPage();
-    const rects = resolvePdfHighlightRects({
+    const resolved = resolvePdfHighlightRects({
       textLayer,
       pageRect: rect(0, 0, 800, 1000),
       locator: { quote: "quick brown fox", prefix: "The ", suffix: " jumps", rects: storedRects },
       rectsForRange: () => [rect(80, 100, 160, 20)],
     });
-    expect(rects).toEqual([{ x: 0.1, y: 0.1, w: 0.2, h: 0.02 }]);
+    expect(resolved.rects).toEqual([{ x: 0.1, y: 0.1, w: 0.2, h: 0.02 }]);
+    expect(resolved.method).toBe("exact");
   });
 
   it("falls back to stored rects when the quote no longer matches", () => {
     const { textLayer } = buildPdfPage();
-    const rects = resolvePdfHighlightRects({
+    const resolved = resolvePdfHighlightRects({
       textLayer,
       pageRect: rect(0, 0, 800, 1000),
       locator: { quote: "missing text", prefix: "", suffix: "", rects: storedRects },
       rectsForRange: () => [rect(80, 100, 160, 20)],
     });
-    expect(rects).toEqual(storedRects);
+    expect(resolved.rects).toEqual(storedRects);
+    expect(resolved.method).toBeNull();
   });
 
   it("falls back to stored rects while the text layer is not rendered yet", () => {
-    const rects = resolvePdfHighlightRects({
+    const resolved = resolvePdfHighlightRects({
       textLayer: null,
       pageRect: rect(0, 0, 800, 1000),
       locator: { quote: "quick brown fox", prefix: "", suffix: "", rects: storedRects },
     });
-    expect(rects).toEqual(storedRects);
+    expect(resolved.rects).toEqual(storedRects);
+    expect(resolved.method).toBeNull();
   });
 
   it("falls back when the re-anchored range measures no visible rects", () => {
     const { textLayer } = buildPdfPage();
-    const rects = resolvePdfHighlightRects({
+    const resolved = resolvePdfHighlightRects({
       textLayer,
       pageRect: rect(0, 0, 800, 1000),
       locator: { quote: "quick brown fox", prefix: "The ", suffix: " jumps", rects: storedRects },
       rectsForRange: () => [],
     });
-    expect(rects).toEqual(storedRects);
+    expect(resolved.rects).toEqual(storedRects);
+    expect(resolved.method).toBeNull();
+  });
+
+  it("reports a whitespace-normalized re-anchor so callers can badge it", () => {
+    const { textLayer } = buildPdfPage();
+    // The stored quote has collapsed whitespace relative to the live layer.
+    const resolved = resolvePdfHighlightRects({
+      textLayer,
+      pageRect: rect(0, 0, 800, 1000),
+      locator: { quote: "fox  jumps", prefix: "brown ", suffix: " over", rects: storedRects },
+      rectsForRange: () => [rect(80, 100, 160, 20)],
+    });
+    expect(resolved.rects).toEqual([{ x: 0.1, y: 0.1, w: 0.2, h: 0.02 }]);
+    expect(resolved.method).toBe("normalized");
   });
 });

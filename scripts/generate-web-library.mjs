@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, readdir, rename, rm, stat, writeFile } from "node:fs/promises";
 import { basename, dirname, extname, isAbsolute, parse, relative, resolve, sep } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -100,6 +101,29 @@ function generatedAtValue(value) {
   return date.toISOString();
 }
 
+/**
+ * Normalized-text content fingerprint for Markdown: SHA-256 over the raw
+ * bytes after stripping one leading UTF-8 BOM and converting CRLF to LF
+ * (lone `\r` bytes are kept). Must stay byte-for-byte identical to
+ * `normalized_text_fingerprint` in `src-tauri/src/user_store.rs`; the reader
+ * uses these manifest fingerprints to detect moved documents and offer to
+ * migrate their annotations.
+ */
+export function normalizedTextFingerprint(bytes) {
+  let content = bytes;
+  if (content.length >= 3 && content[0] === 0xef && content[1] === 0xbb && content[2] === 0xbf) {
+    content = content.subarray(3);
+  }
+  const normalized = Buffer.allocUnsafe(content.length);
+  let length = 0;
+  for (let index = 0; index < content.length; index += 1) {
+    if (content[index] === 0x0d && content[index + 1] === 0x0a) continue;
+    normalized[length] = content[index];
+    length += 1;
+  }
+  return `ntxt:${createHash("sha256").update(normalized.subarray(0, length)).digest("hex")}`;
+}
+
 async function collectFiles(sourceDirectory) {
   const files = [];
 
@@ -174,6 +198,7 @@ export async function generateWebLibrary(options = {}) {
         format: extension === ".mdx" ? "mdx" : "markdown",
         indexStatus: "ready",
         indexError: null,
+        contentHash: normalizedTextFingerprint(bytes),
       };
       documents.push(document);
       searchDocuments.push({

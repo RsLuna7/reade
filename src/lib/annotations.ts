@@ -1,3 +1,4 @@
+import approxSearch from "approx-string-match";
 import type {
   Annotation,
   AnnotationColor,
@@ -105,6 +106,165 @@ export function findTextQuote(
       if (beatsBest) best = { start: index, end, strict };
     }
     searchFrom = index + 1;
+  }
+  return best ? { start: best.start, end: best.end } : null;
+}
+
+/** How a resolved anchor was found; carried for future UI badges. */
+export type TextQuoteResolutionMethod = "hint" | "exact" | "normalized" | "fuzzy";
+
+export interface ResolvedTextQuote extends TextQuoteMatch {
+  method: TextQuoteResolutionMethod;
+}
+
+export interface ResolveTextQuoteOptions extends FindTextQuoteOptions {
+  /**
+   * Retry with all whitespace stripped when the exact match fails (PDF/EPUB
+   * text layers differ mostly in whitespace); matched offsets are mapped back
+   * to the original text.
+   */
+  normalizeWhitespace?: boolean;
+  /**
+   * Last-resort approximate matching (Hypothesis parameters:
+   * `maxErrors = min(256, quote.length / 2)`, candidates ranked by
+   * quote:prefix:suffix:position = 50:20:20:2). Off by default; enabling it
+   * is an explicit caller decision because a fuzzy hit may land on the wrong
+   * passage.
+   */
+  fuzzy?: boolean;
+}
+
+/**
+ * Resolution chain for a serialized text quote (research report §5.4):
+ * 1. position hint: jump to `hintStart` and verify the quote byte-for-byte;
+ * 2. exact quote search (current behaviour, hint disambiguates repeats);
+ * 3. whitespace-normalized retry (opt-in, for PDF/EPUB);
+ * 4. fuzzy match (opt-in, default off);
+ * 5. null → broken.
+ * The returned `method` records which step matched.
+ */
+export function resolveTextQuote(
+  fullText: string,
+  quote: string,
+  prefix: string,
+  suffix: string,
+  options?: ResolveTextQuoteOptions,
+): ResolvedTextQuote | null {
+  if (!quote) return null;
+  const hintStart = options?.hintStart;
+  const hasHint = typeof hintStart === "number" && Number.isFinite(hintStart);
+  if (hasHint && hintStart >= 0 && fullText.startsWith(quote, hintStart)) {
+    return { start: hintStart, end: hintStart + quote.length, method: "hint" };
+  }
+  const exact = findTextQuote(fullText, quote, prefix, suffix, hasHint ? { hintStart } : undefined);
+  if (exact) return { ...exact, method: "exact" };
+  if (options?.normalizeWhitespace) {
+    const normalized = findWhitespaceNormalizedQuote(fullText, quote, prefix, suffix, hasHint ? hintStart : undefined);
+    if (normalized) return { ...normalized, method: "normalized" };
+  }
+  if (options?.fuzzy) {
+    const fuzzy = findFuzzyQuote(fullText, quote, prefix, suffix, hasHint ? hintStart : undefined);
+    if (fuzzy) return { ...fuzzy, method: "fuzzy" };
+  }
+  return null;
+}
+
+interface StrippedText {
+  text: string;
+  /** offsets[i] = index of stripped character i in the original string. */
+  offsets: number[];
+}
+
+function stripWhitespace(value: string): StrippedText {
+  let text = "";
+  const offsets: number[] = [];
+  for (let index = 0; index < value.length; index += 1) {
+    const character = value[index];
+    if (/\s/.test(character)) continue;
+    text += character;
+    offsets.push(index);
+  }
+  return { text, offsets };
+}
+
+/** Number of non-whitespace characters before `offset` in the original text. */
+function strippedOffsetFor(stripped: StrippedText, offset: number): number {
+  let low = 0;
+  let high = stripped.offsets.length;
+  while (low < high) {
+    const mid = (low + high) >> 1;
+    if (stripped.offsets[mid] < offset) low = mid + 1;
+    else high = mid;
+  }
+  return low;
+}
+
+function findWhitespaceNormalizedQuote(
+  fullText: string,
+  quote: string,
+  prefix: string,
+  suffix: string,
+  hintStart?: number,
+): TextQuoteMatch | null {
+  const haystack = stripWhitespace(fullText);
+  const needle = stripWhitespace(quote).text;
+  if (!needle || !haystack.text) return null;
+  const match = findTextQuote(
+    haystack.text,
+    needle,
+    stripWhitespace(prefix).text,
+    stripWhitespace(suffix).text,
+    hintStart === undefined ? undefined : { hintStart: strippedOffsetFor(haystack, hintStart) },
+  );
+  if (!match) return null;
+  const start = haystack.offsets[match.start];
+  const end = haystack.offsets[match.end - 1] + 1;
+  return { start, end };
+}
+
+/** Similarity of `actual` context against the stored `expected` context, 0..1. */
+function contextScore(actual: string, expected: string): number {
+  if (!expected) return 1;
+  if (!actual) return 0;
+  if (actual === expected) return 1;
+  const maxErrors = Math.max(1, Math.ceil(expected.length / 2));
+  const matches = approxSearch(actual, expected, maxErrors);
+  if (!matches.length) return 0;
+  const errors = Math.min(...matches.map((match) => match.errors));
+  return 1 - errors / (maxErrors + 1);
+}
+
+function findFuzzyQuote(
+  fullText: string,
+  quote: string,
+  prefix: string,
+  suffix: string,
+  hintStart?: number,
+): TextQuoteMatch | null {
+  const maxErrors = Math.min(256, Math.floor(quote.length / 2));
+  if (maxErrors <= 0 || !fullText) return null;
+  const candidates = approxSearch(fullText, quote, maxErrors);
+  let best: { start: number; end: number; score: number } | null = null;
+  for (const candidate of candidates) {
+    if (candidate.end <= candidate.start) continue;
+    const quoteScore = 1 - candidate.errors / (maxErrors + 1);
+    const prefixScore = contextScore(
+      fullText.slice(Math.max(0, candidate.start - prefix.length), candidate.start),
+      prefix,
+    );
+    const suffixScore = contextScore(
+      fullText.slice(candidate.end, candidate.end + suffix.length),
+      suffix,
+    );
+    const positionScore =
+      hintStart === undefined
+        ? 0
+        : 1 - Math.min(1, Math.abs(candidate.start - hintStart) / Math.max(1, fullText.length));
+    // Hypothesis weights; the score only ranks candidates, there is no floor.
+    const score = 50 * quoteScore + 20 * prefixScore + 20 * suffixScore + 2 * positionScore;
+    if (!best || score > best.score || (score === best.score && candidate.start < best.start)) {
+      best = { start: candidate.start, end: candidate.end, score };
+    }
   }
   return best ? { start: best.start, end: best.end } : null;
 }
@@ -326,6 +486,36 @@ export interface TextQuoteMarkInput {
   hintStart?: number;
 }
 
+export interface PaintTextQuoteOptions {
+  /** Retry failed quotes with whitespace stripped (PDF/EPUB text layers). */
+  normalizeWhitespace?: boolean;
+  /** Enable the fuzzy last-resort step of the resolution chain (default off). */
+  fuzzy?: boolean;
+}
+
+export interface PaintTextQuoteResult {
+  /** Ids that could not be anchored. */
+  broken: string[];
+  /**
+   * Ids that anchored through a non-exact step (§5.6 weak hint), with the
+   * resolution method that matched. Recomputed on every paint, never stored.
+   */
+  approximate: Map<string, TextQuoteResolutionMethod>;
+}
+
+/** Hover/badge copy for non-exact anchor hits (list dot + in-document mark). */
+export const APPROXIMATE_ANCHOR_LABEL = "非精确定位";
+
+function markMarkAsApproximate(elements: HTMLElement[]): void {
+  for (const element of elements) {
+    element.classList.add("annotation-mark--approx");
+    element.title = APPROXIMATE_ANCHOR_LABEL;
+  }
+  // The trailing segment carries the visible dot so a mark split across
+  // several text nodes shows a single badge.
+  elements[elements.length - 1]?.classList.add("annotation-mark--approx-tail");
+}
+
 /**
  * Paints a batch of text-quote marks against `root` with a single tree walk.
  *
@@ -335,37 +525,53 @@ export interface TextQuoteMarkInput {
  * at smaller offsets stay valid. Overlapping marks that still hit a stale
  * entry fall back to a fresh walk via `rangeFromOffsets`.
  *
+ * Anchoring runs the `resolveTextQuote` chain: a mark's `hintStart` is first
+ * tried as a verified direct hit, then disambiguates the exact search, then
+ * the optional normalized/fuzzy retries apply.
+ *
  * Callers must clear previous marks *before* building `index` (unwrapping
  * normalizes text nodes) and must not reuse the index after this returns.
- * Returns the ids that could not be anchored.
+ * Returns the ids that could not be anchored plus the non-exact hits.
  */
 export function paintTextQuoteMarks(
   root: HTMLElement,
   marks: TextQuoteMarkInput[],
   index?: TextIndex,
-): string[] {
+  options?: PaintTextQuoteOptions,
+): PaintTextQuoteResult {
   const broken: string[] = [];
-  if (!marks.length) return broken;
+  const approximate = new Map<string, TextQuoteResolutionMethod>();
+  if (!marks.length) return { broken, approximate };
   const textIndex = index ?? buildTextIndex(root);
-  const resolved: Array<{ mark: TextQuoteMarkInput; start: number; end: number }> = [];
+  const resolved: Array<{
+    mark: TextQuoteMarkInput;
+    start: number;
+    end: number;
+    method: TextQuoteResolutionMethod;
+  }> = [];
   for (const mark of marks) {
-    const match = findTextQuote(
-      textIndex.text,
-      mark.quote,
-      mark.prefix,
-      mark.suffix,
-      mark.hintStart === undefined ? undefined : { hintStart: mark.hintStart },
-    );
-    if (match) resolved.push({ mark, start: match.start, end: match.end });
+    const match = resolveTextQuote(textIndex.text, mark.quote, mark.prefix, mark.suffix, {
+      hintStart: mark.hintStart,
+      normalizeWhitespace: options?.normalizeWhitespace,
+      fuzzy: options?.fuzzy,
+    });
+    if (match) resolved.push({ mark, start: match.start, end: match.end, method: match.method });
     else broken.push(mark.id);
   }
   resolved.sort((a, b) => b.start - a.start || b.end - a.end);
-  for (const { mark, start, end } of resolved) {
+  for (const { mark, start, end, method } of resolved) {
     const range = rangeFromTextIndex(textIndex, start, end) ?? rangeFromOffsets(root, start, end);
-    if (range) wrapRangeWithMark(range, mark.id, mark.color, mark.markKind);
-    else broken.push(mark.id);
+    if (!range) {
+      broken.push(mark.id);
+      continue;
+    }
+    const elements = wrapRangeWithMark(range, mark.id, mark.color, mark.markKind);
+    if (method === "normalized" || method === "fuzzy") {
+      approximate.set(mark.id, method);
+      markMarkAsApproximate(elements);
+    }
   }
-  return broken;
+  return { broken, approximate };
 }
 
 export function nearestHeadingId(node: Node | null, root: HTMLElement): string | null {
@@ -430,6 +636,76 @@ export function annotationKindLabel(kind: AnnotationKind): string {
   return "高亮";
 }
 
+/** Sort key for annotations whose locator cannot be interpreted; sorts last. */
+export const BROKEN_SORT_INDEX = "Z|99999|00000000";
+const SORT_INDEX_PATTERN = /^[EMPZ]\|\d{5}\|\d{8}$/;
+const MAX_SORT_PAGE_SLOT = 99_999;
+const MAX_SORT_OFFSET_SLOT = 99_999_999;
+
+export function isValidSortIndex(value: string): boolean {
+  return SORT_INDEX_PATTERN.test(value);
+}
+
+function sortSlot(value: number, width: number, max: number): string {
+  const rounded = Number.isFinite(value) && value > 0 ? Math.round(value) : 0;
+  return String(Math.min(rounded, max)).padStart(width, "0");
+}
+
+function sortSlots(prefix: "M" | "P" | "E", high: number, low: number): string {
+  return `${prefix}|${sortSlot(high, 5, MAX_SORT_PAGE_SLOT)}|${sortSlot(low, 8, MAX_SORT_OFFSET_SLOT)}`;
+}
+
+export interface SortIndexContext {
+  /**
+   * Spine-order index of an EPUB chapter id. Without it the chapter slot is
+   * encoded as 0 (chapter ids are content paths and carry no reliable order).
+   */
+  epubChapterIndex?: (chapterId: string) => number | null | undefined;
+}
+
+/**
+ * Precomputed position sort key (report §5.2): fixed-width numeric slots so
+ * plain string order equals document order. Must stay in sync with
+ * `derive_sort_index` in `src-tauri/src/user_store.rs`:
+ * - markdown: `M|00000|<start hint, 0 when absent>`
+ * - pdf: `P|<page>|<first rect y × 10⁴>`; bookmarks use ratio × 10⁸
+ * - epub: `E|<chapter slot>|<chapter-level start hint, else
+ *   blockIndex × 10⁴ + min(startOffset, 9999)>`
+ * Unknown shapes fall back to `BROKEN_SORT_INDEX`.
+ */
+export function deriveAnnotationSortIndex(
+  locator: AnnotationLocator,
+  context?: SortIndexContext,
+): string {
+  if (!locator || typeof locator !== "object") return BROKEN_SORT_INDEX;
+  if (locator.kind === "markdown") {
+    return sortSlots("M", 0, locator.start ?? 0);
+  }
+  if (locator.kind === "pdf") {
+    const firstRect = locator.rects?.[0];
+    const offset = firstRect ? firstRect.y * 10_000 : 0;
+    return sortSlots("P", locator.page, offset);
+  }
+  if (locator.kind === "epub") {
+    const chapter = context?.epubChapterIndex?.(locator.chapterId) ?? 0;
+    const offset =
+      locator.start ?? locator.blockIndex * 10_000 + Math.min(locator.startOffset, 9_999);
+    return sortSlots("E", chapter, offset);
+  }
+  if (locator.kind === "bookmark") {
+    const target = locator.target;
+    if (target.format === "pdf") {
+      return sortSlots("P", target.page, target.offsetRatio * 100_000_000);
+    }
+    if (target.format === "epub") {
+      const chapter = context?.epubChapterIndex?.(target.chapterId) ?? 0;
+      return sortSlots("E", chapter, target.scrollRatio * 100_000_000);
+    }
+    return sortSlots("M", 0, target.scrollRatio * 100_000_000);
+  }
+  return BROKEN_SORT_INDEX;
+}
+
 export function createMarkAnnotation(input: {
   relativePath: string;
   kind: AnnotationMarkKind;
@@ -449,8 +725,10 @@ export function createMarkAnnotation(input: {
     selectedText: clampSelectionText(input.selectedText),
     title: input.title ?? clampSelectionText(input.selectedText).slice(0, 80),
     locator: input.locator,
+    sortIndex: deriveAnnotationSortIndex(input.locator),
     createdAt: now,
     updatedAt: now,
+    deletedAt: null,
   };
 }
 
@@ -472,6 +750,7 @@ export function createBookmarkAnnotation(input: {
   note?: string | null;
 }): Annotation {
   const now = Date.now();
+  const locator: AnnotationLocator = { kind: "bookmark", target: input.target };
   return {
     id: createAnnotationId(),
     relativePath: input.relativePath,
@@ -480,9 +759,11 @@ export function createBookmarkAnnotation(input: {
     note: input.note ?? null,
     selectedText: null,
     title: input.title ?? null,
-    locator: { kind: "bookmark", target: input.target },
+    locator,
+    sortIndex: deriveAnnotationSortIndex(locator),
     createdAt: now,
     updatedAt: now,
+    deletedAt: null,
   };
 }
 
@@ -508,14 +789,25 @@ export function normalizePdfRects(
   return rects.slice(0, 64);
 }
 
+export interface ResolvedPdfHighlight {
+  rects: AnnotationRect[];
+  /**
+   * How the quote anchored in the live text layer; null when the stored
+   * rects served as the fallback (text layer missing or quote unmatched).
+   */
+  method: TextQuoteResolutionMethod | null;
+}
+
 /**
  * Resolves the display rects for a PDF original-view mark annotation.
  *
  * Text-quote anchoring comes first: the stored quote is located in the live
  * text layer and measured with `getClientRects`, so annotations created
  * against a differently laid-out text layer (or an older, buggy one) self-heal
- * to the current glyph positions. The stored rects only serve as a fallback
- * while the text layer is not rendered yet or the quote no longer matches.
+ * to the current glyph positions. A whitespace-normalized retry absorbs the
+ * layout differences between pdf.js text-layer versions. The stored rects
+ * only serve as a fallback while the text layer is not rendered yet or the
+ * quote no longer matches.
  */
 export function resolvePdfHighlightRects(input: {
   textLayer: HTMLElement | null;
@@ -524,27 +816,43 @@ export function resolvePdfHighlightRects(input: {
   rectsForRange?: (range: Range) => ArrayLike<RectLike>;
   /** Prebuilt text-layer index so per-page highlight loops walk the DOM once. */
   index?: TextIndex;
-}): AnnotationRect[] {
+  /** Enable the fuzzy last-resort step of the resolution chain (default off). */
+  fuzzy?: boolean;
+}): ResolvedPdfHighlight {
   const { textLayer, pageRect, locator } = input;
   if (textLayer && pageRect) {
     const index = input.index ?? buildTextIndex(textLayer);
-    const match = findTextQuote(index.text, locator.quote, locator.prefix, locator.suffix);
+    const match = resolveTextQuote(index.text, locator.quote, locator.prefix, locator.suffix, {
+      normalizeWhitespace: true,
+      fuzzy: input.fuzzy,
+    });
     if (match) {
       const range = rangeFromTextIndex(index, match.start, match.end);
       if (range) {
         const measure = input.rectsForRange ?? ((target: Range) => target.getClientRects());
         const rects = normalizePdfRects(measure(range), pageRect);
-        if (rects.length) return rects;
+        if (rects.length) return { rects, method: match.method };
       }
     }
   }
-  return locator.rects;
+  return { rects: locator.rects, method: null };
 }
 
 export function resolveAnnotationAnchor(
   root: HTMLElement,
   locator: Extract<AnnotationLocator, { kind: "markdown" } | { kind: "pdf" } | { kind: "epub" }>,
-): { start: number; end: number } | null {
+  options?: { fuzzy?: boolean },
+): ResolvedTextQuote | null {
   const fullText = collectElementText(root);
-  return findTextQuote(fullText, locator.quote, locator.prefix, locator.suffix);
+  const hintStart =
+    locator.kind === "markdown"
+      ? locator.start
+      : locator.kind === "epub"
+        ? (locator.start ?? locator.startOffset)
+        : undefined;
+  return resolveTextQuote(fullText, locator.quote, locator.prefix, locator.suffix, {
+    hintStart,
+    normalizeWhitespace: locator.kind !== "markdown",
+    fuzzy: options?.fuzzy,
+  });
 }

@@ -6,11 +6,16 @@ import type {
   Annotation,
   AssetPayload,
   DocumentContent,
+  DocumentFingerprintEntry,
   DocumentIndexEvent,
   DocumentInfo,
   IndexProgress,
+  MovedDocumentCandidate,
   PdfReadingMode,
   ReadingSession,
+  ReviewQueueItem,
+  ReviewState,
+  ReviewSummary,
   SearchResult,
 } from "./backend";
 
@@ -49,6 +54,58 @@ export function deleteAnnotation(id: string): Promise<void> {
 }
 export function clearDocumentAnnotations(relativePath: string): Promise<void> {
   return invoke("clear_document_annotations", { relativePath });
+}
+export function detectMovedDocuments(): Promise<MovedDocumentCandidate[]> {
+  return invoke("detect_moved_documents");
+}
+export function rebindDocumentAnnotations(oldPath: string, newPath: string): Promise<number> {
+  return invoke("rebind_document_annotations", { oldPath, newPath });
+}
+export function listReviewQueue(nowMs: number, limit: number): Promise<ReviewQueueItem[]> {
+  return invoke("list_review_queue", { nowMs, limit });
+}
+// The Rust parameter is `box_level` (`box` is a Rust keyword), so the wire
+// key is `boxLevel` while the serialized ReviewState field stays `box`.
+export function recordReviewOutcome(annotationId: string, state: ReviewState): Promise<void> {
+  return invoke("record_review_outcome", {
+    annotationId,
+    boxLevel: state.box,
+    dueAt: state.dueAt,
+    lastReviewedAt: state.lastReviewedAt,
+    suspended: state.suspended,
+  });
+}
+export function reviewSummary(dayStartMs: number, nowMs: number): Promise<ReviewSummary> {
+  return invoke("review_summary", { dayStartMs, nowMs });
+}
+export function searchAnnotations(query: string, limit: number): Promise<Annotation[]> {
+  return invoke("search_annotations", { query, limit });
+}
+export function listAnnotationsForTransfer(): Promise<Annotation[]> {
+  return invoke("list_annotations_for_transfer");
+}
+export function listDocumentFingerprints(): Promise<DocumentFingerprintEntry[]> {
+  return invoke("list_document_fingerprints");
+}
+export function importAnnotations(
+  annotations: Annotation[],
+  fingerprints: DocumentFingerprintEntry[],
+): Promise<number> {
+  return invoke("import_annotations", { annotations, fingerprints });
+}
+// The Rust side opens the save dialog itself and only ever writes to the
+// path picked there; null means the user cancelled.
+export function exportAnnotationsFile(
+  defaultName: string,
+  contents: string,
+): Promise<string | null> {
+  return invoke("export_annotations_file", { defaultName, contents });
+}
+export function pickAnnotationsImportFile(): Promise<{
+  fileName: string;
+  contents: string;
+} | null> {
+  return invoke("pick_annotations_import_file");
 }
 export function recordReadingSession(session: ReadingSession): Promise<void> {
   return invoke("record_reading_session", { session });

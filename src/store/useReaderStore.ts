@@ -61,8 +61,19 @@ export const READER_PREFERENCES_VERSION = 4;
 
 export type AnnotationToolPreference = "view" | "highlight" | "underline";
 export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
-/** Workspace view: reading surface or the reading statistics dashboard. */
-export type ReaderView = "reader" | "stats";
+/**
+ * Workspace view: home dashboard, reading surface, reading statistics,
+ * daily annotation review or the full-screen annotation hub.
+ */
+export type ReaderView = "home" | "reader" | "stats" | "review" | "annotations";
+
+const READER_VIEWS = new Set<ReaderView>([
+  "home",
+  "reader",
+  "stats",
+  "review",
+  "annotations",
+]);
 
 const ANNOTATION_TOOLS = new Set<AnnotationToolPreference>(["view", "highlight", "underline"]);
 const ANNOTATION_COLORS = new Set<AnnotationColorPreference>(["yellow", "green", "blue", "pink"]);
@@ -88,6 +99,15 @@ export function normalizeAnnotationColor(
 const FONT_FAMILIES = new Set<ReaderFontFamily>(["system", "sans", "serif"]);
 const MOTION_LEVELS = new Set<ReaderMotionLevel>(["off", "subtle", "full"]);
 export const MAX_DAILY_GOAL_MINUTES = 24 * 60;
+
+/**
+ * Fuzzy annotation anchoring is opt-in (report Q2: a fuzzy hit has no score
+ * floor and may land on similar-but-different text), so anything that is not
+ * an explicit boolean collapses to the fallback.
+ */
+export function normalizeFuzzyAnnotationAnchoring(value: unknown, fallback = false): boolean {
+  return typeof value === "boolean" ? value : fallback;
+}
 
 function clamp(value: number, minimum: number, maximum: number): number {
   if (!Number.isFinite(value)) return minimum;
@@ -168,6 +188,7 @@ type PersistedReaderPreferences = Partial<
     | "highlightColor"
     | "underlineColor"
     | "dailyGoalMinutes"
+    | "fuzzyAnnotationAnchoring"
   >
 >;
 
@@ -206,6 +227,9 @@ export function migrateReaderPreferences(
     ...(typeof state.dailyGoalMinutes === "number"
       ? { dailyGoalMinutes: state.dailyGoalMinutes }
       : {}),
+    ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
+      ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
+      : {}),
   };
 }
 
@@ -229,6 +253,11 @@ interface ReaderState {
   annotationTool: AnnotationToolPreference;
   highlightColor: AnnotationColorPreference;
   underlineColor: AnnotationColorPreference;
+  /**
+   * Global switch for the fuzzy last-resort anchoring step (§5.6 D). Off by
+   * default: fuzzy may anchor a mark to similar but different text. Persisted.
+   */
+  fuzzyAnnotationAnchoring: boolean;
   expandedPaths: string[];
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
@@ -254,6 +283,7 @@ interface ReaderState {
   setAnnotationTool: (tool: AnnotationToolPreference) => void;
   setHighlightColor: (color: AnnotationColorPreference) => void;
   setUnderlineColor: (color: AnnotationColorPreference) => void;
+  setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
   resetReaderPreferences: () => void;
@@ -322,6 +352,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationTool: "view",
         highlightColor: "yellow",
         underlineColor: "blue",
+        fuzzyAnnotationAnchoring: false,
         expandedPaths: [],
         activeView: "reader",
         dailyGoalMinutes: 0,
@@ -517,8 +548,12 @@ export const useReaderStore = create<ReaderState>()(
           set({ underlineColor: normalizeAnnotationColor(color, "blue") });
         },
 
+        setFuzzyAnnotationAnchoring: (enabled) => {
+          set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
+        },
+
         setActiveView: (view) => {
-          set({ activeView: view === "stats" ? "stats" : "reader" });
+          set({ activeView: READER_VIEWS.has(view) ? view : "reader" });
         },
 
         setDailyGoalMinutes: (minutes) => {
@@ -534,6 +569,7 @@ export const useReaderStore = create<ReaderState>()(
             annotationTool: "view",
             highlightColor: "yellow",
             underlineColor: "blue",
+            fuzzyAnnotationAnchoring: false,
           });
         },
 
@@ -560,6 +596,7 @@ export const useReaderStore = create<ReaderState>()(
         highlightColor: state.highlightColor,
         underlineColor: state.underlineColor,
         dailyGoalMinutes: state.dailyGoalMinutes,
+        fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
       }),
       migrate: migrateReaderPreferences,
       merge: (persisted, current) => {
@@ -598,6 +635,10 @@ export const useReaderStore = create<ReaderState>()(
           dailyGoalMinutes: normalizeDailyGoalMinutes(
             preferences.dailyGoalMinutes,
             current.dailyGoalMinutes,
+          ),
+          fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(
+            preferences.fuzzyAnnotationAnchoring,
+            current.fuzzyAnnotationAnchoring,
           ),
         };
       },

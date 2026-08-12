@@ -3,7 +3,7 @@ import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Annotation, EpubDocument } from "../lib/backend";
-import { EpubReader, buildEpubToc } from "./EpubReader";
+import { EpubReader, buildEpubToc, epubChapterTocId } from "./EpubReader";
 
 class TestIntersectionObserver {
   observe() {}
@@ -88,6 +88,40 @@ describe("EpubReader", () => {
     ]);
   });
 
+  it("keeps epubChapterTocId in lockstep with the chapter-level ids of buildEpubToc", () => {
+    const document: EpubDocument = {
+      title: "Book",
+      assets: [],
+      notes: [],
+      chapters: [
+        {
+          id: "OEBPS/part-1/ch-01.xhtml",
+          title: "第一章",
+          level: 1,
+          blocks: [
+            {
+              kind: "heading",
+              level: 2,
+              anchor: "ch1-s1",
+              content: [{ kind: "text", text: "小节", bold: false, italic: false, strike: false, code: false }],
+            },
+          ],
+        },
+        { id: "OEBPS/part-1/ch-02.xhtml", title: "第二章", level: 2, blocks: [] },
+      ],
+    };
+
+    const toc = buildEpubToc(document);
+    expect(toc.map((item) => item.title)).toEqual(["第一章", "小节", "第二章"]);
+    // Round trip: the exported wrapper reproduces exactly the chapter-level
+    // TOC ids, so annotation heat can map locator.chapterId → TOC entry.
+    expect(toc[0].id).toBe(epubChapterTocId("OEBPS/part-1/ch-01.xhtml"));
+    expect(toc[2].id).toBe(epubChapterTocId("OEBPS/part-1/ch-02.xhtml"));
+    // Stable across calls, and never colliding with in-chapter anchor ids.
+    expect(epubChapterTocId("OEBPS/part-1/ch-01.xhtml")).toBe(epubChapterTocId("OEBPS/part-1/ch-01.xhtml"));
+    expect(toc[1].id).not.toBe(epubChapterTocId("ch1-s1"));
+  });
+
   it("jumps instantly and highlights only the React-rendered locator marker", async () => {
     const animatedElements: Element[] = [];
     const animationFrames: FrameRequestCallback[] = [];
@@ -169,6 +203,7 @@ describe("EpubReader", () => {
         prefix: "",
         suffix: " tail",
       },
+      sortIndex: "E|00000|00000011",
       createdAt: 1,
       updatedAt: 1,
     };

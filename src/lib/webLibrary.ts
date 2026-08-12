@@ -10,11 +10,21 @@ import type {
 export const DEFAULT_WEB_LIBRARY_BASE_URL = "./reade-web/";
 export const WEB_LIBRARY_SCHEMA_VERSION = 2 as const;
 
+/**
+ * Manifest document entry: `DocumentInfo` plus the optional content
+ * fingerprint the generator emits (`ntxt:` normalized-text SHA-256, same
+ * definition as the desktop backend). Older generated libraries lack the
+ * field; move detection then simply finds no candidates.
+ */
+export interface WebManifestDocument extends DocumentInfo {
+  contentHash?: string;
+}
+
 export interface WebLibraryManifest {
   schemaVersion: typeof WEB_LIBRARY_SCHEMA_VERSION;
   title: string;
   generatedAt: string;
-  documents: DocumentInfo[];
+  documents: WebManifestDocument[];
 }
 
 export interface WebSearchDocument {
@@ -109,7 +119,9 @@ function hasSafeRelativePath(value: unknown): value is string {
   }
 }
 
-function isDocumentInfo(value: unknown): value is DocumentInfo {
+const CONTENT_HASH_PATTERN = /^ntxt:[0-9a-f]{64}$/;
+
+function isDocumentInfo(value: unknown): value is WebManifestDocument {
   if (!isRecord(value)) return false;
   return (
     hasSafeRelativePath(value.relativePath) &&
@@ -121,7 +133,9 @@ function isDocumentInfo(value: unknown): value is DocumentInfo {
     Number.isFinite(value.modified) &&
     (value.format === "markdown" || value.format === "mdx") &&
     value.indexStatus === "ready" &&
-    value.indexError === null
+    value.indexError === null &&
+    (value.contentHash === undefined ||
+      (typeof value.contentHash === "string" && CONTENT_HASH_PATTERN.test(value.contentHash)))
   );
 }
 

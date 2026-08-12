@@ -27,6 +27,21 @@ export function captureReaderSelection(input: {
   if (!selection || selection.isCollapsed || selection.rangeCount === 0) return null;
   if (isSelectionInsideForbidden(selection, input.root)) return null;
   const range = selection.getRangeAt(0);
+  return captureRangeLocator({ ...input, range });
+}
+
+/**
+ * Serializes a DOM Range into the full locator set (quote/prefix/suffix plus
+ * per-format hints). Shared by live selection capture and the §5.6 relocate
+ * flow, which re-collects a locator from a programmatically resolved range.
+ */
+export function captureRangeLocator(input: {
+  root: HTMLElement;
+  kind: "markdown" | "pdf" | "epub";
+  range: Range;
+  pdfMode?: "original" | "reading";
+}): PendingSelection | null {
+  const { range } = input;
   const text = clampSelectionText(range.toString());
   if (!text) return null;
 
@@ -46,6 +61,10 @@ export function captureReaderSelection(input: {
         prefix: quote.prefix,
         suffix: quote.suffix,
         headingId: nearestHeadingId(range.startContainer, markdownRoot),
+        // Persisted position hint: the anchoring chain jumps here first and
+        // verifies against the quote.
+        start: offsets.start,
+        end: offsets.end,
       },
       rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
     };
@@ -70,6 +89,14 @@ export function captureReaderSelection(input: {
     const pageRect = page.getBoundingClientRect();
     const rects = view === "original" ? normalizePdfRects(range.getClientRects(), pageRect) : [];
     const rect = range.getBoundingClientRect();
+    // Page size in PDF points, published by PdfReader on the page element;
+    // snapshotting it keeps the normalized rects convertible offline.
+    const pageWidth = Number(page.dataset.pageWidth);
+    const pageHeight = Number(page.dataset.pageHeight);
+    const pageSize =
+      Number.isFinite(pageWidth) && pageWidth > 0 && Number.isFinite(pageHeight) && pageHeight > 0
+        ? { pageWidth, pageHeight }
+        : null;
     return {
       text,
       locator: {
@@ -80,6 +107,7 @@ export function captureReaderSelection(input: {
         prefix: quote.prefix,
         suffix: quote.suffix,
         rects,
+        ...(pageSize ?? {}),
       },
       rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
     };
@@ -97,6 +125,10 @@ export function captureReaderSelection(input: {
   if (!offsets) return null;
   const quote = serializeTextQuote(collectElementText(target), offsets.start, offsets.end);
   if (!quote) return null;
+  // Chapter-level offsets complement the block-scoped startOffset/endOffset:
+  // they stay meaningful when block indices shift and feed the chapter-order
+  // sort key.
+  const chapterOffsets = target === chapter ? offsets : rangeOffsetsWithinRoot(chapter, range);
   const rect = range.getBoundingClientRect();
   return {
     text,
@@ -109,6 +141,7 @@ export function captureReaderSelection(input: {
       quote: quote.quote,
       prefix: quote.prefix,
       suffix: quote.suffix,
+      ...(chapterOffsets ? { start: chapterOffsets.start, end: chapterOffsets.end } : {}),
     },
     rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
   };

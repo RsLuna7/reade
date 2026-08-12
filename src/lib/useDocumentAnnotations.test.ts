@@ -25,6 +25,7 @@ function makeAnnotation(id: string, overrides: Partial<Annotation> = {}): Annota
     selectedText: "quote",
     title: null,
     locator: { kind: "markdown", quote: "quote", prefix: "", suffix: "", headingId: null },
+    sortIndex: "M|00000|00000000",
     createdAt: 1,
     updatedAt: 1,
     ...overrides,

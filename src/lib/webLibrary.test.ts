@@ -113,6 +113,26 @@ describe("WebLibraryClient", () => {
     });
     await expect(malformed.loadManifest()).rejects.toBeInstanceOf(WebLibraryRequestError);
   });
+
+  it("accepts optional well-formed content fingerprints and rejects malformed ones", async () => {
+    const fingerprinted = {
+      ...manifest,
+      documents: [{ ...manifest.documents[0], contentHash: `ntxt:${"a".repeat(64)}` }],
+    };
+    const accepting = new WebLibraryClient({
+      fetcher: vi.fn(async () => response({ json: fingerprinted })),
+    });
+    await expect(accepting.loadManifest()).resolves.toEqual(fingerprinted);
+
+    for (const contentHash of ["md5:abc", `ntxt:${"g".repeat(64)}`, "ntxt:abc", 42]) {
+      const rejecting = new WebLibraryClient({
+        fetcher: vi.fn(async () => response({
+          json: { ...manifest, documents: [{ ...manifest.documents[0], contentHash }] },
+        })),
+      });
+      await expect(rejecting.loadManifest()).rejects.toBeInstanceOf(WebLibraryRequestError);
+    }
+  });
 });
 
 describe("searchWebDocuments", () => {

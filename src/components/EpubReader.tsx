@@ -17,7 +17,10 @@ interface EpubReaderProps {
   locator: SearchLocator | null;
   motionLevel: ReaderMotionLevel;
   annotations?: Annotation[];
+  /** Enables the fuzzy last-resort anchoring step (global preference). */
+  fuzzyAnchoring?: boolean;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
+  onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
   onActiveChange: (id: string | null) => void;
 }
@@ -52,13 +55,22 @@ function epubInlineText(items: EpubInline[]): string {
   }).join("").replace(/\s+/g, " ").trim();
 }
 
+/**
+ * Chapter-level TOC id for a chapter id — the public counterpart of the
+ * private domId hash, so annotation attribution (`buildTocHeat`) can map
+ * `locator.chapterId` to the chapter entry emitted by `buildEpubToc`.
+ */
+export function epubChapterTocId(chapterId: string): string {
+  return domId("epub-chapter", chapterId);
+}
+
 /** Builds a Markdown-like indented TOC from chapter nav levels and in-chapter headings. */
 export function buildEpubToc(document: EpubDocument): TocItem[] {
   const items: TocItem[] = [];
   for (const chapter of document.chapters) {
     const chapterLevel = clampTocLevel(chapter.level ?? 1);
     items.push({
-      id: domId("epub-chapter", chapter.id),
+      id: epubChapterTocId(chapter.id),
       title: chapter.title,
       level: chapterLevel,
     });
@@ -249,7 +261,9 @@ export function EpubReader({
   locator,
   motionLevel,
   annotations = [],
+  fuzzyAnchoring = false,
   onBrokenAnnotationsChange,
+  onApproximateAnnotationsChange,
   onTocChange,
   onActiveChange,
 }: EpubReaderProps) {
@@ -331,6 +345,7 @@ export function EpubReader({
     if (!root) return;
     clearAnnotationMarks(root);
     const broken: string[] = [];
+    const approximate: string[] = [];
     // Group marks by anchor element so each subtree is walked once per paint;
     // each group builds its index lazily, after earlier groups already wrapped.
     const groups = new Map<HTMLElement, TextQuoteMarkInput[]>();
@@ -361,7 +376,14 @@ export function EpubReader({
       });
     }
     for (const [target, marks] of groups) {
-      broken.push(...paintTextQuoteMarks(target, marks));
+      // EPUB text layers mostly diverge in whitespace; retry normalized
+      // before declaring a mark broken (fuzzy follows the global preference).
+      const painted = paintTextQuoteMarks(target, marks, undefined, {
+        normalizeWhitespace: true,
+        fuzzy: fuzzyAnchoring,
+      });
+      broken.push(...painted.broken);
+      approximate.push(...painted.approximate.keys());
     }
     for (const annotation of annotations) {
       if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
@@ -379,7 +401,8 @@ export function EpubReader({
       }
     }
     onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
-  }, [annotations, document, onBrokenAnnotationsChange]);
+    onApproximateAnnotationsChange?.(Array.from(new Set(approximate)));
+  }, [annotations, document, fuzzyAnchoring, onApproximateAnnotationsChange, onBrokenAnnotationsChange]);
 
   return <EpubMotionContext.Provider value={motionLevel}><div className="epub-reader" ref={rootRef}>
     {document.chapters.map((chapter) => <section className="epub-chapter" id={domId("epub-chapter", chapter.id)} data-chapter-id={chapter.id} key={chapter.id}>

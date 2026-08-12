@@ -54,6 +54,7 @@ describe("reading settings", () => {
       annotationTool: "view",
       highlightColor: "yellow",
       underlineColor: "blue",
+      fuzzyAnnotationAnchoring: false,
       expandedPaths: [],
       activeView: "reader",
       dailyGoalMinutes: 0,
@@ -162,6 +163,11 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().readingSettings.fontFamily).toBe("system");
     useReaderStore.getState().setThemeSeries("ink");
     expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+
+    // Celadon (M3) carries the system preset, replacing ink's serif.
+    useReaderStore.getState().setThemeSeries("celadon");
+    expect(useReaderStore.getState().theme).toBe("celadon-light");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("system");
   });
 
   it("persists the switched series and preset like any other preference", () => {
@@ -361,6 +367,51 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().error).toBe("clear failed");
   });
 
+  it("persists the fuzzy anchoring switch and defaults it off (§5.6 D)", async () => {
+    expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+
+    useReaderStore.getState().setFuzzyAnnotationAnchoring(true);
+    expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(true);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ fuzzyAnnotationAnchoring: true });
+
+    // An explicitly persisted opt-in survives rehydration on the next launch.
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { fuzzyAnnotationAnchoring: true },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(true);
+  });
+
+  it("collapses corrupt fuzzy anchoring values to the safe default", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { fuzzyAnnotationAnchoring: "yes" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+
+    // Older persisted payloads without the field also stay off.
+    expect(
+      migrateReaderPreferences({ theme: "paper-light" }, READER_PREFERENCES_VERSION),
+    ).not.toHaveProperty("fuzzyAnnotationAnchoring");
+  });
+
+  it("resets the fuzzy anchoring switch with the other reader preferences", () => {
+    useReaderStore.getState().setFuzzyAnnotationAnchoring(true);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+  });
+
   it("persists and clamps the daily reading goal", () => {
     useReaderStore.getState().setDailyGoalMinutes(45);
     const stored = JSON.parse(
@@ -380,6 +431,12 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
     useReaderStore.getState().setActiveView("stats");
     expect(useReaderStore.getState().activeView).toBe("stats");
+    useReaderStore.getState().setActiveView("home");
+    expect(useReaderStore.getState().activeView).toBe("home");
+    useReaderStore.getState().setActiveView("review");
+    expect(useReaderStore.getState().activeView).toBe("review");
+    useReaderStore.getState().setActiveView("annotations");
+    expect(useReaderStore.getState().activeView).toBe("annotations");
     useReaderStore.getState().setActiveView("dashboard" as "stats");
     expect(useReaderStore.getState().activeView).toBe("reader");
   });
@@ -389,6 +446,13 @@ describe("reading settings", () => {
     await useReaderStore.getState().selectDocument("paper.pdf");
     expect(useReaderStore.getState().activeView).toBe("reader");
     expect(useReaderStore.getState().currentPath).toBe("paper.pdf");
+  });
+
+  it("returns to the reading surface when a document is opened from home", async () => {
+    useReaderStore.getState().setActiveView("home");
+    await useReaderStore.getState().selectDocument("guide.md");
+    expect(useReaderStore.getState().activeView).toBe("reader");
+    expect(useReaderStore.getState().currentPath).toBe("guide.md");
   });
 
   it("clones repeated search locators so the reader can replay positioning", async () => {

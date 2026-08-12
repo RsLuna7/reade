@@ -4,6 +4,7 @@ import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, 
 import "pdfjs-dist/web/pdf_viewer.css";
 import { openExternalLink, readDocumentRange, readPdfReadingMode, type Annotation, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
 import {
+  APPROXIMATE_ANCHOR_LABEL,
   buildTextIndex,
   clearAnnotationMarks,
   isAnnotationMarkKind,
@@ -212,8 +213,11 @@ interface PdfReaderProps {
   locator: SearchLocator | null;
   motionLevel: ReaderMotionLevel;
   annotations?: Annotation[];
+  /** Enables the fuzzy last-resort anchoring step (global preference). */
+  fuzzyAnchoring?: boolean;
   readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
+  onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
   onActiveChange: (id: string | null) => void;
 }
@@ -240,6 +244,7 @@ interface PageProps {
   scale: number;
   initialRatio: number;
   highlights: Annotation[];
+  fuzzyAnchoring: boolean;
   onRatioChange: (page: number, ratio: number) => void;
   onJump: (page: number) => void;
 }
@@ -303,7 +308,7 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, onRatioChange, onJump }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, onRatioChange, onJump }: PageProps) {
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -367,6 +372,12 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, onRatio
         // Page-box width and render viewport share one source of truth so the
         // canvas bitmap is not stretched relative to the text layer (R2).
         pageHost.style.setProperty("--pdf-page-width", `${viewport.width}px`);
+        // Page size in PDF points (rotation-aware, scale 1) for annotation
+        // capture: stored locators snapshot it so normalized rects remain
+        // convertible to PDF user-space coordinates offline.
+        const baseViewport = page.getViewport({ scale: 1 });
+        pageHost.dataset.pageWidth = String(baseViewport.width);
+        pageHost.dataset.pageHeight = String(baseViewport.height);
       }
       applyTotalScaleFactor();
       const canvas = canvasRef.current;
@@ -463,15 +474,21 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, onRatio
       if (textLayer && !textIndex) textIndex = buildTextIndex(textLayer);
       // Quote-first: re-anchor against the live text layer so stored rects
       // from older layouts self-heal; stored rects remain the fallback.
-      const rects = resolvePdfHighlightRects({
+      const resolved = resolvePdfHighlightRects({
         textLayer,
         pageRect,
         locator: annotation.locator,
         index: textIndex ?? undefined,
+        fuzzy: fuzzyAnchoring,
       });
-      for (const rect of rects) {
+      const approximate = resolved.method === "normalized" || resolved.method === "fuzzy";
+      for (const rect of resolved.rects) {
         const mark = globalThis.document.createElement("span");
         mark.className = `pdf-user-highlight pdf-user-highlight--${markKind} pdf-user-highlight--${annotation.color ?? "yellow"}`;
+        if (approximate) {
+          mark.classList.add("pdf-user-highlight--approx");
+          mark.title = APPROXIMATE_ANCHOR_LABEL;
+        }
         mark.dataset.annotationId = annotation.id;
         mark.dataset.annotationKind = markKind;
         mark.style.left = `${rect.x * 100}%`;
@@ -481,7 +498,7 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, onRatio
         host.append(mark);
       }
     }
-  }, [highlights, pageNumber, renderNearby, textLayerRevision]);
+  }, [fuzzyAnchoring, highlights, pageNumber, renderNearby, textLayerRevision]);
 
   return <section
     className="pdf-page"
@@ -528,8 +545,10 @@ export function PdfReader({
   locator,
   motionLevel,
   annotations = [],
+  fuzzyAnchoring = false,
   readerRef,
   onBrokenAnnotationsChange,
+  onApproximateAnnotationsChange,
   onTocChange,
   onActiveChange,
 }: PdfReaderProps) {
@@ -720,6 +739,7 @@ export function PdfReader({
   }, [pageSelector]);
 
   const lastReadingBrokenRef = useRef<string[]>([]);
+  const lastReadingApproximateRef = useRef<string[]>([]);
 
   useLayoutEffect(() => {
     if (mode !== "reading") return;
@@ -727,6 +747,7 @@ export function PdfReader({
     if (!root) return;
     const pages = Array.from(root.querySelectorAll<HTMLElement>(".pdf-reading-page"));
     const broken: string[] = [];
+    const approximate: string[] = [];
     for (const page of pages) {
       const pageNumber = Number(page.dataset.pageNumber);
       clearAnnotationMarks(page);
@@ -746,7 +767,11 @@ export function PdfReader({
         });
       }
       // One page-level walk per paint instead of one per annotation.
-      if (marks.length) broken.push(...paintTextQuoteMarks(textRoot, marks));
+      if (marks.length) {
+        const painted = paintTextQuoteMarks(textRoot, marks, undefined, { fuzzy: fuzzyAnchoring });
+        broken.push(...painted.broken);
+        approximate.push(...painted.approximate.keys());
+      }
     }
     for (const annotation of annotations) {
       if (!isAnnotationMarkKind(annotation.kind)) continue;
@@ -762,6 +787,14 @@ export function PdfReader({
     ) {
       lastReadingBrokenRef.current = nextBroken;
       onBrokenAnnotationsChange?.(nextBroken);
+    }
+    const nextApproximate = Array.from(new Set(approximate));
+    if (
+      nextApproximate.length !== lastReadingApproximateRef.current.length ||
+      nextApproximate.some((id, index) => id !== lastReadingApproximateRef.current[index])
+    ) {
+      lastReadingApproximateRef.current = nextApproximate;
+      onApproximateAnnotationsChange?.(nextApproximate);
     }
   });
 
@@ -786,7 +819,12 @@ export function PdfReader({
       if (page < 1 || (pageCount > 0 && page > pageCount)) broken.push(annotation.id);
     }
     onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
-  }, [annotations, mode, onBrokenAnnotationsChange, session?.pdf.numPages]);
+    // Original-view pages render lazily, so a page-derived list badge would
+    // flicker; the per-page overlay carries the weak hint instead and the
+    // list-level set is cleared here. Reading mode re-reports on re-entry.
+    lastReadingApproximateRef.current = [];
+    onApproximateAnnotationsChange?.([]);
+  }, [annotations, mode, onApproximateAnnotationsChange, onBrokenAnnotationsChange, session?.pdf.numPages]);
 
   const switchMode = useCallback((nextMode: "original" | "reading") => {
     if (nextMode === mode) return;
@@ -950,6 +988,7 @@ export function PdfReader({
           pageNumber={page}
           scale={scale}
           initialRatio={pageRatiosRef.current.get(page) ?? 1.414}
+          fuzzyAnchoring={fuzzyAnchoring}
           highlights={annotations.filter(
             (annotation) =>
               isAnnotationMarkKind(annotation.kind) &&
