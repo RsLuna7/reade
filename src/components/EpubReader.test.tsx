@@ -2,8 +2,8 @@
 import "@testing-library/jest-dom/vitest";
 import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { EpubDocument } from "../lib/backend";
-import { EpubReader } from "./EpubReader";
+import type { Annotation, EpubDocument } from "../lib/backend";
+import { EpubReader, buildEpubToc } from "./EpubReader";
 
 class TestIntersectionObserver {
   observe() {}
@@ -30,6 +30,7 @@ describe("EpubReader", () => {
       chapters: [{
         id: "chapter.xhtml",
         title: "安全章节",
+        level: 1,
         blocks: [
           { kind: "paragraph", content: [{ kind: "text", text: "<script>window.pwned=true</script>", bold: false, italic: false, strike: false, code: false }] },
           { kind: "paragraph", content: [{ kind: "image", alt: "remote", source: { kind: "externalBlocked", value: "https://tracker.invalid/a.png" } }] },
@@ -50,10 +51,41 @@ describe("EpubReader", () => {
       title: "Book",
       assets: [],
       notes: [],
-      chapters: [{ id: "one", title: "第一章", blocks: [] }, { id: "two", title: "第二章", blocks: [] }],
+      chapters: [{ id: "one", title: "第一章", level: 1, blocks: [] }, { id: "two", title: "第二章", level: 1, blocks: [] }],
     };
     render(<EpubReader relativePath="book.epub" document={document} locator={{ kind: "epubChapter", chapterId: "two" }} motionLevel="subtle" onTocChange={onTocChange} onActiveChange={() => undefined} />);
     expect(onTocChange).toHaveBeenCalledWith(expect.arrayContaining([expect.objectContaining({ title: "第一章" }), expect.objectContaining({ title: "第二章" })]));
+  });
+
+  it("indents TOC entries from chapter levels and nested headings", () => {
+    const document: EpubDocument = {
+      title: "Book",
+      assets: [],
+      notes: [],
+      chapters: [
+        {
+          id: "vol.xhtml",
+          title: "第一卷",
+          level: 1,
+          blocks: [{ kind: "heading", level: 1, anchor: "vol.xhtml", content: [{ kind: "text", text: "第一卷", bold: false, italic: false, strike: false, code: false }] }],
+        },
+        {
+          id: "c1.xhtml",
+          title: "第一章",
+          level: 2,
+          blocks: [
+            { kind: "heading", level: 1, anchor: "c1.xhtml", content: [{ kind: "text", text: "第一章", bold: false, italic: false, strike: false, code: false }] },
+            { kind: "heading", level: 3, anchor: "c1.xhtml#section", content: [{ kind: "text", text: "小节", bold: false, italic: false, strike: false, code: false }] },
+          ],
+        },
+      ],
+    };
+
+    expect(buildEpubToc(document)).toEqual([
+      expect.objectContaining({ title: "第一卷", level: 1 }),
+      expect.objectContaining({ title: "第一章", level: 2 }),
+      expect.objectContaining({ title: "小节", level: 3 }),
+    ]);
   });
 
   it("jumps instantly and highlights only the React-rendered locator marker", async () => {
@@ -78,7 +110,7 @@ describe("EpubReader", () => {
       title: "Book",
       assets: [],
       notes: [],
-      chapters: [{ id: "one", title: "第一章", blocks: [] }, { id: "two", title: "第二章", blocks: [] }],
+      chapters: [{ id: "one", title: "第一章", level: 1, blocks: [] }, { id: "two", title: "第二章", level: 1, blocks: [] }],
     };
 
     const view = render(<div className="reading-scroll"><EpubReader relativePath="book.epub" document={document} locator={{ kind: "epubChapter", chapterId: "two" }} motionLevel="full" onTocChange={() => undefined} onActiveChange={() => undefined} /></div>);
@@ -98,5 +130,53 @@ describe("EpubReader", () => {
     expect(HTMLElement.prototype.scrollIntoView).not.toHaveBeenCalled();
     expect(animatedElements[0]).toBe(targetChapter?.querySelector(".reade-motion-locator-highlight"));
     expect(animatedElements[0]).not.toBe(targetChapter);
+  });
+
+  it("paints repeated quotes at the occurrence pointed to by startOffset", () => {
+    const document: EpubDocument = {
+      title: "Book",
+      assets: [],
+      notes: [],
+      chapters: [{
+        id: "c1",
+        title: "第一章",
+        level: 1,
+        blocks: [
+          {
+            kind: "paragraph",
+            content: [{ kind: "text", text: "A. 正确 tail A. 正确 tail", bold: false, italic: false, strike: false, code: false }],
+          },
+        ],
+      }],
+    };
+    // Both occurrences share the same context; startOffset points at the
+    // second one ("A. 正确" at offset 11).
+    const annotation: Annotation = {
+      id: "ann-epub-1",
+      relativePath: "book.epub",
+      kind: "highlight",
+      color: "yellow",
+      note: null,
+      selectedText: "A. 正确",
+      title: "A. 正确",
+      locator: {
+        kind: "epub",
+        chapterId: "c1",
+        blockIndex: 0,
+        startOffset: 11,
+        endOffset: 16,
+        quote: "A. 正确",
+        prefix: "",
+        suffix: " tail",
+      },
+      createdAt: 1,
+      updatedAt: 1,
+    };
+
+    const view = render(<EpubReader relativePath="book.epub" document={document} locator={null} motionLevel="subtle" annotations={[annotation]} onTocChange={() => undefined} onActiveChange={() => undefined} />);
+    const mark = view.container.querySelector('[data-annotation-id="ann-epub-1"]');
+    expect(mark).not.toBeNull();
+    expect(mark!.textContent).toBe("A. 正确");
+    expect((mark!.previousSibling as Text).data).toBe("A. 正确 tail ");
   });
 });

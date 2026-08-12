@@ -37,16 +37,26 @@ vi.mock("../lib/backend", () => ({
   readPdfReadingMode: vi.fn(),
 }));
 
+import { readPdfReadingMode } from "../lib/backend";
 import {
   PdfReader,
   PdfSessionLifecycle,
   calculatePdfRestoreScrollTop,
   capturePdfPagePosition,
+  computePdfTotalScaleFactor,
   disposePdfSession,
+  flattenPdfOutline,
   selectCurrentPdfPage,
+  type PdfReaderHandle,
 } from "./PdfReader";
 
 class TestIntersectionObserver {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+
+class TestResizeObserver {
   observe() {}
   unobserve() {}
   disconnect() {}
@@ -65,6 +75,7 @@ beforeEach(() => {
     return task;
   });
   vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
+  vi.stubGlobal("ResizeObserver", TestResizeObserver);
 });
 
 describe("PDF session lifecycle", () => {
@@ -145,6 +156,99 @@ describe("PDF session lifecycle", () => {
     view.rerender(<PdfReader {...common} modified={2} />);
     await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(2));
     expect(pdfMocks.tasks[0].destroy).toHaveBeenCalledOnce();
+  });
+});
+
+describe("PdfReaderHandle mode switching", () => {
+  it("switches modes through setMode and treats same-mode calls as no-ops", async () => {
+    vi.mocked(readPdfReadingMode).mockReset();
+    vi.mocked(readPdfReadingMode).mockResolvedValue({
+      relativePath: "A.pdf",
+      status: "ready",
+      pages: [{ page: 1, markdown: "hello", needsOcr: false, ocrReason: null }],
+      missingPages: [],
+      warning: null,
+    });
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = render(<PdfReader
+      relativePath="A.pdf"
+      size={100}
+      modified={1}
+      indexStatus="ready"
+      indexError={null}
+      locator={null}
+      motionLevel="subtle"
+      readerRef={readerRef}
+      onTocChange={vi.fn()}
+      onActiveChange={vi.fn()}
+    />);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+    expect(readerRef.current!.getMode()).toBe("original");
+
+    act(() => readerRef.current!.setMode("original"));
+    expect(readPdfReadingMode).not.toHaveBeenCalled();
+    expect(readerRef.current!.getMode()).toBe("original");
+
+    await act(async () => readerRef.current!.setMode("reading"));
+    expect(readerRef.current!.getMode()).toBe("reading");
+    expect(readPdfReadingMode).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(view.container.querySelector(".pdf-reading-page")).not.toBeNull());
+
+    await act(async () => readerRef.current!.setMode("reading"));
+    expect(readPdfReadingMode).toHaveBeenCalledTimes(1);
+
+    act(() => readerRef.current!.setMode("original"));
+    expect(readerRef.current!.getMode()).toBe("original");
+    expect(view.container.querySelector(".pdf-reading-mode")).toBeNull();
+
+    act(() => view.unmount());
+  });
+});
+
+describe("PDF outline TOC levels", () => {
+  it("preserves nested outline indentation like Markdown headings", () => {
+    expect(
+      flattenPdfOutline([
+        {
+          title: "第一卷",
+          page: 1,
+          items: [
+            { title: "第一章", page: 3 },
+            { title: "第二章", page: 8, items: [{ title: "小节", page: 9 }] },
+          ],
+        },
+        { title: "第二卷", page: 20 },
+      ]),
+    ).toEqual([
+      { id: "pdf-page-1", title: "第一卷", level: 1 },
+      { id: "pdf-page-3", title: "第一章", level: 2 },
+      { id: "pdf-page-8", title: "第二章", level: 2 },
+      { id: "pdf-page-9", title: "小节", level: 3 },
+      { id: "pdf-page-20", title: "第二卷", level: 1 },
+    ]);
+  });
+});
+
+describe("pdf.js text layer scale-factor contract", () => {
+  // A4: rawDims.pageWidth = 595.28pt; viewport.width = 595.28 × scale × userUnit.
+  it("derives the factor from the measured page-box width", () => {
+    expect(computePdfTotalScaleFactor(779.8168, { width: 779.8168, scale: 1.31, userUnit: 1 })).toBeCloseTo(1.31, 6);
+  });
+
+  it("follows the page box when min(--pdf-page-width, 100%) clamps it", () => {
+    expect(computePdfTotalScaleFactor(400, { width: 779.8168, scale: 1.31, userUnit: 1 })).toBeCloseTo(400 / 595.28, 6);
+  });
+
+  it("uses the same formula for rotated pages and honors userUnit", () => {
+    // /Rotate 90: viewport.width is already the rotated (landscape) dimension.
+    expect(computePdfTotalScaleFactor(1102.8759, { width: 1102.8759, scale: 1.31, userUnit: 1 })).toBeCloseTo(1.31, 6);
+    expect(computePdfTotalScaleFactor(1190.56, { width: 1190.56, scale: 1, userUnit: 2 })).toBeCloseTo(2, 6);
+  });
+
+  it("rejects degenerate measurements instead of emitting a broken factor", () => {
+    expect(computePdfTotalScaleFactor(0, { width: 779.8168, scale: 1.31, userUnit: 1 })).toBeNull();
+    expect(computePdfTotalScaleFactor(Number.NaN, { width: 779.8168, scale: 1.31, userUnit: 1 })).toBeNull();
+    expect(computePdfTotalScaleFactor(500, { width: 0, scale: 1, userUnit: 1 })).toBeNull();
   });
 });
 

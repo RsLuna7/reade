@@ -1,6 +1,12 @@
 import { createContext, Fragment, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ImageOff, ShieldAlert } from "lucide-react";
-import { openExternalLink, readEpubAsset, type EpubBlock, type EpubDocument, type EpubInline, type EpubTableSlot, type SearchLocator } from "../lib/backend";
+import { openExternalLink, readEpubAsset, type Annotation, type EpubBlock, type EpubDocument, type EpubInline, type EpubTableSlot, type SearchLocator } from "../lib/backend";
+import {
+  clearAnnotationMarks,
+  isAnnotationMarkKind,
+  paintTextQuoteMarks,
+  type TextQuoteMarkInput,
+} from "../lib/annotations";
 import type { TocItem } from "../lib/markdown";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { scrollElementWithinContainer } from "../lib/scroll";
@@ -10,6 +16,8 @@ interface EpubReaderProps {
   document: EpubDocument;
   locator: SearchLocator | null;
   motionLevel: ReaderMotionLevel;
+  annotations?: Annotation[];
+  onBrokenAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
   onActiveChange: (id: string | null) => void;
 }
@@ -20,6 +28,60 @@ function domId(prefix: string, value: string): string {
   let hash = 2166136261;
   for (const char of value) hash = Math.imul(hash ^ char.charCodeAt(0), 16777619);
   return `${prefix}-${(hash >>> 0).toString(36)}`;
+}
+
+function clampTocLevel(level: number): number {
+  if (!Number.isFinite(level)) return 1;
+  return Math.min(6, Math.max(1, Math.round(level)));
+}
+
+function epubInlineText(items: EpubInline[]): string {
+  return items.map((item) => {
+    switch (item.kind) {
+      case "text":
+        return item.text;
+      case "link":
+        return epubInlineText(item.content);
+      case "image":
+        return item.alt;
+      case "lineBreak":
+        return " ";
+      default:
+        return "";
+    }
+  }).join("").replace(/\s+/g, " ").trim();
+}
+
+/** Builds a Markdown-like indented TOC from chapter nav levels and in-chapter headings. */
+export function buildEpubToc(document: EpubDocument): TocItem[] {
+  const items: TocItem[] = [];
+  for (const chapter of document.chapters) {
+    const chapterLevel = clampTocLevel(chapter.level ?? 1);
+    items.push({
+      id: domId("epub-chapter", chapter.id),
+      title: chapter.title,
+      level: chapterLevel,
+    });
+
+    let skippedChapterTitleHeading = false;
+    for (const block of chapter.blocks) {
+      if (block.kind !== "heading") continue;
+      const title = epubInlineText(block.content);
+      if (!title) continue;
+      if (!skippedChapterTitleHeading && title === chapter.title) {
+        skippedChapterTitleHeading = true;
+        continue;
+      }
+      skippedChapterTitleHeading = true;
+      if (!block.anchor) continue;
+      items.push({
+        id: domId("epub-anchor", block.anchor),
+        title,
+        level: clampTocLevel(block.level),
+      });
+    }
+  }
+  return items;
 }
 
 function EpubImage({ relativePath, document, assetId, alt }: { relativePath: string; document: EpubDocument; assetId: number; alt: string }) {
@@ -96,28 +158,103 @@ function TableCell({ slot, relativePath, document, header }: { slot: EpubTableSl
   return <Cell colSpan={slot.colSpan} rowSpan={slot.rowSpan}>{slot.blocks.map((block, index) => <BlockView block={block} relativePath={relativePath} document={document} key={index} />)}</Cell>;
 }
 
-function BlockView({ block, relativePath, document }: { block: EpubBlock; relativePath: string; document: EpubDocument }): ReactNode {
+function BlockView({
+  block,
+  relativePath,
+  document,
+  blockIndex,
+}: {
+  block: EpubBlock;
+  relativePath: string;
+  document: EpubDocument;
+  blockIndex?: number;
+}): ReactNode {
   const inline = (items: EpubInline[]) => <InlineContent items={items} relativePath={relativePath} document={document} />;
+  const wrap = (node: ReactNode) =>
+    typeof blockIndex === "number" ? (
+      <div className="epub-block" data-block-index={blockIndex}>
+        {node}
+      </div>
+    ) : (
+      node
+    );
   switch (block.kind) {
     case "heading": {
       const Heading = `h${Math.min(6, Math.max(1, block.level))}` as "h1";
-      return <Heading id={block.anchor ? domId("epub-anchor", block.anchor) : undefined}>{inline(block.content)}</Heading>;
+      return wrap(
+        <Heading id={block.anchor ? domId("epub-anchor", block.anchor) : undefined}>{inline(block.content)}</Heading>,
+      );
     }
-    case "paragraph": return <p>{inline(block.content)}</p>;
-    case "rule": return <hr />;
-    case "codeBlock": return <pre><code data-language={block.language ?? undefined}>{block.text}</code></pre>;
-    case "blockQuote": return <blockquote>{block.blocks.map((item, index) => <BlockView block={item} relativePath={relativePath} document={document} key={index} />)}</blockquote>;
+    case "paragraph":
+      return wrap(<p>{inline(block.content)}</p>);
+    case "rule":
+      return wrap(<hr />);
+    case "codeBlock":
+      return wrap(
+        <pre>
+          <code data-language={block.language ?? undefined}>{block.text}</code>
+        </pre>,
+      );
+    case "blockQuote":
+      return wrap(
+        <blockquote>
+          {block.blocks.map((item, index) => (
+            <BlockView block={item} relativePath={relativePath} document={document} key={index} />
+          ))}
+        </blockquote>,
+      );
     case "list": {
       const List = block.ordered ? "ol" : "ul";
-      return <List start={block.ordered ? block.start : undefined}>{block.items.map((item, index) => <li key={index}>{item.checked !== null && <input type="checkbox" checked={item.checked} readOnly tabIndex={-1} />}{item.blocks.map((child, childIndex) => <BlockView block={child} relativePath={relativePath} document={document} key={childIndex} />)}</li>)}</List>;
+      return wrap(
+        <List start={block.ordered ? block.start : undefined}>
+          {block.items.map((item, index) => (
+            <li key={index}>
+              {item.checked !== null && <input type="checkbox" checked={item.checked} readOnly tabIndex={-1} />}
+              {item.blocks.map((child, childIndex) => (
+                <BlockView block={child} relativePath={relativePath} document={document} key={childIndex} />
+              ))}
+            </li>
+          ))}
+        </List>,
+      );
     }
-    case "table": return <div className="epub-table-scroll"><table><tbody>{block.rows.map((row, rowIndex) => <tr key={rowIndex}>{row.map((slot, cellIndex) => <TableCell key={cellIndex} slot={slot} relativePath={relativePath} document={document} header={rowIndex < block.headerRows} />)}</tr>)}</tbody></table></div>;
+    case "table":
+      return wrap(
+        <div className="epub-table-scroll">
+          <table>
+            <tbody>
+              {block.rows.map((row, rowIndex) => (
+                <tr key={rowIndex}>
+                  {row.map((slot, cellIndex) => (
+                    <TableCell
+                      key={cellIndex}
+                      slot={slot}
+                      relativePath={relativePath}
+                      document={document}
+                      header={rowIndex < block.headerRows}
+                    />
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>,
+      );
   }
 }
 
-export function EpubReader({ relativePath, document, locator, motionLevel, onTocChange, onActiveChange }: EpubReaderProps) {
+export function EpubReader({
+  relativePath,
+  document,
+  locator,
+  motionLevel,
+  annotations = [],
+  onBrokenAnnotationsChange,
+  onTocChange,
+  onActiveChange,
+}: EpubReaderProps) {
   const rootRef = useRef<HTMLDivElement>(null);
-  const toc = useMemo<TocItem[]>(() => document.chapters.map((chapter) => ({ id: domId("epub-chapter", chapter.id), title: chapter.title, level: 1 })), [document.chapters]);
+  const toc = useMemo<TocItem[]>(() => buildEpubToc(document), [document]);
 
   useEffect(() => { onTocChange(toc); onActiveChange(toc[0]?.id ?? null); }, [onActiveChange, onTocChange, toc]);
   useEffect(() => {
@@ -189,6 +326,61 @@ export function EpubReader({ relativePath, document, locator, motionLevel, onToc
     };
   }, [document.chapters, onActiveChange]);
 
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    clearAnnotationMarks(root);
+    const broken: string[] = [];
+    // Group marks by anchor element so each subtree is walked once per paint;
+    // each group builds its index lazily, after earlier groups already wrapped.
+    const groups = new Map<HTMLElement, TextQuoteMarkInput[]>();
+    for (const annotation of annotations) {
+      if (!isAnnotationMarkKind(annotation.kind) || annotation.locator.kind !== "epub" || !annotation.color) continue;
+      const chapter = root.querySelector<HTMLElement>(
+        `.epub-chapter[data-chapter-id="${CSS.escape(annotation.locator.chapterId)}"]`,
+      );
+      if (!chapter) {
+        broken.push(annotation.id);
+        continue;
+      }
+      const block = chapter.querySelector<HTMLElement>(
+        `.epub-block[data-block-index="${annotation.locator.blockIndex}"]`,
+      );
+      const target = block ?? chapter;
+      const marks = groups.get(target) ?? [];
+      if (!marks.length) groups.set(target, marks);
+      marks.push({
+        id: annotation.id,
+        color: annotation.color,
+        markKind: annotation.kind,
+        quote: annotation.locator.quote,
+        prefix: annotation.locator.prefix,
+        suffix: annotation.locator.suffix,
+        // The captured offset disambiguates quotes repeated inside the block.
+        hintStart: annotation.locator.startOffset,
+      });
+    }
+    for (const [target, marks] of groups) {
+      broken.push(...paintTextQuoteMarks(target, marks));
+    }
+    for (const annotation of annotations) {
+      if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
+      if (annotation.locator.target.format !== "epub") continue;
+      const target = annotation.locator.target;
+      const chapter = root.querySelector<HTMLElement>(
+        `.epub-chapter[data-chapter-id="${CSS.escape(target.chapterId)}"]`,
+      );
+      if (!chapter) {
+        broken.push(annotation.id);
+        continue;
+      }
+      if (target.headingId && !root.querySelector(`#${CSS.escape(target.headingId)}`)) {
+        broken.push(annotation.id);
+      }
+    }
+    onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
+  }, [annotations, document, onBrokenAnnotationsChange]);
+
   return <EpubMotionContext.Provider value={motionLevel}><div className="epub-reader" ref={rootRef}>
     {document.chapters.map((chapter) => <section className="epub-chapter" id={domId("epub-chapter", chapter.id)} data-chapter-id={chapter.id} key={chapter.id}>
       <div className="epub-chapter-heading">
@@ -196,7 +388,15 @@ export function EpubReader({ relativePath, document, locator, motionLevel, onToc
         <p className="epub-chapter-label">Chapter</p>
         <h2 className="epub-chapter-title">{chapter.title}</h2>
       </div>
-      {chapter.blocks.map((block, index) => <BlockView block={block} relativePath={relativePath} document={document} key={index} />)}
+      {chapter.blocks.map((block, index) => (
+        <BlockView
+          block={block}
+          relativePath={relativePath}
+          document={document}
+          blockIndex={index}
+          key={index}
+        />
+      ))}
     </section>)}
     {document.notes.length > 0 && <section className="epub-notes"><h2>注释</h2>{document.notes.map((note) => <aside id={domId("epub-note", note.id)} key={note.id}><strong>{note.id}</strong>{note.blocks.map((block, index) => <BlockView block={block} relativePath={relativePath} document={document} key={index} />)}</aside>)}</section>}
   </div></EpubMotionContext.Provider>;

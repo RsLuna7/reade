@@ -2,7 +2,16 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ChevronLeft, ChevronRight, Columns3, FileText, Minus, Plus, ScanSearch } from "lucide-react";
 import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, getDocument, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
-import { openExternalLink, readDocumentRange, readPdfReadingMode, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
+import { openExternalLink, readDocumentRange, readPdfReadingMode, type Annotation, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
+import {
+  buildTextIndex,
+  clearAnnotationMarks,
+  isAnnotationMarkKind,
+  paintTextQuoteMarks,
+  resolvePdfHighlightRects,
+  type TextIndex,
+  type TextQuoteMarkInput,
+} from "../lib/annotations";
 import type { TocItem } from "../lib/markdown";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { MarkdownRenderer } from "./MarkdownRenderer";
@@ -39,10 +48,57 @@ export interface PdfPagePosition {
   offsetRatio: number;
 }
 
+export type PdfOutlineNode = {
+  title?: string;
+  page: number;
+  items?: PdfOutlineNode[];
+};
+
+/** Flattens a nested PDF outline into TOC items with Markdown-like indentation levels. */
+export function flattenPdfOutline(items: PdfOutlineNode[], level = 1): TocItem[] {
+  const result: TocItem[] = [];
+  const visit = (nodes: PdfOutlineNode[], depth: number) => {
+    for (const node of nodes) {
+      const page = Math.max(1, Math.round(Number.isFinite(node.page) ? node.page : 1));
+      result.push({
+        id: `pdf-page-${page}`,
+        title: node.title?.trim() || `第 ${page} 页`,
+        level: Math.min(6, Math.max(1, depth)),
+      });
+      if (node.items?.length) visit(node.items, Math.min(6, depth + 1));
+    }
+  };
+  visit(items, level);
+  return result;
+}
+
 export interface PdfPageMeasurement {
   page: number;
   top: number;
   bottom: number;
+}
+
+/**
+ * pdf.js text layer CSS contract: the page element must define
+ * `--total-scale-factor` such that `factor × rawDims.pageWidth/Height` equals
+ * the text layer's CSS size. Span positions are percentages, but every span's
+ * `font-size` is `calc(--total-scale-factor × --font-height)`; without the
+ * variable the calc is invalid and all spans silently inherit ~16px.
+ *
+ * The factor derives from the measured page-box width rather than
+ * `viewport.width` because `.pdf-page` may be clamped by
+ * `min(var(--pdf-page-width), 100%)` in narrow windows. Dividing by
+ * `scale × userUnit` recovers the rotated page width in PDF units, so the
+ * same formula holds for `/Rotate 90/270` pages.
+ */
+export function computePdfTotalScaleFactor(
+  measuredCssWidth: number,
+  viewport: { width: number; scale: number; userUnit: number },
+): number | null {
+  const nativeRotatedWidth = viewport.width / (viewport.scale * viewport.userUnit);
+  if (!Number.isFinite(measuredCssWidth) || measuredCssWidth <= 0) return null;
+  if (!Number.isFinite(nativeRotatedWidth) || nativeRotatedWidth <= 0) return null;
+  return measuredCssWidth / nativeRotatedWidth;
 }
 
 /**
@@ -140,6 +196,13 @@ export function calculatePdfRestoreScrollTop(
   return Math.max(0, currentScrollTop + pageTop + pageHeight * ratio - referenceLine);
 }
 
+export interface PdfReaderHandle {
+  getPosition: () => PdfPagePosition | null;
+  getMode: () => "original" | "reading";
+  setMode: (mode: "original" | "reading") => void;
+  restorePosition: (position: PdfPagePosition) => boolean;
+}
+
 interface PdfReaderProps {
   relativePath: string;
   size: number;
@@ -148,6 +211,9 @@ interface PdfReaderProps {
   indexError: string | null;
   locator: SearchLocator | null;
   motionLevel: ReaderMotionLevel;
+  annotations?: Annotation[];
+  readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
+  onBrokenAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
   onActiveChange: (id: string | null) => void;
 }
@@ -173,6 +239,7 @@ interface PageProps {
   pageNumber: number;
   scale: number;
   initialRatio: number;
+  highlights: Annotation[];
   onRatioChange: (page: number, ratio: number) => void;
   onJump: (page: number) => void;
 }
@@ -236,13 +303,24 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJump }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, onRatioChange, onJump }: PageProps) {
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
   const annotationRef = useRef<HTMLDivElement>(null);
+  const highlightRef = useRef<HTMLDivElement>(null);
   const [renderNearby, setRenderNearby] = useState(pageNumber <= 2);
   const [ratio, setRatio] = useState(initialRatio);
+  const [textLayerRevision, setTextLayerRevision] = useState(0);
+  const viewportMetricsRef = useRef<{ width: number; scale: number; userUnit: number } | null>(null);
+
+  const applyTotalScaleFactor = useCallback(() => {
+    const host = hostRef.current;
+    const metrics = viewportMetricsRef.current;
+    if (!host || !metrics) return;
+    const factor = computePdfTotalScaleFactor(host.getBoundingClientRect().width, metrics);
+    if (factor !== null) host.style.setProperty("--total-scale-factor", String(factor));
+  }, []);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -254,6 +332,14 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
     observer.observe(host);
     return () => observer.disconnect();
   }, []);
+
+  useEffect(() => {
+    const host = hostRef.current;
+    if (!host) return;
+    const observer = new ResizeObserver(applyTotalScaleFactor);
+    observer.observe(host);
+    return () => observer.disconnect();
+  }, [applyTotalScaleFactor]);
 
   useEffect(() => {
     if (!renderNearby || !session.lifecycle.isActive()) return;
@@ -275,6 +361,14 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
       const nextRatio = viewport.height / viewport.width;
       setRatio(nextRatio);
       onRatioChange(pageNumber, nextRatio);
+      viewportMetricsRef.current = { width: viewport.width, scale: viewport.scale, userUnit: viewport.userUnit };
+      const pageHost = hostRef.current;
+      if (pageHost) {
+        // Page-box width and render viewport share one source of truth so the
+        // canvas bitmap is not stretched relative to the text layer (R2).
+        pageHost.style.setProperty("--pdf-page-width", `${viewport.width}px`);
+      }
+      applyTotalScaleFactor();
       const canvas = canvasRef.current;
       const textHost = textRef.current;
       const annotationHost = annotationRef.current;
@@ -296,16 +390,15 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
       await renderTask.promise;
       if (cancelled || !session.lifecycle.isActive()) return;
       textHost.replaceChildren();
-      textHost.style.width = `${viewport.width}px`;
-      textHost.style.height = `${viewport.height}px`;
+      // Sizing (and rotation via data-main-rotation) is written by pdf.js
+      // setLayerDimensions in terms of --total-scale-factor; no inline size.
       textLayer = new TextLayer({ textContentSource: page.streamTextContent(), container: textHost, viewport });
       await textLayer.render();
       if (cancelled || !session.lifecycle.isActive()) return;
+      setTextLayerRevision((revision) => revision + 1);
       const annotations = await page.getAnnotations({ intent: "display" });
       if (cancelled || !session.lifecycle.isActive()) return;
       annotationHost.replaceChildren();
-      annotationHost.style.width = `${viewport.width}px`;
-      annotationHost.style.height = `${viewport.height}px`;
       for (const annotation of annotations) {
         if (!annotation.rect || (!annotation.url && !annotation.dest)) continue;
         let url: URL | null = null;
@@ -323,10 +416,12 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
         link.href = url?.toString() ?? "#";
         link.rel = "noopener noreferrer";
         link.title = url?.toString() ?? "跳转到 PDF 内部位置";
-        link.style.left = `${Math.min(x1, x2)}px`;
-        link.style.top = `${Math.min(y1, y2)}px`;
-        link.style.width = `${Math.abs(x2 - x1)}px`;
-        link.style.height = `${Math.abs(y2 - y1)}px`;
+        // Percentages of the viewport keep links glued to the page box even
+        // when `.pdf-page` is clamped narrower than the render viewport.
+        link.style.left = `${(Math.min(x1, x2) / viewport.width) * 100}%`;
+        link.style.top = `${(Math.min(y1, y2) / viewport.height) * 100}%`;
+        link.style.width = `${(Math.abs(x2 - x1) / viewport.width) * 100}%`;
+        link.style.height = `${(Math.abs(y2 - y1) / viewport.height) * 100}%`;
         link.addEventListener("click", (event) => {
           event.preventDefault();
           if (url) {
@@ -351,7 +446,42 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
       cancel();
       unregister();
     };
-  }, [onJump, onRatioChange, pageNumber, renderNearby, scale, session]);
+  }, [applyTotalScaleFactor, onJump, onRatioChange, pageNumber, renderNearby, scale, session]);
+
+  useEffect(() => {
+    const host = highlightRef.current;
+    if (!host) return;
+    host.replaceChildren();
+    const textLayer = textRef.current;
+    const pageRect = hostRef.current?.getBoundingClientRect() ?? null;
+    // Highlights never mutate the text layer, so one index serves them all.
+    let textIndex: TextIndex | null = null;
+    for (const annotation of highlights) {
+      if (annotation.locator.kind !== "pdf" || annotation.locator.page !== pageNumber) continue;
+      if (annotation.locator.view !== "original") continue;
+      const markKind = isAnnotationMarkKind(annotation.kind) ? annotation.kind : "highlight";
+      if (textLayer && !textIndex) textIndex = buildTextIndex(textLayer);
+      // Quote-first: re-anchor against the live text layer so stored rects
+      // from older layouts self-heal; stored rects remain the fallback.
+      const rects = resolvePdfHighlightRects({
+        textLayer,
+        pageRect,
+        locator: annotation.locator,
+        index: textIndex ?? undefined,
+      });
+      for (const rect of rects) {
+        const mark = globalThis.document.createElement("span");
+        mark.className = `pdf-user-highlight pdf-user-highlight--${markKind} pdf-user-highlight--${annotation.color ?? "yellow"}`;
+        mark.dataset.annotationId = annotation.id;
+        mark.dataset.annotationKind = markKind;
+        mark.style.left = `${rect.x * 100}%`;
+        mark.style.top = `${rect.y * 100}%`;
+        mark.style.width = `${rect.w * 100}%`;
+        mark.style.height = `${rect.h * 100}%`;
+        host.append(mark);
+      }
+    }
+  }, [highlights, pageNumber, renderNearby, textLayerRevision]);
 
   return <section
     className="pdf-page"
@@ -364,6 +494,7 @@ function PdfPage({ session, pageNumber, scale, initialRatio, onRatioChange, onJu
     {renderNearby && <>
       <canvas ref={canvasRef} />
       <div className="textLayer pdf-text-layer" ref={textRef} />
+      <div className="pdf-user-highlight-layer" ref={highlightRef} />
       <div className="pdf-annotation-layer" ref={annotationRef} />
     </>}
     <span className="reade-motion-locator-highlight" aria-hidden="true" />
@@ -388,7 +519,20 @@ function ranges(numbers: number[]): string {
   return output.join("、");
 }
 
-export function PdfReader({ relativePath, size, modified, indexStatus, indexError, locator, motionLevel, onTocChange, onActiveChange }: PdfReaderProps) {
+export function PdfReader({
+  relativePath,
+  size,
+  modified,
+  indexStatus,
+  indexError,
+  locator,
+  motionLevel,
+  annotations = [],
+  readerRef,
+  onBrokenAnnotationsChange,
+  onTocChange,
+  onActiveChange,
+}: PdfReaderProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const generationRef = useRef(0);
@@ -401,6 +545,7 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
   const [boundError, setBoundError] = useState<BoundError | null>(null);
   const [mode, setMode] = useState<"original" | "reading">("original");
   const [scale, setScale] = useState(1);
+  const [nativePageWidth, setNativePageWidth] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
   const [boundReading, setBoundReading] = useState<BoundReadingMode | null>(null);
   const [readingLoadingKey, setReadingLoadingKey] = useState<string | null>(null);
@@ -469,6 +614,7 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
     pageRatiosRef.current.clear();
     setCurrentPage(1);
     setMode("original");
+    setNativePageWidth(null);
     setBoundReading(null);
     setReadingLoadingKey(null);
   }, [sourceKey]);
@@ -483,10 +629,10 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
     let cancelled = false;
     type OutlineItem = { title?: string; dest?: string | unknown[]; items?: OutlineItem[] };
     void session.pdf.getOutline().then(async (outline) => {
-      const result: TocItem[] = [];
-      const visit = async (items: OutlineItem[], level: number) => {
+      const resolveTree = async (items: OutlineItem[]): Promise<PdfOutlineNode[]> => {
+        const nodes: PdfOutlineNode[] = [];
         for (const item of items) {
-          if (cancelled || !session.lifecycle.isActive()) return;
+          if (cancelled || !session.lifecycle.isActive()) return nodes;
           let page = 1;
           try {
             const destination = typeof item.dest === "string" ? await session.pdf.getDestination(item.dest) : item.dest;
@@ -497,13 +643,17 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
           } catch {
             // Malformed outline destinations stay on page one.
           }
-          if (cancelled || !session.lifecycle.isActive()) return;
-          result.push({ id: `pdf-page-${page}`, title: item.title?.trim() || `第 ${page} 页`, level });
-          if (item.items?.length) await visit(item.items, Math.min(6, level + 1));
+          if (cancelled || !session.lifecycle.isActive()) return nodes;
+          nodes.push({
+            title: item.title,
+            page,
+            items: item.items?.length ? await resolveTree(item.items) : undefined,
+          });
         }
+        return nodes;
       };
-      await visit((outline ?? []) as OutlineItem[], 1);
-      if (!cancelled && session.lifecycle.isActive()) onTocChange(result);
+      const tree = await resolveTree((outline ?? []) as OutlineItem[]);
+      if (!cancelled && session.lifecycle.isActive()) onTocChange(flattenPdfOutline(tree));
     }).catch(() => {
       if (!cancelled && session.lifecycle.isActive()) onTocChange([]);
     });
@@ -550,6 +700,7 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
       const firstPage = await activeSession.pdf.getPage(1);
       if (!activeSession.lifecycle.isActive() || sourceKeyRef.current !== activeSession.sourceKey) return;
       const nativeWidth = firstPage.getViewport({ scale: 1 }).width;
+      setNativePageWidth(nativeWidth);
       setScale(Math.min(3, Math.max(.5, (reader.clientWidth - 18) / nativeWidth)));
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
@@ -567,6 +718,75 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
     if (!reader) return { page: currentPageRef.current, offsetRatio: 0 };
     return captureCurrentPosition(reader, toolbarRef.current, currentPageRef.current, pageSelector);
   }, [pageSelector]);
+
+  const lastReadingBrokenRef = useRef<string[]>([]);
+
+  useLayoutEffect(() => {
+    if (mode !== "reading") return;
+    const root = rootRef.current;
+    if (!root) return;
+    const pages = Array.from(root.querySelectorAll<HTMLElement>(".pdf-reading-page"));
+    const broken: string[] = [];
+    for (const page of pages) {
+      const pageNumber = Number(page.dataset.pageNumber);
+      clearAnnotationMarks(page);
+      const textRoot = page.querySelector<HTMLElement>(".markdown-body") ?? page;
+      const marks: TextQuoteMarkInput[] = [];
+      for (const annotation of annotations) {
+        if (!isAnnotationMarkKind(annotation.kind) || annotation.locator.kind !== "pdf") continue;
+        if (annotation.locator.page !== pageNumber || annotation.locator.view !== "reading") continue;
+        if (!annotation.color) continue;
+        marks.push({
+          id: annotation.id,
+          color: annotation.color,
+          markKind: annotation.kind,
+          quote: annotation.locator.quote,
+          prefix: annotation.locator.prefix,
+          suffix: annotation.locator.suffix,
+        });
+      }
+      // One page-level walk per paint instead of one per annotation.
+      if (marks.length) broken.push(...paintTextQuoteMarks(textRoot, marks));
+    }
+    for (const annotation of annotations) {
+      if (!isAnnotationMarkKind(annotation.kind)) continue;
+      const locator = annotation.locator;
+      if (locator.kind !== "pdf" || locator.view !== "reading") continue;
+      const pageExists = pages.some((page) => Number(page.dataset.pageNumber) === locator.page);
+      if (!pageExists) broken.push(annotation.id);
+    }
+    const nextBroken = Array.from(new Set(broken));
+    if (
+      nextBroken.length !== lastReadingBrokenRef.current.length ||
+      nextBroken.some((id, index) => id !== lastReadingBrokenRef.current[index])
+    ) {
+      lastReadingBrokenRef.current = nextBroken;
+      onBrokenAnnotationsChange?.(nextBroken);
+    }
+  });
+
+  useEffect(() => {
+    if (mode !== "original") return;
+    const pageCount = session?.pdf.numPages ?? 0;
+    const broken: string[] = [];
+    for (const annotation of annotations) {
+      if (!isAnnotationMarkKind(annotation.kind)) continue;
+      const locator = annotation.locator;
+      if (locator.kind !== "pdf" || locator.view !== "original") continue;
+      if (locator.page < 1 || (pageCount > 0 && locator.page > pageCount)) {
+        broken.push(annotation.id);
+        continue;
+      }
+      if (!locator.rects.length) broken.push(annotation.id);
+    }
+    for (const annotation of annotations) {
+      if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
+      if (annotation.locator.target.format !== "pdf") continue;
+      const page = annotation.locator.target.page;
+      if (page < 1 || (pageCount > 0 && page > pageCount)) broken.push(annotation.id);
+    }
+    onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
+  }, [annotations, mode, onBrokenAnnotationsChange, session?.pdf.numPages]);
 
   const switchMode = useCallback((nextMode: "original" | "reading") => {
     if (nextMode === mode) return;
@@ -598,6 +818,29 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
       }
     }
   }, [reading, relativePath, sourceKey, switchMode]);
+
+  useEffect(() => {
+    if (!readerRef) return;
+    readerRef.current = {
+      getPosition: capturePosition,
+      getMode: () => mode,
+      setMode: (nextMode) => {
+        if (nextMode === mode) return;
+        // Reading mode goes through the async loading path, exactly like the
+        // toolbar toggle button.
+        if (nextMode === "reading") void openReadingMode();
+        else switchMode("original");
+      },
+      restorePosition: (position) => {
+        const reader = rootRef.current;
+        if (!reader) return false;
+        return restorePositionInstantly(reader, toolbarRef.current, position);
+      },
+    };
+    return () => {
+      readerRef.current = null;
+    };
+  }, [capturePosition, mode, openReadingMode, readerRef, switchMode]);
 
   useEffect(() => {
     if (locator?.kind !== "pdfPage") return;
@@ -699,7 +942,7 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
     </div>
     {error && <div className="pdf-state pdf-state--error">{error}</div>}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
-    {mode === "original" && session && <div className="pdf-pages" style={{ "--pdf-page-width": `${Math.round(820 * scale)}px` } as React.CSSProperties}>
+    {mode === "original" && session && <div className="pdf-pages" style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
       {Array.from({ length: session.pdf.numPages }, (_, index) => {
         const page = index + 1;
         return <PdfPage
@@ -707,6 +950,13 @@ export function PdfReader({ relativePath, size, modified, indexStatus, indexErro
           pageNumber={page}
           scale={scale}
           initialRatio={pageRatiosRef.current.get(page) ?? 1.414}
+          highlights={annotations.filter(
+            (annotation) =>
+              isAnnotationMarkKind(annotation.kind) &&
+              annotation.locator.kind === "pdf" &&
+              annotation.locator.view === "original" &&
+              annotation.locator.page === page,
+          )}
           onRatioChange={handlePageRatioChange}
           onJump={jump}
           key={`${session.lifecycle.generation}-${page}`}
