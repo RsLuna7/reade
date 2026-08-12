@@ -126,4 +126,11 @@ describe("annotation interaction CSS", () => {
     expect(css).toContain(".annotation-sort-toggle");
     expect(css).toContain(".annotation-library-group");
   });
+
+  it("keeps side panel tab labels on one line so pills never deform", () => {
+    // 回归:中文标签在窄目录栏或出现计数角标时曾逐字竖排换行。
+    expect(css).toMatch(/\.side-panel-tabs\s*\{[^}]*flex-wrap:\s*wrap/s);
+    expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*flex-shrink:\s*0/s);
+    expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*white-space:\s*nowrap/s);
+  });
 });

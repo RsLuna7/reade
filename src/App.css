@@ -1595,6 +1595,8 @@ a:focus-visible {
 
 .side-panel-tabs {
   display: flex;
+  /* 空间不足时整粒药丸换行,标签文字绝不逐字竖排变形。 */
+  flex-wrap: wrap;
   gap: 6px;
   margin: 0 0 14px;
 }
@@ -1602,8 +1604,9 @@ a:focus-visible {
 .side-panel-tabs button {
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
   gap: 6px;
-  padding: 6px 10px;
+  padding: 6px 9px;
   border: 1px solid transparent;
   border-radius: 999px;
   color: var(--muted);
@@ -1611,6 +1614,7 @@ a:focus-visible {
   font-size: 11px;
   font-weight: 650;
   letter-spacing: 0.04em;
+  white-space: nowrap;
 }
 
 .side-panel-tabs button.active {
@@ -1620,10 +1624,13 @@ a:focus-visible {
 }
 
 .side-panel-count {
-  min-width: 1.2em;
-  padding: 0 5px;
+  min-width: 1.1em;
+  padding: 0 4px;
   border-radius: 999px;
   background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2486,6 +2493,25 @@ a:focus-visible {
 
   .toc-inner {
     padding-left: 14px;
+  }
+
+  /* 156px 目录轨道放不下完整角标,tab 收紧、计数降级为圆点。 */
+  .toc-panel .side-panel-tabs {
+    gap: 4px;
+  }
+
+  .toc-panel .side-panel-tabs button {
+    gap: 4px;
+    padding: 6px 6px;
+  }
+
+  .toc-panel .side-panel-tabs .side-panel-count {
+    width: 6px;
+    height: 6px;
+    min-width: 0;
+    padding: 0;
+    background: var(--accent);
+    font-size: 0;
   }
 }
 

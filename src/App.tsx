@@ -642,7 +642,6 @@ function SidePanel({
           className={tab === "toc" ? "active" : ""}
           onClick={() => onTabChange("toc")}
         >
-          <ListTree size={13} aria-hidden="true" />
           目录
         </button>
         <button

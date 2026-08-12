@@ -40,7 +40,7 @@ describe("buildLibraryStatusDetail", () => {
     ).toBe("索引 4/10 · 部分 1 · 失败 0");
   });
 
-  it("summarizes formats and index problems when idle", () => {
+  it("stays empty when idle so only the document count shows", () => {
     expect(
       buildLibraryStatusDetail({
         isWeb: false,
@@ -54,7 +54,7 @@ describe("buildLibraryStatusDetail", () => {
           doc("epub", "failed"),
         ],
       }),
-    ).toBe("MD 2 · PDF 1 · EPUB 1 · 部分 1 · 失败 1");
+    ).toBe("");
   });
 
   it("prompts to open a library when empty on desktop", () => {
