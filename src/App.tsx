@@ -10,13 +10,17 @@ import {
   type CSSProperties,
   type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
   AlertCircle,
+  AudioLines,
   BarChart3,
   BookOpen,
   Clock3,
+  Columns2,
   FolderOpen,
+  FolderPlus,
   Globe2,
   HardDrive,
   Highlighter,
@@ -43,6 +47,7 @@ import {
 } from "./lib/themes";
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
+import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
 import { DocumentTree } from "./components/DocumentTree";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
@@ -52,8 +57,10 @@ import {
   DEFAULT_LIBRARY_ROOT,
   assetDataUrl,
   detectMovedDocuments,
+  findRelatedPassages,
   importAnnotations,
   listAnnotations,
+  listDocumentLinks,
   listAnnotationsForTransfer,
   listDocumentFingerprints,
   listReadingSessions,
@@ -75,7 +82,26 @@ import {
   type LibrarySnapshot,
   type MovedDocumentCandidate,
   type ReviewSummary,
+  type SearchResult,
 } from "./lib/backend";
+import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
+import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
+// 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
+// documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
+// 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
+import { resolveLibraryPath } from "./lib/documentLinks";
+import {
+  clampSplitPos,
+  collectReferencedImages as referencedImages,
+  paneDisplayMarkdown as displayMarkdown,
+  SPLIT_MEDIA_QUERY,
+  SPLIT_POS_DEFAULT,
+} from "./lib/splitView";
+import { LinksPanel, type LinksPanelState } from "./components/LinksPanel";
+import {
+  CollectionMembershipPopover,
+  CollectionsSection,
+} from "./components/CollectionsSection";
 import { createReadingTracker, type ReadingTracker } from "./lib/readingTracker";
 import {
   clearAnnotationMarks,
@@ -121,6 +147,8 @@ import {
   type PendingSelection,
 } from "./lib/annotationCapture";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
+import { useReadAloud } from "./lib/useReadAloud";
+import { ReadAloudBar } from "./components/ReadAloudBar";
 import {
   AnnotationEditBubble,
   AnnotationImportConfirm,
@@ -165,15 +193,19 @@ import {
 import { cancelMotion, runMotion } from "./lib/motion";
 import type { PdfPagePosition, PdfReaderHandle } from "./components/PdfReader";
 import type { HomeReviewSummary } from "./components/HomeView";
+import type { QuoteCardSource } from "./components/QuoteCardDialog";
 import type { ReviewSession } from "./components/ReviewView";
 
 const LAST_LIBRARY_KEY = "reade-last-library";
 const IS_WEB_RUNTIME = APP_RUNTIME === "web";
 /** data-annotation-id of the temporary relocate preview mark (§5.6 B). */
 const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
+/** PDF 阅读模式的大小上限,与 PdfReader 工具栏的禁用判定保持一致(RA-D5)。 */
+const PDF_READING_MODE_MAX_BYTES = 128 * 1024 * 1024;
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
-const ABSOLUTE_PROTOCOL = /^[a-z][a-z\d+.-]*:/i;
 const PdfReader = lazy(() => import("./components/PdfReader").then((module) => ({ default: module.PdfReader })));
+const QuoteCardDialog = lazy(() => import("./components/QuoteCardDialog").then((module) => ({ default: module.QuoteCardDialog })));
+const SecondaryPane = lazy(() => import("./components/SecondaryPane").then((module) => ({ default: module.SecondaryPane })));
 const StatsView = lazy(() => import("./components/StatsView").then((module) => ({ default: module.StatsView })));
 const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ default: module.HomeView })));
 const ReviewView = lazy(() => import("./components/ReviewView").then((module) => ({ default: module.ReviewView })));
@@ -225,43 +257,12 @@ function formatModified(value: number): string {
   }).format(date);
 }
 
-function displayMarkdown(markdown: string): string {
-  let content = markdown.replace(/^\uFEFF/, "");
-  content = content.replace(/^---\s*\r?\n[\s\S]*?\r?\n---\s*(?:\r?\n|$)/, "");
-  return content.replace(/^\s*#\s+[^\r\n]+(?:\r?\n|$)/, "").trimStart();
-}
-
 function decodePath(value: string): string {
   try {
     return decodeURIComponent(value);
   } catch {
     return value;
   }
-}
-
-function resolveLibraryPath(source: string, documentPath: string): string | null {
-  const pathOnly = decodePath(source.split(/[?#]/, 1)[0] ?? "")
-    .trim()
-    .replace(/\\/g, "/");
-  if (!pathOnly || pathOnly.startsWith("//") || ABSOLUTE_PROTOCOL.test(pathOnly)) {
-    return null;
-  }
-
-  const base = pathOnly.startsWith("/")
-    ? []
-    : documentPath.replace(/\\/g, "/").split("/").slice(0, -1);
-
-  for (const segment of pathOnly.split("/")) {
-    if (!segment || segment === ".") continue;
-    if (segment === "..") {
-      if (base.length === 0) return null;
-      base.pop();
-    } else {
-      base.push(segment);
-    }
-  }
-
-  return base.join("/");
 }
 
 /**
@@ -296,15 +297,6 @@ function collectRelocationRoots(
     (a, b) => Math.abs(a.page - locator.page) - Math.abs(b.page - locator.page),
   );
   return entries.map((entry) => entry.root);
-}
-
-function referencedImages(markdown: string): string[] {
-  const sources = new Set<string>();
-  const imagePattern = /!\[[^\]]*]\(\s*<?([^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
-  for (const match of markdown.matchAll(imagePattern)) {
-    if (match[1]) sources.add(match[1]);
-  }
-  return [...sources];
 }
 
 function Welcome({
@@ -874,7 +866,7 @@ export function TocNavigation({
   );
 }
 
-type SidePanelTab = "toc" | "annotations" | "library";
+type SidePanelTab = "toc" | "annotations" | "library" | "links";
 
 function SidePanel({
   tab,
@@ -897,7 +889,10 @@ function SidePanel({
   onEditAnnotationNote,
   onChangeAnnotationColor,
   onRelocateAnnotation,
+  onGenerateAnnotationCard,
   onClearAnnotations,
+  linksState,
+  onSelectLinkDocument,
   libraryStatus,
   libraryGroups,
   libraryError,
@@ -938,7 +933,11 @@ function SidePanel({
   onEditAnnotationNote: (annotation: Annotation) => void;
   onChangeAnnotationColor: (annotation: Annotation, color: AnnotationColor) => void;
   onRelocateAnnotation: (annotation: Annotation) => void;
+  onGenerateAnnotationCard?: (annotation: Annotation) => void;
   onClearAnnotations: () => void;
+  /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
+  linksState: LinksPanelState;
+  onSelectLinkDocument: (relativePath: string) => void;
   libraryStatus: AnnotationLibraryStatus;
   libraryGroups: AnnotationLibraryGroup[];
   libraryError: string | null;
@@ -984,6 +983,20 @@ function SidePanel({
         <button
           type="button"
           role="tab"
+          aria-selected={tab === "links"}
+          className={tab === "links" ? "active" : ""}
+          onClick={() => onTabChange("links")}
+        >
+          链接
+          {linksState.status === "ready" && linksState.data.backlinks.length > 0 ? (
+            <span className="side-panel-count">
+              {linksState.data.backlinks.reduce((sum, entry) => sum + entry.count, 0)}
+            </span>
+          ) : null}
+        </button>
+        <button
+          type="button"
+          role="tab"
           aria-selected={tab === "library"}
           className={tab === "library" ? "active" : ""}
           onClick={() => onTabChange("library")}
@@ -1014,8 +1027,11 @@ function SidePanel({
           onEditNote={onEditAnnotationNote}
           onChangeColor={onChangeAnnotationColor}
           onRelocate={onRelocateAnnotation}
+          onGenerateCard={onGenerateAnnotationCard}
           onClearAll={onClearAnnotations}
         />
+      ) : tab === "links" ? (
+        <LinksPanel state={linksState} onSelectDocument={onSelectLinkDocument} />
       ) : (
         <AnnotationLibraryPanel
           status={libraryStatus}
@@ -1077,10 +1093,21 @@ function App() {
   const retryCurrentDocumentIndex = useReaderStore((state) => state.retryCurrentDocumentIndex);
   const activeView = useReaderStore((state) => state.activeView);
   const setActiveView = useReaderStore((state) => state.setActiveView);
+  const ttsRate = useReaderStore((state) => state.ttsRate);
+  const ttsVoiceName = useReaderStore((state) => state.ttsVoiceName);
+  const setTtsRate = useReaderStore((state) => state.setTtsRate);
+  const setTtsVoiceName = useReaderStore((state) => state.setTtsVoiceName);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
   const [annotationPanelOpen, setAnnotationPanelOpen] = useState(false);
+  // 合集(CO-D2):topbar popover 开关;写操作后 version 递增驱动分区重拉。
+  const [collectionsPopoverOpen, setCollectionsPopoverOpen] = useState(false);
+  const [collectionsVersion, setCollectionsVersion] = useState(0);
+  // 分栏对照(plan-split-view,SP-D1):session-only App state,不进 store。
+  // splitState 在窄窗退化时保留,窗口恢复 ≥1080px 自动回到分栏(SP-D6)。
+  const [splitState, setSplitState] = useState<{ path: string } | null>(null);
+  const [splitPos, setSplitPos] = useState(SPLIT_POS_DEFAULT);
   const [compactTocOpen, setCompactTocOpen] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
   const [tocState, setTocState] = useState<{ path: string; items: TocItem[] } | null>(null);
@@ -1093,6 +1120,14 @@ function App() {
   } | null>(null);
   const [sidePanelTab, setSidePanelTab] = useState<SidePanelTab>("toc");
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
+  // 金句卡片浮层(QC-D5):引文与出处捕获进 state,选区随后即可释放。
+  const [quoteCardSource, setQuoteCardSource] = useState<QuoteCardSource | null>(null);
+  // 相关段落浮层(RP-D4):挂在工具条位置旁;请求带序号守卫防过期结果。
+  const [relatedPassages, setRelatedPassages] = useState<
+    | (RelatedPassagesStatus & { x: number; y: number })
+    | null
+  >(null);
+  const relatedRequest = useRef(0);
   const [toolbarPos, setToolbarPos] = useState({ x: 0, y: 0 });
   const [markEditor, setMarkEditor] = useState<{ annotationId: string; x: number; y: number } | null>(null);
   const [annotationSort, setAnnotationSort] = useState<AnnotationListSort>("time");
@@ -1144,6 +1179,8 @@ function App() {
   } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const compactLibraryLayout = useMediaQuery("(max-width: 640px)");
+  /** ≥1080px 才允许分栏;窄窗自动退化、恢复宽度自动回来(SP-D6)。 */
+  const splitWide = useMediaQuery(SPLIT_MEDIA_QUERY);
   const readerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
@@ -1483,6 +1520,210 @@ function App() {
   const closeToolbar = useCallback(() => {
     setPendingSelection(null);
   }, []);
+
+  // 本地朗读(plan-read-aloud):hook 负责切句/队列/句级 mark 跟随,
+  // App 只负责入口、控制条与 PDF 原版式引导(RA-D5)。
+  const readAloud = useReadAloud({
+    articleRef,
+    readerRef,
+    contentKind: currentContent?.kind ?? null,
+    contentKey: currentPath,
+    active: activeView === "reader",
+    motionLevel,
+    rate: ttsRate,
+    voiceName: ttsVoiceName,
+    languageHint: typeof navigator !== "undefined" ? navigator.language : null,
+    onSentenceEnd: IS_WEB_RUNTIME
+      ? undefined
+      : () => trackerRef.current?.recordActivity(),
+    onNotice: showNotice,
+  });
+
+  // Esc 分支与控制条的稳定引用(hook 返回的回调都是 identity-stable)。
+  const { barOpen: readAloudBarOpen, stop: stopReadAloud } = readAloud;
+
+  /** 朗读入口的禁用原因;null 即可用(RA-D1/RA-D5)。 */
+  const readAloudDisabledReason = !readAloud.supported
+    ? "此环境不支持语音合成"
+    : !readAloud.voicesReady
+      ? "正在加载本地语音…"
+      : readAloud.voices.length === 0
+        ? "未检测到本地语音，可在系统设置安装语音后重试"
+        : currentContent?.kind === "pdf" &&
+            (currentContent.indexStatus === "unsupported" ||
+              currentContent.size > PDF_READING_MODE_MAX_BYTES)
+          ? "此 PDF 不支持阅读模式，无法朗读"
+          : null;
+
+  const handleReadAloudButton = useCallback(() => {
+    if (readAloud.barOpen) {
+      readAloud.stop();
+      return;
+    }
+    // PDF 原版式文本层按需加载,不直接朗读;引导一键切阅读模式(RA-D5)。
+    if (
+      currentContent?.kind === "pdf" &&
+      pdfReaderHandleRef.current?.getMode() === "original"
+    ) {
+      showNotice("PDF 原版式暂不支持朗读，请切换到阅读模式后再开始。", {
+        actionLabel: "切换阅读模式",
+        onAction: () => pdfReaderHandleRef.current?.setMode("reading"),
+      });
+      return;
+    }
+    readAloud.start();
+  }, [currentContent?.kind, readAloud, showNotice]);
+
+  // 金句卡片入口 1(M1):实时选区 → 关工具条 → 打开预览浮层。
+  const handleMakeCardFromSelection = useCallback(() => {
+    if (!pendingSelection) return;
+    setQuoteCardSource({
+      quote: pendingSelection.text,
+      sourceTitle:
+        currentDocument?.title ?? (currentPath ? fileName(currentPath) : ""),
+    });
+    closeToolbar();
+  }, [closeToolbar, currentDocument?.title, currentPath, pendingSelection]);
+
+  /** 选区去空白后 ≥8 字符才可查相关段落(RP §3.3)。 */
+  const canFindRelated = Boolean(
+    pendingSelection &&
+      pendingSelection.text.replace(/\s+/g, "").length >= RELATED_MIN_SELECTION_CHARS,
+  );
+
+  const closeRelatedPassages = useCallback(() => {
+    relatedRequest.current += 1;
+    setRelatedPassages(null);
+  }, []);
+
+  // 相关段落(RP-D4):点击触发,无防抖;序号守卫丢弃过期响应。
+  const handleFindRelated = useCallback(() => {
+    if (!pendingSelection) return;
+    const text = pendingSelection.text;
+    const padding = 12;
+    const width = 400;
+    const x = Math.min(
+      Math.max(padding, window.innerWidth - width - padding),
+      Math.max(padding, toolbarPos.x),
+    );
+    const y = Math.max(padding, Math.min(window.innerHeight - 240, toolbarPos.y + 44));
+    closeToolbar();
+    const request = ++relatedRequest.current;
+    setRelatedPassages({ status: "loading", x, y });
+    findRelatedPassages(text, currentPath).then(
+      (results) => {
+        if (relatedRequest.current === request) {
+          setRelatedPassages({ status: "ready", results, x, y });
+        }
+      },
+      (cause: unknown) => {
+        if (relatedRequest.current === request) {
+          setRelatedPassages({
+            status: "error",
+            message: cause instanceof Error ? cause.message : "相关段落检索失败",
+            x,
+            y,
+          });
+        }
+      },
+    );
+  }, [closeToolbar, currentPath, pendingSelection, toolbarPos]);
+
+  const handleSelectRelated = useCallback(
+    (result: SearchResult) => {
+      closeRelatedPassages();
+      void selectDocument(result.relativePath, result.locator);
+    },
+    [closeRelatedPassages, selectDocument],
+  );
+
+  // ---- 分栏对照(plan-split-view) ----
+  // 副栏的会话记忆由 App 持有:窄窗退化会卸载副栏组件,恢复分栏后仍能回位。
+  const paneScrollMemory = useRef(new Map<string, number>());
+  const panePdfMemory = useRef(new Map<string, PdfPagePosition>());
+  const splitDragging = useRef(false);
+  const splitDragFrame = useRef<number | null>(null);
+  const pendingSplitPos = useRef<number | null>(null);
+  /** 分栏实际渲染条件:已开启且窗口足够宽。 */
+  const splitActive = splitState !== null && splitWide;
+
+  const handleToggleSplit = useCallback(() => {
+    setSplitState((current) => {
+      if (current) return null;
+      // 默认加载当前文档:同一文档两个位置对照零成本可用(SP-D4)。
+      return currentPath ? { path: currentPath } : current;
+    });
+  }, [currentPath]);
+
+  /** 文档树/搜索结果 Alt+点击 → 在副栏打开(SP-D4 入口 2)。 */
+  const handleOpenSecondary = useCallback(
+    (path: string) => {
+      if (!splitWide) {
+        showNotice("窗口宽度不足（需 ≥1080px），无法开启分栏。");
+        return;
+      }
+      setSplitState({ path });
+      setMobileLibraryOpen(false);
+    },
+    [showNotice, splitWide],
+  );
+
+  const handleSplitDividerPointerDown = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      splitDragging.current = true;
+      event.currentTarget.setPointerCapture(event.pointerId);
+      event.preventDefault();
+    },
+    [],
+  );
+
+  const handleSplitDividerPointerMove = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!splitDragging.current) return;
+      const grid = event.currentTarget.parentElement;
+      if (!grid) return;
+      const rect = grid.getBoundingClientRect();
+      if (rect.width <= 0) return;
+      pendingSplitPos.current = clampSplitPos((event.clientX - rect.left) / rect.width);
+      // rAF 节流:拖拽期间每帧最多一次布局写入(两栏 PDF 重排的成本可控)。
+      if (splitDragFrame.current === null) {
+        splitDragFrame.current = window.requestAnimationFrame(() => {
+          splitDragFrame.current = null;
+          if (pendingSplitPos.current !== null) setSplitPos(pendingSplitPos.current);
+        });
+      }
+    },
+    [],
+  );
+
+  const handleSplitDividerPointerEnd = useCallback(
+    (event: ReactPointerEvent<HTMLDivElement>) => {
+      if (!splitDragging.current) return;
+      splitDragging.current = false;
+      if (event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.releasePointerCapture(event.pointerId);
+      }
+    },
+    [],
+  );
+
+  const handleSplitDividerKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+      event.preventDefault();
+      const delta = event.key === "ArrowLeft" ? -0.02 : 0.02;
+      setSplitPos((value) => clampSplitPos(value + delta));
+    },
+    [],
+  );
+
+  useEffect(
+    () => () => {
+      if (splitDragFrame.current !== null) cancelAnimationFrame(splitDragFrame.current);
+    },
+    [],
+  );
+
 
   const readingScrollRatio = useCallback(() => {
     const reader = readerRef.current;
@@ -2120,6 +2361,48 @@ function App() {
     }
   }, [activeView, libraryAnnotations.status, loadLibraryAnnotations, sidePanelTab]);
 
+  // 「链接」tab(plan-backlinks §3.4):首次切到 tab 时拉取;文档或库快照
+  // 变化时置 idle,下次进 tab 重拉(照抄全库 tab 的 idle 模式)。
+  const [documentLinksState, setDocumentLinksState] = useState<LinksPanelState>({
+    status: "idle",
+  });
+  const documentLinksRequest = useRef(0);
+
+  useEffect(() => {
+    documentLinksRequest.current += 1;
+    setDocumentLinksState({ status: "idle" });
+  }, [currentPath, documents]);
+
+  useEffect(() => {
+    if (sidePanelTab !== "links" || documentLinksState.status !== "idle") return;
+    if (!currentPath) return;
+    const request = ++documentLinksRequest.current;
+    setDocumentLinksState({ status: "loading" });
+    listDocumentLinks(currentPath).then(
+      (data) => {
+        if (documentLinksRequest.current === request) {
+          setDocumentLinksState({ status: "ready", data });
+        }
+      },
+      (cause: unknown) => {
+        if (documentLinksRequest.current === request) {
+          setDocumentLinksState({
+            status: "error",
+            message: cause instanceof Error ? cause.message : "链接数据读取失败",
+          });
+        }
+      },
+    );
+  }, [currentPath, documentLinksState.status, sidePanelTab]);
+
+  const handleSelectLinkDocument = useCallback(
+    (relativePath: string) => {
+      setCompactTocOpen(false);
+      void selectDocument(relativePath);
+    },
+    [selectDocument],
+  );
+
   // 方案四 A1:全库检索与筛选。检索输入 240ms 防抖(沿库搜索的既有模式),
   // 桌面走 search_annotations(FTS5 trigram),Web 由 wrapper 走同构内存过滤;
   // 类型/颜色筛选保持纯前端,与检索结果求交。
@@ -2164,6 +2447,21 @@ function App() {
   const presentDocumentPaths = useMemo(
     () => new Set(documents.map((document) => document.relativePath)),
     [documents],
+  );
+
+  // 金句卡片入口 2(M2):已有高亮/下划线的摘录,出处取所属文档标题。
+  const handleGenerateCardFromAnnotation = useCallback(
+    (annotation: Annotation) => {
+      const quote = annotation.selectedText?.trim();
+      if (!quote) return;
+      setQuoteCardSource({
+        quote,
+        sourceTitle:
+          documentTitles.get(annotation.relativePath) ?? fileName(annotation.relativePath),
+      });
+      setMarkEditor(null);
+    },
+    [documentTitles],
   );
 
   const libraryFilterActive =
@@ -2405,6 +2703,8 @@ function App() {
     setPendingSelection(null);
     setNoteDraft(null);
     setMarkEditor(null);
+    setRelatedPassages(null);
+    setCollectionsPopoverOpen(false);
     setSidePanelTab((current) => (current === "library" ? current : "toc"));
     setAnnotationPanelOpen(false);
     setMarkdownBrokenIds([]);
@@ -2912,17 +3212,25 @@ function App() {
     const onKeyDown = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey)) {
         if (event.key === "Escape") {
+          // RA-D6:朗读激活时 Esc 只负责停止朗读,优先级高于其余关闭职责。
+          if (readAloudBarOpen) {
+            stopReadAloud();
+            return;
+          }
           if (annotationTool !== "view") {
             setAnnotationTool("view");
           }
           setSettingsOpen(false);
           setStylePickerOpen(false);
           setAnnotationPanelOpen(false);
+          setCollectionsPopoverOpen(false);
           setCompactTocOpen(false);
           setMobileLibraryOpen(false);
           setPendingSelection(null);
           setNoteDraft(null);
           setMarkEditor(null);
+          setQuoteCardSource(null);
+          closeRelatedPassages();
           clearRelocatePreview();
         }
         return;
@@ -2966,7 +3274,10 @@ function App() {
     currentPath,
     handleCreateBookmark,
     handleUndoAnnotation,
+    closeRelatedPassages,
+    readAloudBarOpen,
     setAnnotationTool,
+    stopReadAloud,
   ]);
 
   useEffect(() => {
@@ -3220,6 +3531,13 @@ function App() {
     return () => cancelMotion(element, "status-change");
   }, [motionLevel, statusDetail]);
 
+  // 文章级 error boundary 的恢复动作:boundary 已卸载出错子树,这里再从
+  // backend 重读当前文档,重挂后即是全新内容与全新 DOM。
+  const handleArticleRetry = useCallback(() => {
+    const path = useReaderStore.getState().currentPath;
+    if (path) void useReaderStore.getState().selectDocument(path);
+  }, []);
+
   const handleRetryIndex = useCallback(async () => {
     const succeeded = await retryCurrentDocumentIndex();
     if (succeeded) {
@@ -3315,7 +3633,19 @@ function App() {
         </header>
 
         <div className="sidebar-content">
-          <DocumentTree />
+          {snapshot && !searchQuery.trim() && (
+            <CollectionsSection
+              rootPath={snapshot.rootPath}
+              documents={documents}
+              refreshToken={collectionsVersion}
+              onNotice={showNotice}
+              onSelectDocument={(path) => {
+                setMobileLibraryOpen(false);
+                void selectDocument(path);
+              }}
+            />
+          )}
+          <DocumentTree onOpenSecondary={handleOpenSecondary} />
         </div>
 
         <footer className="sidebar-footer">
@@ -3435,6 +3765,25 @@ function App() {
               </button>
             )}
             {currentContent && !overlayViewOpen && (
+              <button
+                className={`icon-button${splitState ? " is-armed" : ""}`}
+                type="button"
+                aria-label={splitState ? "退出分栏对照" : "开启分栏对照"}
+                title={
+                  splitState
+                    ? "退出分栏对照"
+                    : splitWide
+                      ? "分栏对照（默认打开当前文档；文档树 Alt+点击可在右侧打开）"
+                      : "窗口过窄，无法开启分栏（需 ≥1080px）"
+                }
+                aria-pressed={Boolean(splitState)}
+                disabled={!splitState && !splitWide}
+                onClick={handleToggleSplit}
+              >
+                <Columns2 size={16} aria-hidden="true" />
+              </button>
+            )}
+            {currentContent && !overlayViewOpen && (
               <>
                 <button
                   className={`icon-button${annotationTool !== "view" ? " is-armed" : ""}`}
@@ -3471,6 +3820,45 @@ function App() {
                 />
               </>
             )}
+            {currentContent && currentPath && !overlayViewOpen && (
+              <>
+                <button
+                  className={`icon-button${collectionsPopoverOpen ? " is-armed" : ""}`}
+                  type="button"
+                  aria-label="加入合集"
+                  title="把当前文档加入合集"
+                  aria-expanded={collectionsPopoverOpen}
+                  onClick={() => {
+                    setCollectionsPopoverOpen((open) => !open);
+                    setSettingsOpen(false);
+                    setAnnotationPanelOpen(false);
+                  }}
+                >
+                  <FolderPlus size={16} aria-hidden="true" />
+                </button>
+                {collectionsPopoverOpen && (
+                  <CollectionMembershipPopover
+                    currentPath={currentPath}
+                    onClose={() => setCollectionsPopoverOpen(false)}
+                    onChanged={() => setCollectionsVersion((version) => version + 1)}
+                    onNotice={showNotice}
+                  />
+                )}
+              </>
+            )}
+            {currentContent && !overlayViewOpen && (
+              <button
+                className={`icon-button${readAloud.barOpen ? " is-armed" : ""}`}
+                type="button"
+                aria-label={readAloud.barOpen ? "停止朗读" : "朗读正文"}
+                title={readAloudDisabledReason ?? (readAloud.barOpen ? "停止朗读" : "朗读正文（仅本地语音）")}
+                aria-pressed={readAloud.barOpen}
+                disabled={Boolean(readAloudDisabledReason)}
+                onClick={handleReadAloudButton}
+              >
+                <AudioLines size={16} aria-hidden="true" />
+              </button>
+            )}
             <button
               className="icon-button"
               type="button"
@@ -3496,9 +3884,23 @@ function App() {
         </header>
 
         {currentContent && currentDocument ? (
-          <div className="content-grid" hidden={overlayViewOpen}>
+          <div
+            className="content-grid"
+            hidden={overlayViewOpen}
+            {...(splitActive
+              ? {
+                  "data-split": "true",
+                  style: {
+                    "--split-pos": `${(splitPos * 100).toFixed(2)}%`,
+                  } as CSSProperties,
+                }
+              : {})}
+          >
             <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
+                {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,
+                    不再把整个应用打成白屏(chrome、面板、侧栏都在边界外)。 */}
+                <ArticleErrorBoundary resetKey={currentPath} onRetry={handleArticleRetry}>
                 <header className="article-header">
                   <div className="article-kicker">{currentContent.kind === "pdf" ? "Portable document" : currentContent.kind === "epub" ? "Reflowable book" : "Markdown document"}</div>
                   <h1 className="article-title">{currentDocument.title}</h1>
@@ -3560,8 +3962,50 @@ function App() {
                   onTocChange={handleTocChange}
                   onActiveChange={handleActiveHeadingChange}
                 />}
+                </ArticleErrorBoundary>
               </div>
             </div>
+
+            {splitActive && splitState && (
+              <>
+                <div
+                  className="split-divider"
+                  role="separator"
+                  aria-orientation="vertical"
+                  aria-label="调整分栏比例"
+                  aria-valuemin={30}
+                  aria-valuemax={70}
+                  aria-valuenow={Math.round(splitPos * 100)}
+                  tabIndex={0}
+                  title="拖拽或用 ←/→ 调整主栏宽度（30%–70%）"
+                  onPointerDown={handleSplitDividerPointerDown}
+                  onPointerMove={handleSplitDividerPointerMove}
+                  onPointerUp={handleSplitDividerPointerEnd}
+                  onPointerCancel={handleSplitDividerPointerEnd}
+                  onKeyDown={handleSplitDividerKeyDown}
+                />
+                <Suspense
+                  fallback={
+                    <section className="secondary-pane" aria-label="副栏阅读">
+                      <div className="secondary-pane-state" role="status">
+                        <span className="spinner" aria-hidden="true" />
+                        正在加载副栏…
+                      </div>
+                    </section>
+                  }
+                >
+                  <SecondaryPane
+                    path={splitState.path}
+                    documents={documents}
+                    motionLevel={motionLevel}
+                    scrollMemory={paneScrollMemory.current}
+                    pdfPositionMemory={panePdfMemory.current}
+                    onClose={() => setSplitState(null)}
+                    onPathChange={(path) => setSplitState({ path })}
+                  />
+                </Suspense>
+              </>
+            )}
 
             <aside className="toc-panel" aria-label="本文目录与标注">
               <SidePanel
@@ -3585,7 +4029,10 @@ function App() {
                 onEditAnnotationNote={handleEditAnnotationNote}
                 onChangeAnnotationColor={(annotation, color) => void handleChangeAnnotationColor(annotation, color)}
                 onRelocateAnnotation={handleRelocateAnnotation}
+                onGenerateAnnotationCard={handleGenerateCardFromAnnotation}
                 onClearAnnotations={() => void handleClearAnnotations()}
+                linksState={documentLinksState}
+                onSelectLinkDocument={handleSelectLinkDocument}
                 libraryStatus={libraryAnnotations.status}
                 libraryGroups={libraryGroups}
                 libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
@@ -3738,7 +4185,13 @@ function App() {
               setCompactTocOpen(false);
               handleRelocateAnnotation(annotation);
             }}
+            onGenerateAnnotationCard={(annotation) => {
+              setCompactTocOpen(false);
+              handleGenerateCardFromAnnotation(annotation);
+            }}
             onClearAnnotations={() => void handleClearAnnotations()}
+            linksState={documentLinksState}
+            onSelectLinkDocument={handleSelectLinkDocument}
             libraryStatus={libraryAnnotations.status}
             libraryGroups={libraryGroups}
             libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
@@ -3771,9 +4224,22 @@ function App() {
           onUnderline={() => void handleSaveUnderline()}
           onAddNote={() => void handleSaveHighlight(true)}
           onBookmark={() => void handleCreateBookmark()}
+          onMakeCard={handleMakeCardFromSelection}
+          onFindRelated={handleFindRelated}
+          canFindRelated={canFindRelated}
           onClose={closeToolbar}
           canHighlight={Boolean(pendingSelection)}
         />
+
+        {relatedPassages && (
+          <RelatedPassagesPopover
+            state={relatedPassages}
+            x={relatedPassages.x}
+            y={relatedPassages.y}
+            onSelect={handleSelectRelated}
+            onClose={closeRelatedPassages}
+          />
+        )}
 
         {markEditorAnnotation && markEditor && (
           <AnnotationEditBubble
@@ -3789,7 +4255,36 @@ function App() {
               void handleDeleteAnnotation(annotation);
               setMarkEditor(null);
             }}
+            onGenerateCard={handleGenerateCardFromAnnotation}
             onClose={() => setMarkEditor(null)}
+          />
+        )}
+
+        {quoteCardSource && (
+          <Suspense fallback={null}>
+            <QuoteCardDialog
+              source={quoteCardSource}
+              onClose={() => setQuoteCardSource(null)}
+              onNotice={showNotice}
+            />
+          </Suspense>
+        )}
+
+        {readAloud.barOpen && !overlayViewOpen && (
+          <ReadAloudBar
+            status={readAloud.status}
+            sentenceIndex={readAloud.sentenceIndex}
+            sentenceCount={readAloud.sentenceCount}
+            rate={ttsRate}
+            voices={readAloud.voices}
+            voiceName={readAloud.voice?.name ?? ""}
+            onToggle={readAloud.toggle}
+            onPrevious={readAloud.previous}
+            onNext={readAloud.next}
+            onRestart={readAloud.startFromTop}
+            onRateChange={setTtsRate}
+            onVoiceChange={setTtsVoiceName}
+            onStop={readAloud.stop}
           />
         )}
 

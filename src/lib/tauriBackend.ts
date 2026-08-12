@@ -5,10 +5,14 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   Annotation,
   AssetPayload,
+  Collection,
+  CollectionItem,
+  CollectionSummary,
   DocumentContent,
   DocumentFingerprintEntry,
   DocumentIndexEvent,
   DocumentInfo,
+  DocumentLinks,
   IndexProgress,
   MovedDocumentCandidate,
   PdfReadingMode,
@@ -42,6 +46,16 @@ export async function readEpubAsset(relativePath: string, assetId: number): Prom
 export function retryDocumentIndex(relativePath: string): Promise<void> { return invoke("retry_document_index", { relativePath }); }
 export function clearConversionCache(): Promise<void> { return invoke("clear_conversion_cache"); }
 export function searchDocuments(query: string, limit: number): Promise<SearchResult[]> { return invoke("search_documents", { query, limit }); }
+export function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
+  return invoke("list_document_links", { relativePath });
+}
+export function findRelatedPassages(
+  text: string,
+  excludePath: string | null,
+  limit: number,
+): Promise<SearchResult[]> {
+  return invoke("find_related_passages", { text, excludePath, limit });
+}
 export function readAsset(relativePath: string): Promise<AssetPayload> { return invoke("read_asset", { relativePath }); }
 export function listAnnotations(relativePath: string | null): Promise<Annotation[]> {
   return invoke("list_annotations", { relativePath });
@@ -80,6 +94,39 @@ export function reviewSummary(dayStartMs: number, nowMs: number): Promise<Review
 }
 export function searchAnnotations(query: string, limit: number): Promise<Annotation[]> {
   return invoke("search_annotations", { query, limit });
+}
+export function listCollections(): Promise<CollectionSummary[]> {
+  return invoke("list_collections");
+}
+export function createCollection(id: string, name: string): Promise<Collection> {
+  return invoke("create_collection", { id, name });
+}
+export function renameCollection(id: string, name: string): Promise<void> {
+  return invoke("rename_collection", { id, name });
+}
+export function deleteCollection(id: string): Promise<void> {
+  return invoke("delete_collection", { id });
+}
+export function listCollectionItems(collectionId: string): Promise<CollectionItem[]> {
+  return invoke("list_collection_items", { collectionId });
+}
+export function addCollectionItem(
+  collectionId: string,
+  relativePath: string,
+): Promise<CollectionItem> {
+  return invoke("add_collection_item", { collectionId, relativePath });
+}
+export function removeCollectionItem(
+  collectionId: string,
+  relativePath: string,
+): Promise<void> {
+  return invoke("remove_collection_item", { collectionId, relativePath });
+}
+export function reorderCollectionItems(
+  collectionId: string,
+  orderedPaths: string[],
+): Promise<void> {
+  return invoke("reorder_collection_items", { collectionId, orderedPaths });
 }
 export function listAnnotationsForTransfer(): Promise<Annotation[]> {
   return invoke("list_annotations_for_transfer");

@@ -8,9 +8,8 @@
 /** Same read cap as the desktop import command (32 MiB). */
 export const MAX_IMPORT_FILE_BYTES = 32 * 1024 * 1024;
 
-/** Triggers a text download via a temporary object URL. */
-export function downloadTextFile(fileName: string, contents: string, mimeType: string): void {
-  const blob = new Blob([contents], { type: mimeType });
+/** Triggers a Blob download via a temporary object URL (quote card PNGs, …). */
+export function downloadBlobFile(fileName: string, blob: Blob): void {
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement("a");
   anchor.href = url;
@@ -25,6 +24,11 @@ export function downloadTextFile(fileName: string, contents: string, mimeType: s
     // task avoids racing slower engines.
     setTimeout(() => URL.revokeObjectURL(url), 0);
   }
+}
+
+/** Triggers a text download via a temporary object URL. */
+export function downloadTextFile(fileName: string, contents: string, mimeType: string): void {
+  downloadBlobFile(fileName, new Blob([contents], { type: mimeType }));
 }
 
 export interface PickedTextFile {

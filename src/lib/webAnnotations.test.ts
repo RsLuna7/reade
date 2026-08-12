@@ -224,9 +224,10 @@ describe("v1 → v2 upgrade", () => {
     expect(byId.get("ann-markdown")?.locator).toEqual(legacy[0].locator);
 
     const db = await openRaw();
-    expect(db.version).toBe(4);
+    // The chain continues to the current version (v5 adds collections).
+    expect(db.version).toBe(5);
     expect([...db.objectStoreNames].sort()).toEqual(
-      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE].sort(),
+      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE, "collections", "collectionItems"].sort(),
     );
     db.close();
   });
@@ -541,9 +542,10 @@ describe("v3 → v4 upgrade", () => {
     expect(listed.map((item) => item.id)).toEqual(["ann-v3"]);
 
     const db = await openRaw();
-    expect(db.version).toBe(4);
+    // The chain continues to the current version (v5 adds collections).
+    expect(db.version).toBe(5);
     expect([...db.objectStoreNames].sort()).toEqual(
-      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE].sort(),
+      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE, "collections", "collectionItems"].sort(),
     );
     db.close();
     // No backfill: the reviews store starts empty (lazy initial state).

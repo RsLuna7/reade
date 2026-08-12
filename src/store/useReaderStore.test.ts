@@ -427,6 +427,28 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().dailyGoalMinutes).toBe(0);
   });
 
+  it("persists and clamps the read-aloud rate and voice preferences", () => {
+    useReaderStore.getState().setTtsRate(1.4);
+    useReaderStore.getState().setTtsVoiceName("Microsoft Huihui");
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({
+      ttsRate: 1.4,
+      ttsVoiceName: "Microsoft Huihui",
+    });
+
+    useReaderStore.getState().setTtsRate(9);
+    expect(useReaderStore.getState().ttsRate).toBe(2);
+    useReaderStore.getState().setTtsRate(0.1);
+    expect(useReaderStore.getState().ttsRate).toBe(0.5);
+    useReaderStore.getState().setTtsRate(Number.NaN);
+    expect(useReaderStore.getState().ttsRate).toBe(1);
+    // 空字符串回落为"自动挑选"。
+    useReaderStore.getState().setTtsVoiceName("");
+    expect(useReaderStore.getState().ttsVoiceName).toBeNull();
+  });
+
   it("switches the workspace view and normalizes unknown values", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
     useReaderStore.getState().setActiveView("stats");

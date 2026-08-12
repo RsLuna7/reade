@@ -25,7 +25,15 @@ function collectVisibleItems(
   return items;
 }
 
-export function DocumentTree() {
+export interface DocumentTreeProps {
+  /**
+   * Alt+点击文档/搜索结果 → 在右侧副栏打开(plan-split-view SP-D4)。
+   * 未传入时行为与传统单栏完全一致。
+   */
+  onOpenSecondary?: (path: string) => void;
+}
+
+export function DocumentTree({ onOpenSecondary }: DocumentTreeProps = {}) {
   const documents = useReaderStore((state) => state.documents);
   const currentPath = useReaderStore((state) => state.currentPath);
   const searchQuery = useReaderStore((state) => state.searchQuery);
@@ -141,6 +149,7 @@ export function DocumentTree() {
       case " ":
         event.preventDefault();
         if (item.node.kind === "directory") toggleDirectory(item.node.path);
+        else if (event.altKey && onOpenSecondary) onOpenSecondary(item.node.path);
         else void selectDocument(item.node.path);
         break;
     }
@@ -169,14 +178,18 @@ export function DocumentTree() {
               className={`document-tree__item${isCurrent ? " document-tree__item--current" : ""}`}
               type="button"
               tabIndex={focusedId === node.id ? 0 : -1}
+              title={
+                !isDirectory && onOpenSecondary ? "Alt+点击在右侧分栏打开" : undefined
+              }
               ref={(element) => {
                 if (element) itemRefs.current.set(node.id, element);
                 else itemRefs.current.delete(node.id);
               }}
               onFocus={() => setFocusedId(node.id)}
               onKeyDown={(event) => handleTreeKeyDown(event, item)}
-              onClick={() => {
+              onClick={(event) => {
                 if (isDirectory) toggleDirectory(node.path);
+                else if (event.altKey && onOpenSecondary) onOpenSecondary(node.path);
                 else void selectDocument(node.path);
               }}
             >
@@ -215,7 +228,14 @@ export function DocumentTree() {
                     className={`document-tree__result-button${isCurrent ? " document-tree__result-button--current" : ""}`}
                     type="button"
                     aria-current={isCurrent ? "page" : undefined}
-                    onClick={() => void selectDocument(result.relativePath, result.locator)}
+                    title={onOpenSecondary ? "Alt+点击在右侧分栏打开" : undefined}
+                    onClick={(event) => {
+                      if (event.altKey && onOpenSecondary) {
+                        onOpenSecondary(result.relativePath);
+                        return;
+                      }
+                      void selectDocument(result.relativePath, result.locator);
+                    }}
                   >
                     <span className="document-tree__result-title">{result.title}</span>
                     <span className="document-tree__result-path">{result.relativePath}</span>

@@ -4,6 +4,19 @@ import type {
   DocumentInfo,
   SearchResult,
 } from "./backend";
+import {
+  buildDocumentLinks,
+  extractDocumentLinks,
+  WEB_LINKS_DISABLED_MESSAGE,
+  WEB_LINKS_MAX_DOCUMENTS,
+  type DocumentLinks,
+  type ExtractedLink,
+} from "./documentLinks";
+import {
+  extractRelatedFragments,
+  RELATED_DEFAULT_LIMIT,
+  RELATED_MAX_LIMIT,
+} from "./relatedFragments";
 
 // Relative to the document so GitHub project pages (/owner/repo/) and user
 // pages (/owner/) resolve the same generated library directory correctly.
@@ -283,6 +296,67 @@ export function searchWebDocuments(
     .slice(0, resultLimit);
 }
 
+function compareRelativePaths(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/**
+ * Web twin of `find_related_passages` (RP-D5): the shared fragment
+ * contract feeds a lowercase substring count — `score = Σ min(count, 3) ×
+ * fragment length` — over `search.json` contents. Substring semantics
+ * match the desktop trigram index; only the scoring formula differs (a
+ * documented divergence, like library search itself). Locators are always
+ * null (web markdown has no finer segments).
+ */
+export function findRelatedWebPassages(
+  documents: WebSearchDocument[],
+  text: string,
+  excludePath: string | null = null,
+  limit = RELATED_DEFAULT_LIMIT,
+): SearchResult[] {
+  const fragments = extractRelatedFragments(text);
+  if (fragments.length === 0) return [];
+  const resultLimit = Number.isFinite(limit)
+    ? Math.min(Math.max(Math.trunc(limit), 1), RELATED_MAX_LIMIT)
+    : RELATED_DEFAULT_LIMIT;
+  const lowered = fragments.map((fragment) => ({
+    fragment: fragment.toLowerCase(),
+    length: Array.from(fragment).length,
+  }));
+  return documents
+    .flatMap((document): SearchResult[] => {
+      if (document.relativePath === excludePath) return [];
+      const content = document.content.toLowerCase();
+      let score = 0;
+      const matched: string[] = [];
+      for (const { fragment, length } of lowered) {
+        const count = countMatches(content, fragment);
+        if (count > 0) {
+          score += Math.min(count, 3) * length;
+          matched.push(fragment);
+        }
+      }
+      if (score <= 0) return [];
+      return [{
+        resultId: `web:${document.relativePath}`,
+        relativePath: document.relativePath,
+        title: document.title,
+        snippet: searchSnippet(document.content, matched),
+        score,
+        format: document.relativePath.toLocaleLowerCase("en").endsWith(".mdx")
+          ? "mdx"
+          : "markdown",
+        locator: null,
+      }];
+    })
+    .sort(
+      (left, right) =>
+        right.score - left.score ||
+        compareRelativePaths(left.relativePath, right.relativePath),
+    )
+    .slice(0, resultLimit);
+}
+
 function bytesToBase64(bytes: Uint8Array): string {
   const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   const chunks: string[] = [];
@@ -312,6 +386,11 @@ export class WebLibraryClient {
   private readonly fetcher: typeof fetch;
   private manifest: WebLibraryManifest | null = null;
   private searchIndex: WebSearchIndex | null = null;
+  /** Extracted links per source, cached per search index (BL-D4). */
+  private linksIndex: {
+    source: WebSearchIndex;
+    links: Map<string, ExtractedLink[]>;
+  } | null = null;
 
   constructor(options: WebLibraryClientOptions = {}) {
     this.baseUrl = normalizeWebLibraryBaseUrl(
@@ -358,8 +437,44 @@ export class WebLibraryClient {
     return searchWebDocuments(index.documents, query, limit);
   }
 
+  /**
+   * Web twin of `list_document_links`: runs the shared extractor over the
+   * full `search.json` corpus (cached until the next refresh) and
+   * aggregates with `buildDocumentLinks`. Libraries beyond
+   * `WEB_LINKS_MAX_DOCUMENTS` documents throw the exported degradation
+   * message instead of computing (BL-D4).
+   */
+  async documentLinks(relativePath: string): Promise<DocumentLinks> {
+    const index = await this.loadSearchIndex();
+    if (index.documents.length > WEB_LINKS_MAX_DOCUMENTS) {
+      throw new Error(WEB_LINKS_DISABLED_MESSAGE);
+    }
+    if (!this.linksIndex || this.linksIndex.source !== index) {
+      const links = new Map<string, ExtractedLink[]>();
+      for (const document of index.documents) {
+        links.set(
+          document.relativePath,
+          extractDocumentLinks(document.relativePath, document.content),
+        );
+      }
+      this.linksIndex = { source: index, links };
+    }
+    return buildDocumentLinks(relativePath, this.linksIndex.links, index.documents);
+  }
+
+  /** Web twin of `find_related_passages` over the search index. */
+  async relatedPassages(
+    text: string,
+    excludePath: string | null = null,
+    limit = RELATED_DEFAULT_LIMIT,
+  ): Promise<SearchResult[]> {
+    const index = await this.loadSearchIndex();
+    return findRelatedWebPassages(index.documents, text, excludePath, limit);
+  }
+
   clearCache(): void {
     this.manifest = null;
     this.searchIndex = null;
+    this.linksIndex = null;
   }
 }

@@ -38,6 +38,12 @@ interface SelectionToolbarProps {
   onUnderline: () => void;
   onAddNote: () => void;
   onBookmark: () => void;
+  /** 金句卡片入口(QC-D5):选区文本生成引文卡片。未传时不渲染按钮。 */
+  onMakeCard?: () => void;
+  /** 相关段落入口(RP-D4)。未传时不渲染按钮。 */
+  onFindRelated?: () => void;
+  /** 选区 ≥ RELATED_MIN_SELECTION_CHARS 时可用,不足禁用并提示。 */
+  canFindRelated?: boolean;
   onClose: () => void;
   canHighlight: boolean;
 }
@@ -52,6 +58,9 @@ export function SelectionToolbar({
   onUnderline,
   onAddNote,
   onBookmark,
+  onMakeCard,
+  onFindRelated,
+  canFindRelated = false,
   onClose,
   canHighlight,
 }: SelectionToolbarProps) {
@@ -89,11 +98,31 @@ export function SelectionToolbar({
       <button type="button" onClick={onBookmark}>
         书签
       </button>
+      {onFindRelated ? (
+        <button
+          type="button"
+          disabled={!canFindRelated}
+          title={canFindRelated ? "在全库中寻找相关段落" : "至少选中 8 个字符"}
+          onClick={onFindRelated}
+        >
+          相关
+        </button>
+      ) : null}
+      {onMakeCard ? (
+        <button type="button" disabled={!canHighlight} onClick={onMakeCard}>
+          卡片
+        </button>
+      ) : null}
       <button type="button" className="annotation-toolbar-close" aria-label="关闭标注工具条" onClick={onClose}>
         ×
       </button>
     </div>
   );
+}
+
+/** 有摘录文本的高亮/下划线才能生成金句卡片(书签无摘录,QC-D3)。 */
+export function annotationSupportsCard(annotation: Annotation): boolean {
+  return isAnnotationMarkKind(annotation.kind) && Boolean(annotation.selectedText?.trim());
 }
 
 interface AnnotationEditBubbleProps {
@@ -103,6 +132,8 @@ interface AnnotationEditBubbleProps {
   onChangeColor: (annotation: Annotation, color: AnnotationColor) => void;
   onEditNote: (annotation: Annotation) => void;
   onDelete: (annotation: Annotation) => void;
+  /** 金句卡片入口(QC-D3 M2):从已有摘录生成卡片。未传时不渲染。 */
+  onGenerateCard?: (annotation: Annotation) => void;
   onClose: () => void;
 }
 
@@ -114,6 +145,7 @@ export function AnnotationEditBubble({
   onChangeColor,
   onEditNote,
   onDelete,
+  onGenerateCard,
   onClose,
 }: AnnotationEditBubbleProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -164,6 +196,11 @@ export function AnnotationEditBubble({
         <button type="button" onClick={() => onEditNote(annotation)}>
           笔记
         </button>
+        {onGenerateCard && annotationSupportsCard(annotation) ? (
+          <button type="button" onClick={() => onGenerateCard(annotation)}>
+            卡片
+          </button>
+        ) : null}
         <button type="button" onClick={() => onDelete(annotation)}>
           删除
         </button>
@@ -282,6 +319,8 @@ interface AnnotationListProps {
   onChangeColor?: (annotation: Annotation, color: AnnotationColor) => void;
   /** "在文档中定位此文本" for unanchored quote-bearing annotations (§5.6 B). */
   onRelocate?: (annotation: Annotation) => void;
+  /** 金句卡片入口(QC-D3 M2):仅对有摘录的高亮/下划线显示。 */
+  onGenerateCard?: (annotation: Annotation) => void;
   onClearAll?: () => void;
 }
 
@@ -298,6 +337,7 @@ export function AnnotationList({
   onEditNote,
   onChangeColor,
   onRelocate,
+  onGenerateCard,
   onClearAll,
 }: AnnotationListProps) {
   if (loading) {
@@ -365,6 +405,15 @@ export function AnnotationList({
               onClick={() => onRelocate(annotation)}
             >
               重新定位
+            </button>
+          ) : null}
+          {onGenerateCard && annotationSupportsCard(annotation) ? (
+            <button
+              type="button"
+              title="用这段摘录生成金句卡片"
+              onClick={() => onGenerateCard(annotation)}
+            >
+              卡片
             </button>
           ) : null}
           <button type="button" onClick={() => onEditNote(annotation)}>

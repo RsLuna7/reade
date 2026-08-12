@@ -957,6 +957,113 @@ a:focus-visible {
   grid-template-columns: minmax(0, 1fr) var(--toc-width);
 }
 
+/* 分栏对照(plan-split-view §3.1):主栏轨道 30–70%,--split-pos 由分割条写入;
+   --reader-measure 继续管每栏内正文上限,两者正交(SP-D5)。 */
+.content-grid[data-split="true"] {
+  grid-template-columns: clamp(30%, var(--split-pos, 50%), 70%) 6px minmax(0, 1fr) var(--toc-width);
+}
+
+.split-divider {
+  cursor: col-resize;
+  background: var(--line);
+  touch-action: none;
+}
+
+.split-divider:hover,
+.split-divider:focus-visible {
+  background: var(--line-strong);
+  outline: none;
+}
+
+/* 副栏(SP-D1):自包含降级阅读面;滚动根自带 .reading-scroll。 */
+.secondary-pane {
+  display: flex;
+  overflow: hidden;
+  min-width: 0;
+  min-height: 0;
+  flex-direction: column;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 97%, var(--chrome));
+}
+
+.secondary-pane-header {
+  display: flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+}
+
+.secondary-pane-title {
+  overflow: hidden;
+  flex: 1;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.secondary-pane-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: none;
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+}
+
+.secondary-pane-close:hover {
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent-soft) 50%, transparent);
+}
+
+.secondary-pane-notice {
+  flex-shrink: 0;
+  padding: 6px 12px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+  font-size: 12px;
+}
+
+.secondary-pane-scroll {
+  flex: 1;
+}
+
+.secondary-pane-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 32px 16px;
+  color: var(--muted);
+  font-size: 13px;
+  flex-direction: column;
+}
+
+.secondary-pane-state--error {
+  color: var(--accent-ink);
+}
+
+.secondary-pane-state button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.secondary-pane-article {
+  padding-bottom: 48px;
+}
+
 .reading-scroll {
   min-width: 0;
   min-height: 0;
@@ -1053,6 +1160,37 @@ a:focus-visible {
   font-size: 11px;
 }
 .article-index-status button { margin-left: auto; border: 0; color: var(--accent); background: transparent; cursor: pointer; }
+
+/* 文章级 error boundary 的可恢复错误卡(单点渲染错误不再拖垮整个应用)。 */
+.article-error-card {
+  display: grid;
+  max-width: 520px;
+  margin: 56px auto;
+  padding: 22px 26px;
+  gap: 10px;
+  justify-items: start;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--chrome);
+}
+.article-error-card strong { font-size: 15px; }
+.article-error-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.article-error-card button {
+  padding: 7px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--paper);
+  font-size: 13px;
+  cursor: pointer;
+}
+.article-error-card button:hover { border-color: var(--accent); }
 
 .article-shell--pdf { max-width: none; padding-right: 28px; padding-left: 28px; }
 .article-shell--pdf .article-header { max-width: 920px; margin-right: auto; margin-left: auto; }
@@ -2493,6 +2631,16 @@ a:focus-visible {
 .annotation-mark--underline.annotation-mark--blue { border-bottom-color: rgb(50 120 220); }
 .annotation-mark--underline.annotation-mark--pink { border-bottom-color: rgb(220 70 140); }
 
+/* 朗读当前句(RA-D3 修订):CSS Custom Highlight,零 DOM 变异——React
+   重渲不可能再与句高亮冲突(P1 insertBefore 崩溃的根修复)。仍是选区色
+   语义的瞬时状态:--selection 从原始元素继承,四主题系列自动适配;与
+   批注 mark 叠加时高亮罩在四色底之上,视觉可辨。highlight 伪元素只支持
+   文字级属性,原 box-shadow 光晕不再保留;不支持该 API 的运行时无视觉
+   高亮,仅保留滚动跟随(useReadAloud 的降级路径)。 */
+::highlight(reade-tts-active) {
+  background-color: var(--selection);
+}
+
 .annotation-note-editor {
   position: fixed;
   right: 24px;
@@ -2538,6 +2686,678 @@ a:focus-visible {
   border-radius: 8px;
   background: var(--paper);
   font-size: 12px;
+}
+
+/* 朗读控制条(plan-read-aloud §3.6):阅读区底部浮动,与重定位确认条同位。 */
+.read-aloud-bar {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 44;
+  display: grid;
+  gap: 8px;
+  width: min(420px, calc(100vw - 48px));
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+}
+
+.read-aloud-transport {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.read-aloud-transport button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 28px;
+  padding: 5px 7px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.read-aloud-transport .read-aloud-toggle {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-soft) 80%, transparent);
+}
+
+.read-aloud-transport .read-aloud-restart {
+  white-space: nowrap;
+}
+
+.read-aloud-progress {
+  overflow: hidden;
+  flex: 1;
+  color: var(--muted);
+  font-size: 12px;
+  text-align: center;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.read-aloud-settings {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.read-aloud-rate {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.read-aloud-rate strong {
+  color: var(--ink-soft);
+  font-weight: 600;
+}
+
+.read-aloud-rate input[type="range"] {
+  flex: 1;
+  min-width: 60px;
+}
+
+.read-aloud-voice {
+  display: flex;
+  overflow: hidden;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.read-aloud-voice select {
+  overflow: hidden;
+  max-width: 150px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 12px;
+  text-overflow: ellipsis;
+}
+
+/* 合集分区(CO-D1):文档树上方,搜索时由 App 隐藏。 */
+.collections-section {
+  display: grid;
+  gap: 4px;
+  padding: 10px 10px 6px;
+  border-bottom: 1px solid var(--line);
+}
+
+.collections-header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.collections-toggle {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 6px;
+  border: none;
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.08em;
+  text-align: left;
+}
+
+.collections-toggle:hover {
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.collections-create {
+  width: 24px;
+  height: 24px;
+}
+
+.collections-create-row {
+  display: flex;
+  gap: 6px;
+  padding: 2px 4px;
+}
+
+.collections-create-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.collections-create-row button {
+  flex-shrink: 0;
+  padding: 4px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.collections-empty {
+  margin: 0;
+  padding: 4px 8px 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.collections-list {
+  display: grid;
+  margin: 0;
+  padding: 0 0 4px;
+  gap: 2px;
+  list-style: none;
+}
+
+.collection-row {
+  display: flex;
+  align-items: center;
+}
+
+.collection-name {
+  display: flex;
+  overflow: hidden;
+  flex: 1;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 6px;
+  border: none;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.collection-name:hover {
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.collection-title {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-health {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.collection-actions {
+  display: flex;
+  gap: 6px;
+  padding: 0 8px 4px 22px;
+}
+
+.collection-actions button {
+  padding: 2px 8px;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+}
+
+.collection-actions button:hover {
+  color: var(--ink-soft);
+  border-color: var(--line-strong);
+}
+
+.collection-items {
+  display: grid;
+  margin: 0 0 4px;
+  padding: 0 0 0 14px;
+  gap: 1px;
+  list-style: none;
+}
+
+.collection-item {
+  display: flex;
+  align-items: center;
+  border-radius: 8px;
+}
+
+.collection-item:hover,
+.collection-item:focus-within {
+  background: color-mix(in srgb, var(--accent-soft) 34%, transparent);
+}
+
+.collection-item-main {
+  display: flex;
+  overflow: hidden;
+  flex: 1;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+  text-align: left;
+}
+
+.collection-item--missing .collection-item-main {
+  opacity: 0.5;
+}
+
+.collection-item-title {
+  overflow: hidden;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.collection-item-progress {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+  font-size: 10.5px;
+}
+
+.collection-item-actions {
+  display: none;
+  flex-shrink: 0;
+  gap: 2px;
+  padding-right: 4px;
+}
+
+.collection-item:hover .collection-item-actions,
+.collection-item:focus-within .collection-item-actions {
+  display: inline-flex;
+}
+
+.collection-item-actions button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  color: var(--muted);
+  background: var(--paper);
+  font-size: 11px;
+}
+
+.collection-item-actions button:disabled {
+  opacity: 0.4;
+}
+
+/* 加入合集 popover(CO-D2):挂 topbar-actions,复用 settings-popover 定位。 */
+.collections-popover {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  z-index: 10;
+  display: grid;
+  gap: 10px;
+  width: min(300px, calc(100vw - 32px));
+  max-height: min(420px, calc(100vh - 96px));
+  padding: 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.collections-popover .settings-heading {
+  margin: 0;
+}
+
+.collections-membership {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 4px;
+  list-style: none;
+}
+
+.collections-membership label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px;
+  border-radius: 8px;
+  color: var(--ink-soft);
+  font-size: 12.5px;
+}
+
+.collections-membership label:hover {
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+/* 「链接」tab(BL-D3):反链/出链列表与断链计数。 */
+.links-panel {
+  display: grid;
+  gap: 14px;
+  padding: 10px 2px 20px;
+}
+
+.links-panel-broken {
+  margin: 0;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+  font-size: 12px;
+}
+
+.links-panel-section {
+  display: grid;
+  gap: 6px;
+}
+
+.links-panel-heading {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.links-panel-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 4px;
+  list-style: none;
+}
+
+.links-panel-entry {
+  display: grid;
+  width: 100%;
+  gap: 3px;
+  padding: 7px 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+
+button.links-panel-entry:hover,
+button.links-panel-entry:focus-visible {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.links-panel-entry--static {
+  opacity: 0.62;
+}
+
+.links-panel-entry-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.links-panel-entry-title {
+  overflow: hidden;
+  flex: 1;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.links-panel-entry-excerpt {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.links-panel-tag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.links-panel-tag--missing {
+  color: var(--accent-ink);
+}
+
+/* 相关段落浮层(RP-D4):贴工具条位置,结果行复用搜索结果的信息结构。 */
+.related-passages-popover {
+  position: fixed;
+  z-index: 41;
+  display: grid;
+  gap: 8px;
+  width: min(400px, calc(100vw - 24px));
+  max-height: min(420px, calc(100vh - 48px));
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.related-passages-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.related-passages-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 10px 2px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.related-passages-state--error {
+  color: var(--accent-ink);
+}
+
+.related-passages-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 4px;
+  list-style: none;
+}
+
+.related-passage {
+  display: grid;
+  width: 100%;
+  gap: 4px;
+  padding: 8px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  background: transparent;
+  text-align: left;
+}
+
+.related-passage:hover,
+.related-passage:focus-visible {
+  border-color: var(--line);
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
+.related-passage-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.related-passage-title {
+  overflow: hidden;
+  flex: 1;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.related-passage-locator {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+  font-size: 11px;
+}
+
+.related-passage-snippet {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+}
+
+/* 金句卡片预览浮层(QC-D5):居中 dialog,预览图即导出物本身。 */
+.quote-card-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 46;
+  display: grid;
+  gap: 12px;
+  width: min(560px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  transform: translate(-50%, -50%);
+}
+
+.quote-card-dialog .settings-heading {
+  margin: 0;
+}
+
+.quote-card-style-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.quote-card-style-toggle button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+}
+
+.quote-card-style-toggle button.active {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.quote-card-preview {
+  display: grid;
+  min-height: 180px;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  place-items: center;
+}
+
+.quote-card-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.quote-card-state {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.quote-card-state--error {
+  color: var(--accent-ink);
+}
+
+.quote-card-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.quote-card-hint--error {
+  color: var(--accent-ink);
+}
+
+.quote-card-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.quote-card-actions button {
+  padding: 6px 14px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.quote-card-actions button:disabled {
+  opacity: 0.45;
+}
+
+.quote-card-actions .quote-card-copy {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent-soft) 80%, transparent);
+  font-weight: 600;
 }
 
 /* 导出标注…(JSON/CSV 二选)展开的格式行,占满工具条下一行。 */

@@ -11,6 +11,7 @@ import {
   REVIEW_MAX_BOX,
   type ReviewState,
 } from "./reviewScheduler";
+import type { WebCollectionItemRecord } from "./webCollections";
 import { validateLibraryRelativePath } from "./webLibrary";
 
 const DB_NAME = "reade-annotations";
@@ -19,6 +20,10 @@ const STORE_NAME = "annotations";
 const DOCUMENTS_STORE = "documents";
 /** Review state rows (`user_store.rs` `annotation_reviews`). */
 const REVIEWS_STORE = "annotationReviews";
+/** Collection rows (`user_store.rs` `collections`), used by `webCollections.ts`. */
+export const COLLECTIONS_STORE = "collections";
+/** Collection membership rows (`user_store.rs` `collection_items`). */
+export const COLLECTION_ITEMS_STORE = "collectionItems";
 /**
  * Version 1: plain store (keyPath `id`, `relativePath` index), physical
  * deletes. Version 2 mirrors the desktop user database (`user_store.rs`
@@ -30,10 +35,15 @@ const REVIEWS_STORE = "annotationReviews";
  * move-detection rebind chain; rows for vanished paths are retained on
  * purpose. Version 4 mirrors desktop schema v4: an `annotationReviews`
  * store (keyPath `annotationId`) holds the spaced-repetition state; rows
- * are created lazily on the first outcome, never backfilled. The upgrade
- * steps run sequentially like the desktop migration chain.
+ * are created lazily on the first outcome, never backfilled. Version 5
+ * mirrors desktop schema v5 (plan-collections §3.1): a `collections`
+ * store (keyPath `id`) plus a `collectionItems` store (composite keyPath
+ * `[collectionId, relativePath]`, `collectionId` index; if the composite
+ * keyPath ever misbehaves in a real browser, the documented fallback is a
+ * `${collectionId}\u001f${relativePath}` string key). The upgrade steps
+ * run sequentially like the desktop migration chain.
  */
-const DB_VERSION = 4;
+const DB_VERSION = 5;
 /** Tombstoned annotations are physically purged 90 days after deletion. */
 const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -104,6 +114,15 @@ function openDatabase(): Promise<IDBDatabase> {
       if (event.oldVersion < 4) {
         db.createObjectStore(REVIEWS_STORE, { keyPath: "annotationId" });
       }
+      // Step 5: the collection stores (desktop `collections` +
+      // `collection_items` tables).
+      if (event.oldVersion < 5) {
+        db.createObjectStore(COLLECTIONS_STORE, { keyPath: "id" });
+        const items = db.createObjectStore(COLLECTION_ITEMS_STORE, {
+          keyPath: ["collectionId", "relativePath"],
+        });
+        items.createIndex("collectionId", "collectionId", { unique: false });
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Cannot open annotation store"));
@@ -169,6 +188,15 @@ function openDb(): Promise<IDBDatabase> {
 export function resetWebAnnotationStoreForTests(): void {
   void dbPromise?.then((db) => db.close()).catch(() => undefined);
   dbPromise = null;
+}
+
+/**
+ * Shared handle to the user database for sibling stores in the same file
+ * (`webCollections.ts`): one connection, one upgrade chain, one purge
+ * pass — the web twin of every store living in `reade-user.sqlite3`.
+ */
+export function openWebUserDatabase(): Promise<IDBDatabase> {
+  return openDb();
 }
 
 export async function listWebAnnotations(relativePath: string | null): Promise<Annotation[]> {
@@ -421,8 +449,10 @@ export async function detectWebMovedDocuments(
  * Moves every annotation of `oldPath` (tombstones included, so deletion
  * history follows the document) to `newPath` in one transaction and drops
  * the stale fingerprint row, mirroring the desktop
- * `rebind_document_annotations` command. Returns the number of records
- * updated.
+ * `rebind_document_annotations` command. Collection membership rides the
+ * same confirmation (CO-D3): item rows move to the new path, and an item
+ * whose collection already contains the new path is dropped instead of
+ * duplicated. Returns the number of annotation records updated.
  */
 export async function rebindWebDocumentAnnotations(
   oldPath: string,
@@ -434,13 +464,28 @@ export async function rebindWebDocumentAnnotations(
     throw new Error("Rebinding requires two different paths");
   }
   const db = await openDb();
-  const tx = db.transaction([STORE_NAME, DOCUMENTS_STORE], "readwrite");
+  const tx = db.transaction(
+    [STORE_NAME, DOCUMENTS_STORE, COLLECTION_ITEMS_STORE],
+    "readwrite",
+  );
   const store = tx.objectStore(STORE_NAME);
   const matches = await requestToPromise(
     store.index("relativePath").getAll(oldPath) as IDBRequest<Annotation[]>,
   );
   for (const record of matches) {
     store.put({ ...record, relativePath: newPath });
+  }
+  const items = tx.objectStore(COLLECTION_ITEMS_STORE);
+  const itemRows = await requestToPromise(
+    items.getAll() as IDBRequest<WebCollectionItemRecord[]>,
+  );
+  for (const item of itemRows) {
+    if (item.relativePath !== oldPath) continue;
+    const conflict = itemRows.some(
+      (other) => other.collectionId === item.collectionId && other.relativePath === newPath,
+    );
+    items.delete([item.collectionId, oldPath]);
+    if (!conflict) items.put({ ...item, relativePath: newPath });
   }
   tx.objectStore(DOCUMENTS_STORE).delete(oldPath);
   await transactionDone(tx);

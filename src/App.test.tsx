@@ -6,7 +6,9 @@ import App, { MotionNotice, ReadingSettingsPanel, TocNavigation } from "./App";
 import {
   deleteAnnotation,
   detectMovedDocuments,
+  findRelatedPassages,
   listAnnotations,
+  listDocumentLinks,
   listReadingSessions,
   listReviewQueue,
   readDocument,
@@ -37,6 +39,8 @@ vi.mock("./lib/backend", async () => {
     detectMovedDocuments: vi.fn(async () => []),
     rebindDocumentAnnotations: vi.fn(async () => 0),
     searchAnnotations: vi.fn(async () => []),
+    findRelatedPassages: vi.fn(async () => []),
+    listDocumentLinks: vi.fn(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 })),
     // 回顾探测与队列在 jsdom 中没有 Tauri 后端;默认零数据。
     reviewSummary: vi.fn(async () => ({ dueCount: 0, reviewedToday: 0 })),
     listReviewQueue: vi.fn(async () => []),
@@ -106,6 +110,10 @@ beforeEach(() => {
   vi.mocked(detectMovedDocuments).mockReset().mockImplementation(async () => []);
   vi.mocked(rebindDocumentAnnotations).mockReset().mockImplementation(async () => 0);
   vi.mocked(searchAnnotations).mockReset().mockImplementation(async () => []);
+  vi.mocked(findRelatedPassages).mockReset().mockImplementation(async () => []);
+  vi.mocked(listDocumentLinks)
+    .mockReset()
+    .mockImplementation(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 }));
   vi.mocked(reviewSummary)
     .mockReset()
     .mockImplementation(async () => ({ dueCount: 0, reviewedToday: 0 }));
@@ -527,6 +535,145 @@ describe("selection capture upgrade (B2/B3)", () => {
       );
     });
     expect(useReaderStore.getState().highlightColor).toBe("green");
+  });
+});
+
+describe("links tab (BL-D3)", () => {
+  it("loads the links lazily, shows the backlink badge and jumps to a source", async () => {
+    vi.mocked(listDocumentLinks).mockResolvedValue({
+      backlinks: [
+        { sourcePath: "other.md", sourceTitle: "Other", linkText: "参考指南", count: 2 },
+      ],
+      outgoing: [],
+      brokenCount: 0,
+    });
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# Other\n\nSecond body",
+    }));
+    useReaderStore.setState({
+      documents: [markdownDocument("guide.md", "Guide"), markdownDocument("other.md", "Other")],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\nBody",
+      },
+      motionLevel: "off",
+    });
+
+    render(<App />);
+    // tab 未打开前不发请求(idle 惰性加载)。
+    expect(listDocumentLinks).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getAllByRole("tab", { name: /链接/ })[0]);
+    await waitFor(() => {
+      expect(listDocumentLinks).toHaveBeenCalledWith("guide.md");
+    });
+    const region = await screen.findByRole("region", { name: "反向链接" });
+    expect(within(region).getByText("Other")).toBeInTheDocument();
+    // tab 徽标 = 反链总次数。
+    expect(screen.getAllByRole("tab", { name: /链接\s*2/ }).length).toBeGreaterThan(0);
+
+    fireEvent.click(within(region).getByText("Other"));
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("other.md");
+    });
+  });
+
+  it("presents the web degradation message as panel text", async () => {
+    vi.mocked(listDocumentLinks).mockRejectedValue(new Error("库过大，链接视图未启用"));
+    setMarkdownState();
+
+    render(<App />);
+    fireEvent.click(screen.getAllByRole("tab", { name: /链接/ })[0]);
+    expect(
+      (await screen.findAllByText("库过大，链接视图未启用")).length,
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("related passages entry (RP)", () => {
+  it("queries with the current document excluded and jumps through the hit", async () => {
+    vi.mocked(findRelatedPassages).mockResolvedValue([
+      {
+        resultId: "other.md::",
+        relativePath: "other.md",
+        title: "Other",
+        snippet: "……相同主题……",
+        score: 2.5,
+        format: "markdown",
+        locator: null,
+      },
+    ]);
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# Other\n\nSecond body",
+    }));
+    useReaderStore.setState({
+      documents: [markdownDocument("guide.md", "Guide"), markdownDocument("other.md", "Other")],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\n这是一段足够长的正文内容。",
+      },
+      motionLevel: "off",
+    });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 12);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.pointerDown(reader);
+    fireEvent.pointerUp(document);
+    await screen.findByRole("toolbar", { name: "标注工具条" });
+
+    fireEvent.click(screen.getByRole("button", { name: "相关" }));
+    const dialog = await screen.findByRole("dialog", { name: "相关段落" });
+    // 工具条随选区释放而关闭;请求排除当前文档(RP-D3)。
+    expect(findRelatedPassages).toHaveBeenCalledWith("这是一段足够长的正文内容", "guide.md");
+
+    fireEvent.click(await within(dialog).findByText("Other"));
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("other.md");
+    });
+    expect(screen.queryByRole("dialog", { name: "相关段落" })).not.toBeInTheDocument();
+  });
+
+  it("disables the related action for selections below 8 characters", async () => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.pointerDown(reader);
+    fireEvent.pointerUp(document);
+    await screen.findByRole("toolbar", { name: "标注工具条" });
+    expect(screen.getByRole("button", { name: "相关" })).toBeDisabled();
+    expect(findRelatedPassages).not.toHaveBeenCalled();
   });
 });
 
@@ -1336,6 +1483,115 @@ describe("cold-start landing (H-D1 option A)", () => {
       expect(useReaderStore.getState().currentPath).toBe("guide.md");
     });
     expect(useReaderStore.getState().activeView).toBe("reader");
+  });
+});
+
+describe("split view (SP)", () => {
+  /** ≥1080px 的宽窗环境:分栏媒体查询命中,其余查询保持 false。 */
+  function mockWideMatchMedia(): void {
+    Object.defineProperty(window, "matchMedia", {
+      configurable: true,
+      value: vi.fn((query: string) => ({
+        matches: query === "(min-width: 1080px)",
+        media: query,
+        onchange: null,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+        addListener: vi.fn(),
+        removeListener: vi.fn(),
+        dispatchEvent: vi.fn(),
+      })),
+    });
+  }
+
+  it("splits with the current document, keeps selection capture main-only and exits", async () => {
+    mockWideMatchMedia();
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "## Pane\n\n副栏正文段落。",
+    }));
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    // 单栏基线:content-grid 上没有任何分栏痕迹。
+    const grid = view.container.querySelector(".content-grid")!;
+    expect(grid).not.toHaveAttribute("data-split");
+    expect(view.container.querySelector(".split-divider")).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "开启分栏对照" }));
+    expect(grid).toHaveAttribute("data-split", "true");
+    // 默认加载当前文档(SP-D4);lazy 副栏挂载后自行 readDocument。
+    await waitFor(() => {
+      expect(view.container.querySelector(".secondary-pane .markdown-body")).not.toBeNull();
+    });
+    expect(readDocument).toHaveBeenCalledWith("guide.md");
+    const divider = view.container.querySelector(".split-divider");
+    expect(divider).toHaveAttribute("aria-valuenow", "50");
+
+    // 副栏内的划选不得触发主栏的选区工具条(批注只属主栏)。
+    const paneParagraph = view.container.querySelector<HTMLElement>(
+      ".secondary-pane .markdown-body p",
+    )!;
+    const range = document.createRange();
+    range.setStart(paneParagraph.firstChild!, 0);
+    range.setEnd(paneParagraph.firstChild!, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    fireEvent.pointerDown(view.container.querySelector(".content-grid > .reading-scroll")!);
+    fireEvent.pointerUp(document);
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(screen.queryByRole("toolbar", { name: "标注工具条" })).not.toBeInTheDocument();
+    selection.removeAllRanges();
+
+    // 副栏 header 的关闭按钮退出分栏,content-grid 回到单栏形态。
+    fireEvent.click(screen.getByRole("button", { name: "关闭副栏" }));
+    expect(grid).not.toHaveAttribute("data-split");
+    expect(view.container.querySelector(".secondary-pane")).toBeNull();
+  });
+
+  it("opens tree entries in the pane with Alt+click without touching the main document", async () => {
+    mockWideMatchMedia();
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# Other\n\n副栏正文。",
+    }));
+    useReaderStore.setState({
+      documents: [markdownDocument("guide.md", "Guide"), markdownDocument("other.md", "Other")],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\nBody",
+      },
+      motionLevel: "off",
+    });
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Other" }), { altKey: true });
+    await waitFor(() => {
+      expect(view.container.querySelector(".secondary-pane")).not.toBeNull();
+    });
+    expect(readDocument).toHaveBeenCalledWith("other.md");
+    // 普通点击链(selectDocument)未被触发:主栏文档不变。
+    expect(useReaderStore.getState().currentPath).toBe("guide.md");
+  });
+
+  it("disables the split entry while the window is too narrow (SP-D6)", async () => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+    expect(screen.getByRole("button", { name: "开启分栏对照" })).toBeDisabled();
   });
 });
 

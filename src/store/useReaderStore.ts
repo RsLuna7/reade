@@ -17,6 +17,7 @@ import {
   type SearchResult,
 } from "../lib/backend";
 import type { ReaderMotionLevel } from "../lib/motion";
+import { clampTtsRate, TTS_DEFAULT_RATE } from "../lib/ttsPlayer";
 import {
   LEGACY_THEME_ID_MAP,
   SERIES_FONT_PRESET,
@@ -189,6 +190,8 @@ type PersistedReaderPreferences = Partial<
     | "underlineColor"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
+    | "ttsRate"
+    | "ttsVoiceName"
   >
 >;
 
@@ -230,6 +233,8 @@ export function migrateReaderPreferences(
     ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
       ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
       : {}),
+    ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
+    ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
   };
 }
 
@@ -263,6 +268,10 @@ interface ReaderState {
   activeView: ReaderView;
   /** Daily reading goal in minutes; 0 disables the goal. Persisted. */
   dailyGoalMinutes: number;
+  /** Read-aloud playback rate (0.5–2.0). Persisted. */
+  ttsRate: number;
+  /** Preferred read-aloud voice by name; null = auto pick. Persisted. */
+  ttsVoiceName: string | null;
   loading: boolean;
   error: string | null;
   chooseAndOpenLibrary: () => Promise<void>;
@@ -286,6 +295,8 @@ interface ReaderState {
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
+  setTtsRate: (rate: number) => void;
+  setTtsVoiceName: (name: string | null) => void;
   resetReaderPreferences: () => void;
   toggleDirectory: (path: string) => void;
   clearError: () => void;
@@ -356,6 +367,8 @@ export const useReaderStore = create<ReaderState>()(
         expandedPaths: [],
         activeView: "reader",
         dailyGoalMinutes: 0,
+        ttsRate: TTS_DEFAULT_RATE,
+        ttsVoiceName: null,
         loading: false,
         error: null,
 
@@ -562,6 +575,14 @@ export const useReaderStore = create<ReaderState>()(
           }));
         },
 
+        setTtsRate: (rate) => {
+          set({ ttsRate: clampTtsRate(rate) });
+        },
+
+        setTtsVoiceName: (name) => {
+          set({ ttsVoiceName: typeof name === "string" && name ? name : null });
+        },
+
         resetReaderPreferences: () => {
           set({
             readingSettings: { ...DEFAULT_READING_SETTINGS },
@@ -597,6 +618,8 @@ export const useReaderStore = create<ReaderState>()(
         underlineColor: state.underlineColor,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
+        ttsRate: state.ttsRate,
+        ttsVoiceName: state.ttsVoiceName,
       }),
       migrate: migrateReaderPreferences,
       merge: (persisted, current) => {
@@ -640,6 +663,14 @@ export const useReaderStore = create<ReaderState>()(
             preferences.fuzzyAnnotationAnchoring,
             current.fuzzyAnnotationAnchoring,
           ),
+          ttsRate:
+            typeof preferences.ttsRate === "number"
+              ? clampTtsRate(preferences.ttsRate)
+              : current.ttsRate,
+          ttsVoiceName:
+            typeof preferences.ttsVoiceName === "string" && preferences.ttsVoiceName
+              ? preferences.ttsVoiceName
+              : current.ttsVoiceName,
         };
       },
     },

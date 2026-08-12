@@ -1,7 +1,10 @@
+import type { DocumentLinks } from "./documentLinks";
 import type { MovedDocumentCandidate } from "./documentMoves";
+import { RELATED_DEFAULT_LIMIT } from "./relatedFragments";
 import { DAILY_REVIEW_LIMIT, type ReviewState } from "./reviewScheduler";
 import { WebLibraryClient, type WebManifestDocument } from "./webLibrary";
 
+export type { BacklinkEntry, DocumentLinks, OutgoingEntry } from "./documentLinks";
 export type { MovedDocumentCandidate } from "./documentMoves";
 export type { ReviewOutcome, ReviewState } from "./reviewScheduler";
 
@@ -210,6 +213,30 @@ export interface ReadingSession {
   activeSeconds: number;
 }
 
+// ---- Collections (plan-collections §3.2; serde camelCase twins of the
+// Rust `Collection` / `CollectionSummary` / `CollectionItem` structs) ----
+
+export interface Collection {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface CollectionSummary extends Collection {
+  itemCount: number;
+  /** Items whose path is in the current scan/manifest — the list health badge. */
+  presentCount: number;
+}
+
+export interface CollectionItem {
+  relativePath: string;
+  position: number;
+  addedAt: number;
+  /** Missing items are kept (greyed out) and never auto-deleted (CO-D3). */
+  present: boolean;
+}
+
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 export const APP_RUNTIME = __READE_RUNTIME__;
 export const DEFAULT_LIBRARY_ROOT = APP_RUNTIME === "web" ? "reade-web" : "";
@@ -286,6 +313,32 @@ export async function clearConversionCache(): Promise<void> {
 export async function searchDocuments(query: string, limit = 100): Promise<SearchResult[]> {
   if (APP_RUNTIME === "web") return getWebLibrary().search(query, limit);
   return (await getTauriBackend()).searchDocuments(query, limit);
+}
+
+/**
+ * Read-only backlink/outgoing view for one document (plan-backlinks
+ * §3.3). Desktop reads the derived `document_links` cache table; the web
+ * build extracts links from `search.json` at runtime and throws the
+ * exported `WEB_LINKS_DISABLED_MESSAGE` beyond 500 documents (BL-D4).
+ */
+export async function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
+  if (APP_RUNTIME === "web") return getWebLibrary().documentLinks(relativePath);
+  return (await getTauriBackend()).listDocumentLinks(relativePath);
+}
+
+/**
+ * Selection-driven related passages (plan-related-passages §3.1). Both
+ * runtimes share the fragment-extraction contract; the desktop ranks with
+ * FTS5 bm25, the web build with substring counting (RP-D5) — a documented
+ * scoring divergence, like library search itself.
+ */
+export async function findRelatedPassages(
+  text: string,
+  excludePath: string | null = null,
+  limit: number = RELATED_DEFAULT_LIMIT,
+): Promise<SearchResult[]> {
+  if (APP_RUNTIME === "web") return getWebLibrary().relatedPassages(text, excludePath, limit);
+  return (await getTauriBackend()).findRelatedPassages(text, excludePath, limit);
 }
 export async function readAsset(relativePath: string): Promise<AssetPayload> {
   if (APP_RUNTIME === "web") return getWebLibrary().loadAsset(relativePath);
@@ -428,6 +481,114 @@ export async function searchAnnotations(query: string, limit = 200): Promise<Ann
     return searchWebAnnotations(query, limit);
   }
   return (await getTauriBackend()).searchAnnotations(query, limit);
+}
+
+// ---- Collections (plan-collections §3.2) ----
+//
+// camelCase ↔ snake_case wire contract with the Rust commands:
+//   listCollections()                    ↔ list_collections()
+//   createCollection(id, name)           ↔ create_collection(id, name)
+//   renameCollection(id, name)           ↔ rename_collection(id, name)
+//   deleteCollection(id)                 ↔ delete_collection(id)
+//   listCollectionItems(collectionId)    ↔ list_collection_items(collection_id)
+//   addCollectionItem(collectionId, relativePath)
+//                                        ↔ add_collection_item(collection_id, relative_path)
+//   removeCollectionItem(collectionId, relativePath)
+//                                        ↔ remove_collection_item(collection_id, relative_path)
+//   reorderCollectionItems(collectionId, orderedPaths)
+//                                        ↔ reorder_collection_items(collection_id, ordered_paths)
+
+/** The manifest paths, the web stand-in for the desktop scan snapshot. */
+async function webPresentPaths(): Promise<Set<string>> {
+  const manifest = await getWebLibrary().loadManifest();
+  return new Set(manifest.documents.map((document) => document.relativePath));
+}
+
+/** Collections of the open library in stable `(createdAt, id)` order. */
+export async function listCollections(): Promise<CollectionSummary[]> {
+  if (APP_RUNTIME === "web") {
+    const [{ listWebCollections }, present] = await Promise.all([
+      import("./webCollections"),
+      webPresentPaths(),
+    ]);
+    return listWebCollections(present);
+  }
+  return (await getTauriBackend()).listCollections();
+}
+
+/** `id` comes from the client (`crypto.randomUUID()`), the backend validates. */
+export async function createCollection(id: string, name: string): Promise<Collection> {
+  if (APP_RUNTIME === "web") {
+    const { createWebCollection } = await import("./webCollections");
+    return createWebCollection(id, name);
+  }
+  return (await getTauriBackend()).createCollection(id, name);
+}
+
+export async function renameCollection(id: string, name: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { renameWebCollection } = await import("./webCollections");
+    return renameWebCollection(id, name);
+  }
+  return (await getTauriBackend()).renameCollection(id, name);
+}
+
+/** Deletes the list only; documents and annotations are never touched. */
+export async function deleteCollection(id: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { deleteWebCollection } = await import("./webCollections");
+    return deleteWebCollection(id);
+  }
+  return (await getTauriBackend()).deleteCollection(id);
+}
+
+export async function listCollectionItems(collectionId: string): Promise<CollectionItem[]> {
+  if (APP_RUNTIME === "web") {
+    const [{ listWebCollectionItems }, present] = await Promise.all([
+      import("./webCollections"),
+      webPresentPaths(),
+    ]);
+    return listWebCollectionItems(collectionId, present);
+  }
+  return (await getTauriBackend()).listCollectionItems(collectionId);
+}
+
+/** Idempotent for already-added paths; the document must be in the library. */
+export async function addCollectionItem(
+  collectionId: string,
+  relativePath: string,
+): Promise<CollectionItem> {
+  if (APP_RUNTIME === "web") {
+    const [{ addWebCollectionItem }, present] = await Promise.all([
+      import("./webCollections"),
+      webPresentPaths(),
+    ]);
+    return addWebCollectionItem(collectionId, relativePath, present);
+  }
+  return (await getTauriBackend()).addCollectionItem(collectionId, relativePath);
+}
+
+export async function removeCollectionItem(
+  collectionId: string,
+  relativePath: string,
+): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { removeWebCollectionItem } = await import("./webCollections");
+    return removeWebCollectionItem(collectionId, relativePath);
+  }
+  return (await getTauriBackend()).removeCollectionItem(collectionId, relativePath);
+}
+
+/** `orderedPaths` must be exactly the current item set (CO-D4). */
+export async function reorderCollectionItems(
+  collectionId: string,
+  orderedPaths: string[],
+): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { reorderWebCollectionItems } = await import("./webCollections");
+    return reorderWebCollectionItems(collectionId, orderedPaths);
+  }
+  return (await getTauriBackend()).reorderCollectionItems(collectionId, orderedPaths);
 }
 
 // ---- Annotation transfer (export/import, §5.7) ----

@@ -1,5 +1,5 @@
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
@@ -18,6 +18,7 @@ use crate::documents::{
     allowed_epub_asset, parse_epub, DocumentFormat, EpubDocument, IndexStatus, PdfPageContent,
     PdfReadingMode, MAX_CONVERTIBLE_BYTES,
 };
+use crate::links::{extract_document_links, wiki_file_stem, wiki_path_stem, ExtractedLink};
 use crate::user_store::{sync_document_fingerprints, UserState};
 
 pub(crate) const MAX_MARKDOWN_BYTES: u64 = 10 * 1024 * 1024;
@@ -28,6 +29,23 @@ const CACHE_SOFT_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 const CACHE_LOW_WATER_BYTES: u64 = CACHE_SOFT_LIMIT_BYTES * 9 / 10;
 const DEFAULT_SEARCH_LIMIT: u32 = 30;
 const MAX_SEARCH_LIMIT: u32 = 100;
+/// `list_document_links` truncates each of its lists to this many entries.
+const LINKS_LIST_LIMIT: usize = 500;
+/// Related-passage fragment contract (`docs/plan-related-passages.md`
+/// §3.2, RP-D1). The TS twin lives in `src/lib/relatedFragments.ts`; the
+/// numbered cases F01.. in `relatedFragments.test.ts` are mirrored below.
+pub(crate) const RELATED_MAX_FRAGMENTS: usize = 6;
+const RELATED_MAX_TEXT_CHARS: usize = 2_000;
+const RELATED_LONG_RUN_CHARS: usize = 12;
+const RELATED_FRAGMENT_SLICE_CHARS: usize = 8;
+const RELATED_MIN_FRAGMENT_CHARS: usize = 3;
+const RELATED_DEFAULT_LIMIT: u32 = 12;
+const RELATED_MAX_LIMIT: u32 = 50;
+/// Common CJK punctuation that splits selection runs, on top of ASCII
+/// punctuation and whitespace. Must stay identical to
+/// `RELATED_CJK_DELIMITERS` in `src/lib/relatedFragments.ts`.
+const RELATED_CJK_DELIMITERS: &str =
+    "，。；：！？、「」『』（）《》…—·\u{201c}\u{201d}\u{2018}\u{2019}";
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
 const CONVERTER_REVISION: &str =
     "reade-multiformat-v2:anydoc-0.1.8:pdf-inspector-0.1.8:epub-toc-level";
@@ -208,6 +226,51 @@ struct IndexedDocument {
     status: IndexStatus,
     error: Option<String>,
     segments: Vec<IndexSegment>,
+    /// Outgoing library links extracted from markdown sources; always
+    /// empty for the other formats (backlinks plan §2: PDF/EPUB are link
+    /// targets only).
+    links: Vec<ExtractedLink>,
+}
+
+/// Aggregated backlinks: one row per source document that links to the
+/// queried path, with the first link text as an excerpt.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct BacklinkEntry {
+    pub source_path: String,
+    pub source_title: String,
+    pub link_text: String,
+    pub count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OutgoingEntry {
+    /// `"document" | "asset" | "wiki"`.
+    pub kind: String,
+    /// Resolved library path; also filled for wiki links that resolve to
+    /// exactly one candidate.
+    pub target_path: Option<String>,
+    /// Display form: the stored path for standard links, the stem for
+    /// wiki links.
+    pub raw_target: String,
+    pub link_text: String,
+    /// Whether the target is in the current scan set (wiki: uniquely
+    /// resolved). Asset existence is never checked on disk.
+    pub present: bool,
+    /// Wiki candidate count when ambiguous (> 1); 0 otherwise.
+    pub ambiguous_count: u32,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentLinks {
+    pub backlinks: Vec<BacklinkEntry>,
+    pub outgoing: Vec<OutgoingEntry>,
+    /// Outgoing document targets missing from the scan set (unresolved
+    /// wiki stems included, ambiguous ones excluded). Assets are never
+    /// counted (plan §3.3/§7).
+    pub broken_count: u64,
 }
 
 #[tauri::command]
@@ -363,6 +426,7 @@ pub async fn open_document(
                         ocr_reason: None,
                     })
                     .collect(),
+                links: Vec::new(),
             };
             {
                 let mut current = lock_state(&state)?;
@@ -543,6 +607,53 @@ pub fn search_documents(
     )
 }
 
+/// Read-only backlink/outgoing view for one document
+/// (`docs/plan-backlinks.md` §3.3). Pure SELECTs over the derived
+/// `document_links` table plus the in-memory scan snapshot; the link table
+/// never triggers file access.
+#[tauri::command]
+pub fn list_document_links(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<DocumentLinks> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let root_key = normalize_root(root);
+    document_links_for(
+        &current.cache,
+        &root_key,
+        &current.documents,
+        &relative_path,
+    )
+}
+
+/// Selection-driven related-passage search over the existing FTS5 trigram
+/// index (`docs/plan-related-passages.md` §3). Returns plain
+/// `SearchResult`s so the jump chain is shared with library search.
+#[tauri::command]
+pub fn find_related_passages(
+    text: String,
+    exclude_path: Option<String>,
+    limit: Option<u32>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<SearchResult>> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    related_passages_index(
+        &current.cache,
+        &normalize_root(root),
+        &text,
+        exclude_path.as_deref(),
+        limit.unwrap_or(RELATED_DEFAULT_LIMIT),
+    )
+}
+
 #[tauri::command]
 pub async fn retry_document_index(
     relative_path: String,
@@ -708,6 +819,7 @@ fn index_documents_background(
                     status: IndexStatus::Failed,
                     error: Some(error),
                     segments: Vec::new(),
+                    links: Vec::new(),
                 };
                 if !finish_background_document(
                     &app, &state, generation, &root, &document, &indexed,
@@ -729,6 +841,7 @@ fn index_documents_background(
                 },
                 error: Some(error),
                 segments: Vec::new(),
+                links: Vec::new(),
             });
         if !finish_background_document(&app, &state, generation, &root, &document, &indexed)? {
             return Ok(());
@@ -847,6 +960,10 @@ fn index_document_path(path: &Path, document: &DocumentInfo) -> CommandResult<In
         DocumentFormat::Markdown | DocumentFormat::Mdx => {
             let content =
                 read_utf8_lossy_with_limit(path, MAX_MARKDOWN_BYTES, "Markdown document")?;
+            // Outgoing links ride the same indexing pass, so link rows
+            // inherit the incremental-invalidation semantics of the
+            // conversion cache for free.
+            let links = extract_document_links(&document.relative_path, &content);
             Ok(IndexedDocument {
                 title: extract_title(&content).unwrap_or_else(|| document.title.clone()),
                 status: IndexStatus::Ready,
@@ -859,6 +976,7 @@ fn index_document_path(path: &Path, document: &DocumentInfo) -> CommandResult<In
                     needs_ocr: false,
                     ocr_reason: None,
                 }],
+                links,
             })
         }
         DocumentFormat::Pdf => index_pdf(path, document),
@@ -873,6 +991,7 @@ fn index_pdf(path: &Path, document: &DocumentInfo) -> CommandResult<IndexedDocum
             status: IndexStatus::Unsupported,
             error: Some("超过 128 MiB，仅支持 PDF 原版式阅读".to_owned()),
             segments: Vec::new(),
+            links: Vec::new(),
         });
     }
     let bytes = fs::read(path).map_err(|error| format!("Cannot read PDF document: {error}"))?;
@@ -901,6 +1020,7 @@ fn index_pdf(path: &Path, document: &DocumentInfo) -> CommandResult<IndexedDocum
         },
         error: partial.then(|| format!("不可提取页：{}", join_pages(&missing_pages))),
         segments,
+        links: Vec::new(),
     })
 }
 
@@ -911,6 +1031,7 @@ fn index_epub(path: &Path, document: &DocumentInfo) -> CommandResult<IndexedDocu
             status: IndexStatus::Unsupported,
             error: Some("EPUB 文件超过 128 MiB".to_owned()),
             segments: Vec::new(),
+            links: Vec::new(),
         });
     }
     let bytes = fs::read(path).map_err(|error| format!("Cannot read EPUB document: {error}"))?;
@@ -932,6 +1053,7 @@ fn index_epub(path: &Path, document: &DocumentInfo) -> CommandResult<IndexedDocu
                 ocr_reason: None,
             })
             .collect(),
+        links: Vec::new(),
     })
 }
 
@@ -1045,6 +1167,30 @@ fn initialize_cache(connection: &Connection) -> CommandResult<()> {
                  VALUES ('delete', old.id, old.title, old.content);
                  INSERT INTO search_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
              END;
+             -- Outgoing document links, extracted during markdown indexing
+             -- (docs/plan-backlinks.md §3.2, BL-D2). Pure derived data that
+             -- rebuilds losslessly from the sources, so it lives in the
+             -- cache as an IF NOT EXISTS attachment without bumping
+             -- CACHE_SCHEMA_VERSION; older cache files grow the table on
+             -- the next start. Bump the version if the columns ever change.
+             CREATE TABLE IF NOT EXISTS document_links(
+                 id INTEGER PRIMARY KEY,
+                 library_root TEXT NOT NULL,
+                 source_path TEXT NOT NULL,
+                 link_kind TEXT NOT NULL,
+                 target_path TEXT,
+                 wiki_stem TEXT,
+                 target_kind TEXT NOT NULL,
+                 link_text TEXT NOT NULL,
+                 fragment TEXT,
+                 ordinal INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS document_links_by_source
+                 ON document_links(library_root, source_path, ordinal);
+             CREATE INDEX IF NOT EXISTS document_links_by_target
+                 ON document_links(library_root, target_path);
+             CREATE INDEX IF NOT EXISTS document_links_by_stem
+                 ON document_links(library_root, wiki_stem);
              -- Legacy annotation storage, frozen since annotations moved to
              -- reade-user.sqlite3 (user_store.rs). Kept for one release cycle
              -- as the rescue-migration source and fallback; nothing reads or
@@ -1215,6 +1361,12 @@ fn store_index_result(
         .map_err(|error| format!("Cannot remove stale search segments: {error}"))?;
     transaction
         .execute(
+            "DELETE FROM document_links WHERE library_root = ?1 AND source_path = ?2",
+            params![root_key, document.relative_path],
+        )
+        .map_err(|error| format!("Cannot remove stale document links: {error}"))?;
+    transaction
+        .execute(
             "INSERT INTO document_cache(
                  library_root, relative_path, title, format, source_size, source_modified,
                  converter_revision, status, error, last_accessed
@@ -1264,6 +1416,54 @@ fn store_index_result(
             )
             .map_err(|error| format!("Cannot store search segment: {error}"))?;
     }
+    for (ordinal, link) in indexed.links.iter().enumerate() {
+        let (link_kind, target_path, wiki_stem, target_kind, link_text, fragment) = match link {
+            ExtractedLink::Relative {
+                target_path,
+                target_kind,
+                link_text,
+                fragment,
+            } => (
+                "relative",
+                Some(target_path.as_str()),
+                None,
+                target_kind.as_str(),
+                link_text.as_str(),
+                fragment.as_deref(),
+            ),
+            ExtractedLink::Wiki {
+                stem,
+                link_text,
+                fragment,
+            } => (
+                "wiki",
+                None,
+                Some(stem.as_str()),
+                "document",
+                link_text.as_str(),
+                fragment.as_deref(),
+            ),
+        };
+        transaction
+            .execute(
+                "INSERT INTO document_links(
+                     library_root, source_path, link_kind, target_path, wiki_stem,
+                     target_kind, link_text, fragment, ordinal
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![
+                    root_key,
+                    document.relative_path,
+                    link_kind,
+                    target_path,
+                    wiki_stem,
+                    target_kind,
+                    link_text,
+                    fragment,
+                    ordinal as u32,
+                ],
+            )
+            .map_err(|error| format!("Cannot store document link: {error}"))?;
+    }
     transaction
         .commit()
         .map_err(|error| format!("Cannot commit document cache: {error}"))
@@ -1284,6 +1484,12 @@ fn clear_cached_document(
             params![root_key, relative_path],
         )
         .map_err(|error| format!("Cannot delete search segments: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM document_links WHERE library_root = ?1 AND source_path = ?2",
+            params![root_key, relative_path],
+        )
+        .map_err(|error| format!("Cannot delete document links: {error}"))?;
     transaction
         .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
@@ -1363,6 +1569,12 @@ fn clear_cached_document_by_key(
         .map_err(|error| format!("Cannot evict search cache: {error}"))?;
     transaction
         .execute(
+            "DELETE FROM document_links WHERE library_root = ?1 AND source_path = ?2",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot evict document links: {error}"))?;
+    transaction
+        .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
             params![root, relative_path],
         )
@@ -1391,6 +1603,9 @@ fn clear_cache_storage(connection: &mut Connection) -> CommandResult<()> {
     transaction
         .execute("DELETE FROM search_segments", [])
         .map_err(|error| format!("Cannot clear cached search segments: {error}"))?;
+    transaction
+        .execute("DELETE FROM document_links", [])
+        .map_err(|error| format!("Cannot clear cached document links: {error}"))?;
     transaction
         .execute("DELETE FROM document_cache", [])
         .map_err(|error| format!("Cannot clear cached documents: {error}"))?;
@@ -1566,6 +1781,315 @@ fn collect_search_rows(
 ) -> CommandResult<Vec<SearchResult>> {
     rows.collect::<rusqlite::Result<Vec<_>>>()
         .map_err(|error| format!("Cannot decode search results: {error}"))
+}
+
+// ---- Document links (docs/plan-backlinks.md) ----
+
+/// Query-time wiki resolution maps (BL-D1): lowercased file-name stems and
+/// extension-less full paths of the current scan set. O(documents) to
+/// build; ambiguity is decided per lookup, never persisted.
+struct WikiIndex {
+    by_name: HashMap<String, Vec<String>>,
+    by_path: HashMap<String, Vec<String>>,
+}
+
+impl WikiIndex {
+    fn build(documents: &[DocumentInfo]) -> Self {
+        let mut by_name: HashMap<String, Vec<String>> = HashMap::new();
+        let mut by_path: HashMap<String, Vec<String>> = HashMap::new();
+        for document in documents {
+            by_name
+                .entry(wiki_file_stem(&document.relative_path))
+                .or_default()
+                .push(document.relative_path.clone());
+            by_path
+                .entry(wiki_path_stem(&document.relative_path))
+                .or_default()
+                .push(document.relative_path.clone());
+        }
+        Self { by_name, by_path }
+    }
+
+    /// Unique hit → `(Some(path), 1)`; ambiguity → `(None, n)` — no edge
+    /// is built (BL-D1); zero hits → `(None, 0)`.
+    fn resolve(&self, stem: &str) -> (Option<&str>, u32) {
+        let candidates = if stem.contains('/') {
+            self.by_path.get(stem)
+        } else {
+            self.by_name.get(stem)
+        };
+        match candidates {
+            Some(paths) if paths.len() == 1 => (Some(paths[0].as_str()), 1),
+            Some(paths) => (None, paths.len() as u32),
+            None => (None, 0),
+        }
+    }
+}
+
+fn document_links_for(
+    connection: &Connection,
+    root: &str,
+    documents: &[DocumentInfo],
+    relative_path: &str,
+) -> CommandResult<DocumentLinks> {
+    validate_relative_library_path(relative_path)?;
+    let normalized = normalize_relative_path(Path::new(relative_path));
+    if normalized.is_empty() {
+        return Err("A non-empty relative path is required".to_owned());
+    }
+    let wiki_index = WikiIndex::build(documents);
+    let present: HashSet<&str> = documents
+        .iter()
+        .map(|document| document.relative_path.as_str())
+        .collect();
+    let titles: HashMap<&str, &str> = documents
+        .iter()
+        .map(|document| (document.relative_path.as_str(), document.title.as_str()))
+        .collect();
+
+    // Backlinks: direct target hits plus wiki stems that uniquely resolve
+    // to this document, aggregated per source with the first link text as
+    // the excerpt.
+    let mut mentions: Vec<(String, u32, String)> = Vec::new();
+    {
+        let mut statement = connection
+            .prepare(
+                "SELECT source_path, ordinal, link_text FROM document_links
+                 WHERE library_root = ?1 AND target_path = ?2",
+            )
+            .map_err(|error| format!("Cannot prepare the backlink lookup: {error}"))?;
+        let rows = statement
+            .query_map(params![root, normalized], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+            })
+            .map_err(|error| format!("Cannot list backlinks: {error}"))?;
+        mentions.extend(
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| format!("Cannot decode backlinks: {error}"))?,
+        );
+    }
+    {
+        let mut statement = connection
+            .prepare(
+                "SELECT source_path, ordinal, link_text, wiki_stem FROM document_links
+                 WHERE library_root = ?1 AND link_kind = 'wiki' AND wiki_stem IS NOT NULL",
+            )
+            .map_err(|error| format!("Cannot prepare the wiki backlink lookup: {error}"))?;
+        let rows = statement
+            .query_map(params![root], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, u32>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                ))
+            })
+            .map_err(|error| format!("Cannot list wiki backlinks: {error}"))?;
+        for row in rows {
+            let (source_path, ordinal, link_text, stem) =
+                row.map_err(|error| format!("Cannot decode wiki backlinks: {error}"))?;
+            if wiki_index.resolve(&stem).0 == Some(normalized.as_str()) {
+                mentions.push((source_path, ordinal, link_text));
+            }
+        }
+    }
+    mentions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
+    let mut backlinks: Vec<BacklinkEntry> = Vec::new();
+    for (source_path, _, link_text) in mentions {
+        match backlinks.last_mut() {
+            Some(last) if last.source_path == source_path => last.count += 1,
+            _ => {
+                let source_title = titles
+                    .get(source_path.as_str())
+                    .map_or_else(|| source_path.clone(), |title| (*title).to_owned());
+                backlinks.push(BacklinkEntry {
+                    source_path,
+                    source_title,
+                    link_text,
+                    count: 1,
+                });
+            }
+        }
+    }
+    backlinks.truncate(LINKS_LIST_LIMIT);
+
+    // Outgoing links in extraction order; the broken counter runs over the
+    // full set before truncation.
+    let mut outgoing: Vec<OutgoingEntry> = Vec::new();
+    let mut broken_count: u64 = 0;
+    let mut statement = connection
+        .prepare(
+            "SELECT link_kind, target_path, wiki_stem, target_kind, link_text
+             FROM document_links
+             WHERE library_root = ?1 AND source_path = ?2
+             ORDER BY ordinal ASC",
+        )
+        .map_err(|error| format!("Cannot prepare the outgoing link lookup: {error}"))?;
+    let rows = statement
+        .query_map(params![root, normalized], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })
+        .map_err(|error| format!("Cannot list outgoing links: {error}"))?;
+    for row in rows {
+        let (link_kind, target_path, wiki_stem, target_kind, link_text) =
+            row.map_err(|error| format!("Cannot decode outgoing links: {error}"))?;
+        let entry = if link_kind == "wiki" {
+            let stem = wiki_stem.unwrap_or_default();
+            let (resolved, candidates) = wiki_index.resolve(&stem);
+            if candidates == 0 {
+                broken_count += 1;
+            }
+            OutgoingEntry {
+                kind: "wiki".to_owned(),
+                target_path: resolved.map(str::to_owned),
+                raw_target: stem,
+                link_text,
+                present: resolved.is_some(),
+                ambiguous_count: if candidates > 1 { candidates } else { 0 },
+            }
+        } else {
+            let target = target_path.unwrap_or_default();
+            let is_present = present.contains(target.as_str());
+            if target_kind == "document" && !is_present {
+                broken_count += 1;
+            }
+            OutgoingEntry {
+                kind: target_kind,
+                target_path: Some(target.clone()),
+                raw_target: target,
+                link_text,
+                present: is_present,
+                ambiguous_count: 0,
+            }
+        };
+        outgoing.push(entry);
+    }
+    outgoing.truncate(LINKS_LIST_LIMIT);
+
+    Ok(DocumentLinks {
+        backlinks,
+        outgoing,
+        broken_count,
+    })
+}
+
+// ---- Related passages (docs/plan-related-passages.md) ----
+
+fn is_related_delimiter(ch: char) -> bool {
+    ch.is_whitespace() || ch.is_ascii_punctuation() || RELATED_CJK_DELIMITERS.contains(ch)
+}
+
+/// Selection text → significant fragments, sorted by significance and
+/// capped (RP-D1). Runs of non-delimiter characters survive line wrapping
+/// differences between the selection and the indexed text; long runs are
+/// sliced so CJK prose yields independently matchable pieces. The TS twin
+/// (`extractRelatedFragments`) must produce identical output.
+pub(crate) fn extract_related_fragments(text: &str) -> Vec<String> {
+    let mut candidates: Vec<String> = Vec::new();
+    let mut run: Vec<char> = Vec::new();
+    for ch in text.chars().take(RELATED_MAX_TEXT_CHARS) {
+        if is_related_delimiter(ch) {
+            flush_related_run(&mut run, &mut candidates);
+        } else {
+            run.push(ch);
+        }
+    }
+    flush_related_run(&mut run, &mut candidates);
+
+    let mut seen: HashSet<String> = HashSet::new();
+    let mut fragments: Vec<String> = Vec::new();
+    for candidate in candidates {
+        if seen.insert(candidate.to_lowercase()) {
+            fragments.push(candidate);
+        }
+    }
+    // Longer fragments carry more trigram selectivity; the stable sort
+    // keeps original text order for equal lengths.
+    fragments.sort_by_key(|fragment| std::cmp::Reverse(fragment.chars().count()));
+    fragments.truncate(RELATED_MAX_FRAGMENTS);
+    fragments
+}
+
+fn flush_related_run(run: &mut Vec<char>, candidates: &mut Vec<String>) {
+    if run.len() > RELATED_LONG_RUN_CHARS {
+        for chunk in run.chunks(RELATED_FRAGMENT_SLICE_CHARS) {
+            if chunk.len() >= RELATED_MIN_FRAGMENT_CHARS {
+                candidates.push(chunk.iter().collect());
+            }
+        }
+    } else if run.len() >= RELATED_MIN_FRAGMENT_CHARS {
+        candidates.push(run.iter().collect());
+    }
+    run.clear();
+}
+
+/// Fragments → one FTS5 MATCH string: every fragment is a quoted phrase
+/// (inner quotes doubled, the `fts_phrase` discipline), joined with OR so
+/// segments hitting more fragments rank higher under bm25. `OR`, `NEAR`
+/// and `*` inside fragments stay literal.
+fn build_related_match(fragments: &[String]) -> Option<String> {
+    if fragments.is_empty() {
+        return None;
+    }
+    Some(
+        fragments
+            .iter()
+            .map(|fragment| format!("\"{}\"", fragment.replace('"', "\"\"")))
+            .collect::<Vec<_>>()
+            .join(" OR "),
+    )
+}
+
+fn related_passages_index(
+    connection: &Connection,
+    root: &str,
+    text: &str,
+    exclude_path: Option<&str>,
+    limit: u32,
+) -> CommandResult<Vec<SearchResult>> {
+    // RP-D3: the whole current document is excluded, empty string when no
+    // exclusion applies (it never equals a stored path).
+    let exclude = match exclude_path {
+        Some(path) => {
+            validate_relative_library_path(path)?;
+            normalize_relative_path(Path::new(path))
+        }
+        None => String::new(),
+    };
+    let fragments = extract_related_fragments(text);
+    let Some(match_query) = build_related_match(&fragments) else {
+        return Ok(Vec::new());
+    };
+    let limit = limit.clamp(1, RELATED_MAX_LIMIT);
+    let mut statement = connection
+        .prepare(
+            // Same shape as search_index with three deltas (plan §3.2):
+            // the OR match string, the exclusion, and the (2.0, 1.0) bm25
+            // weights of RP-D2 (body overlap is the main signal here).
+            "SELECT s.id, s.relative_path, s.title,
+                    snippet(search_fts, 1, '', '', ' … ', 28),
+                    -bm25(search_fts, 2.0, 1.0) AS score,
+                    s.format, s.locator_kind, s.locator_value
+             FROM search_fts
+             JOIN search_segments s ON s.id = search_fts.rowid
+             WHERE search_fts MATCH ?1 AND s.library_root = ?2 AND s.relative_path != ?3
+             ORDER BY score DESC, s.relative_path ASC, s.ordinal ASC
+             LIMIT ?4",
+        )
+        .map_err(|error| format!("Cannot prepare the related-passage search: {error}"))?;
+    let rows = statement
+        .query_map(
+            params![match_query, root, exclude, limit],
+            search_result_from_row,
+        )
+        .map_err(|error| format!("Cannot execute the related-passage search: {error}"))?;
+    collect_search_rows(rows)
 }
 
 fn load_pdf_reading_mode(
@@ -2068,6 +2592,7 @@ mod tests {
             status: IndexStatus::Ready,
             error: None,
             segments: Vec::new(),
+            links: Vec::new(),
         };
 
         let stored = store_background_result_if_current(
@@ -2323,5 +2848,912 @@ mod tests {
             .query_row("SELECT count(*) FROM annotations", [], |row| row.get(0))
             .expect("count legacy annotations");
         assert_eq!(kept, 1);
+    }
+
+    // ---- Document links (docs/plan-backlinks.md B1) ----
+
+    fn markdown_info(relative_path: &str, title: &str) -> DocumentInfo {
+        DocumentInfo {
+            relative_path: relative_path.to_owned(),
+            title: title.to_owned(),
+            size: 1,
+            modified: 1,
+            format: DocumentFormat::Markdown,
+            index_status: IndexStatus::Ready,
+            index_error: None,
+        }
+    }
+
+    fn store_links_fixture(
+        connection: &mut Connection,
+        root: &Path,
+        info: &DocumentInfo,
+        links: Vec<ExtractedLink>,
+    ) {
+        let indexed = IndexedDocument {
+            title: info.title.clone(),
+            status: IndexStatus::Ready,
+            error: None,
+            segments: Vec::new(),
+            links,
+        };
+        store_index_result(connection, root, info, &indexed).expect("store links fixture");
+    }
+
+    fn relative_link(
+        target: &str,
+        kind: crate::links::LinkTargetKind,
+        text: &str,
+    ) -> ExtractedLink {
+        ExtractedLink::Relative {
+            target_path: target.to_owned(),
+            target_kind: kind,
+            link_text: text.to_owned(),
+            fragment: None,
+        }
+    }
+
+    fn wiki_link(stem: &str, text: &str) -> ExtractedLink {
+        ExtractedLink::Wiki {
+            stem: stem.to_owned(),
+            link_text: text.to_owned(),
+            fragment: None,
+        }
+    }
+
+    fn count_source_links(connection: &Connection, root: &str, source: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT count(*) FROM document_links
+                 WHERE library_root = ?1 AND source_path = ?2",
+                params![root, source],
+                |row| row.get(0),
+            )
+            .expect("count link rows")
+    }
+
+    #[test]
+    fn markdown_indexing_writes_link_rows_and_invalidation_clears_them() {
+        let library = tempdir().expect("temp library");
+        fs::create_dir_all(library.path().join("notes")).expect("create notes");
+        let source = library.path().join("notes/source.md");
+        fs::write(
+            &source,
+            "[a](sibling.md)\n[b](../top.md)\n[c](/abs/root.md)\n![img](assets/pic.png)\n\
+             [[Wiki Note]]\n[gone](missing.md)\n[ext](https://example.com/x.md)\n\
+             [esc](../../out.md)\n",
+        )
+        .expect("write source");
+        fs::write(library.path().join("notes/sibling.md"), "# Sibling").expect("write sibling");
+        fs::write(library.path().join("top.md"), "# Top").expect("write top");
+        let root = canonical_library_root(library.path()).expect("canonical root");
+        let root_key = normalize_root(&root);
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+
+        let documents = scan_documents(&root, &mut current.cache).expect("scan");
+        let info = documents
+            .iter()
+            .find(|document| document.relative_path == "notes/source.md")
+            .expect("source scanned")
+            .clone();
+        let indexed =
+            index_document_path(&root.join("notes/source.md"), &info).expect("index source");
+        store_index_result(&mut current.cache, &root, &info, &indexed).expect("store");
+
+        // Six library links survive extraction; the external and the
+        // escaping targets are dropped before storage.
+        let rows: Vec<(String, Option<String>, Option<String>, String)> = {
+            let mut statement = current
+                .cache
+                .prepare(
+                    "SELECT link_kind, target_path, wiki_stem, target_kind
+                     FROM document_links
+                     WHERE library_root = ?1 AND source_path = 'notes/source.md'
+                     ORDER BY ordinal ASC",
+                )
+                .expect("prepare rows");
+            let mapped = statement
+                .query_map(params![root_key], |row| {
+                    Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                })
+                .expect("query rows");
+            mapped
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .expect("decode rows")
+        };
+        assert_eq!(
+            rows,
+            vec![
+                (
+                    "relative".to_owned(),
+                    Some("notes/sibling.md".to_owned()),
+                    None,
+                    "document".to_owned()
+                ),
+                (
+                    "relative".to_owned(),
+                    Some("top.md".to_owned()),
+                    None,
+                    "document".to_owned()
+                ),
+                (
+                    "relative".to_owned(),
+                    Some("abs/root.md".to_owned()),
+                    None,
+                    "document".to_owned()
+                ),
+                (
+                    "relative".to_owned(),
+                    Some("notes/assets/pic.png".to_owned()),
+                    None,
+                    "asset".to_owned()
+                ),
+                (
+                    "wiki".to_owned(),
+                    None,
+                    Some("wiki note".to_owned()),
+                    "document".to_owned()
+                ),
+                (
+                    "relative".to_owned(),
+                    Some("notes/missing.md".to_owned()),
+                    None,
+                    "document".to_owned()
+                ),
+            ]
+        );
+
+        // Rewriting the file invalidates the cache row; re-indexing
+        // replaces the link rows in the same transaction.
+        fs::write(&source, "[only](sibling.md)\n").expect("rewrite source");
+        let rescanned = scan_documents(&root, &mut current.cache).expect("rescan");
+        let info = rescanned
+            .iter()
+            .find(|document| document.relative_path == "notes/source.md")
+            .expect("source rescanned")
+            .clone();
+        assert_eq!(info.index_status, IndexStatus::Pending);
+        assert_eq!(
+            count_source_links(&current.cache, &root_key, "notes/source.md"),
+            0
+        );
+        let indexed =
+            index_document_path(&root.join("notes/source.md"), &info).expect("reindex source");
+        store_index_result(&mut current.cache, &root, &info, &indexed).expect("restore");
+        assert_eq!(
+            count_source_links(&current.cache, &root_key, "notes/source.md"),
+            1
+        );
+
+        // A deleted source loses its rows during the next scan cleanup.
+        fs::remove_file(&source).expect("delete source");
+        scan_documents(&root, &mut current.cache).expect("cleanup scan");
+        assert_eq!(
+            count_source_links(&current.cache, &root_key, "notes/source.md"),
+            0
+        );
+
+        // clear_cache_storage drops every link row.
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("notes/sibling.md", "Sibling"),
+            vec![relative_link(
+                "top.md",
+                crate::links::LinkTargetKind::Document,
+                "t",
+            )],
+        );
+        clear_cache_storage(&mut current.cache).expect("clear conversion cache");
+        let remaining: i64 = current
+            .cache
+            .query_row("SELECT count(*) FROM document_links", [], |row| row.get(0))
+            .expect("count all links");
+        assert_eq!(remaining, 0);
+    }
+
+    #[test]
+    fn document_links_table_is_added_to_existing_caches_without_a_version_bump() {
+        let cache_directory = tempdir().expect("temp cache");
+        {
+            let state = AppState::new(cache_directory.path().to_path_buf()).expect("create");
+            let current = state.inner.lock().expect("lock");
+            current
+                .cache
+                .execute_batch(
+                    "DROP INDEX document_links_by_source;
+                     DROP INDEX document_links_by_target;
+                     DROP INDEX document_links_by_stem;
+                     DROP TABLE document_links;",
+                )
+                .expect("simulate a pre-links cache");
+        }
+        // Reopening the same versioned cache recreates the table instead of
+        // rebuilding the file (the schema version did not change).
+        let state = AppState::new(cache_directory.path().to_path_buf()).expect("reopen");
+        let current = state.inner.lock().expect("lock");
+        assert_eq!(
+            cache_pragma_i64(&current.cache, "user_version").expect("version"),
+            CACHE_SCHEMA_VERSION
+        );
+        let tables: i64 = current
+            .cache
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'document_links'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect schema");
+        assert_eq!(tables, 1);
+    }
+
+    #[test]
+    fn document_links_are_scoped_per_library_root_and_eviction_removes_them() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let active_root = PathBuf::from("active-library");
+        let stale_root = PathBuf::from("stale-library");
+        let info = markdown_info("a.md", "A");
+        store_links_fixture(
+            &mut current.cache,
+            &active_root,
+            &info,
+            vec![relative_link(
+                "b.md",
+                crate::links::LinkTargetKind::Document,
+                "b",
+            )],
+        );
+        store_links_fixture(
+            &mut current.cache,
+            &stale_root,
+            &info,
+            vec![relative_link(
+                "b.md",
+                crate::links::LinkTargetKind::Document,
+                "b",
+            )],
+        );
+
+        let documents = vec![markdown_info("a.md", "A"), markdown_info("b.md", "B")];
+        let links = document_links_for(
+            &current.cache,
+            &normalize_root(&active_root),
+            &documents,
+            "b.md",
+        )
+        .expect("links for active root");
+        assert_eq!(links.backlinks.len(), 1);
+
+        // Evicting the stale library's document also drops its link rows.
+        clear_cached_document_by_key(&mut current.cache, &normalize_root(&stale_root), "a.md")
+            .expect("evict");
+        assert_eq!(
+            count_source_links(&current.cache, &normalize_root(&stale_root), "a.md"),
+            0
+        );
+        assert_eq!(
+            count_source_links(&current.cache, &normalize_root(&active_root), "a.md"),
+            1
+        );
+    }
+
+    #[test]
+    fn list_document_links_aggregates_backlinks_wiki_resolution_and_broken_counts() {
+        use crate::links::LinkTargetKind;
+
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("library");
+        let root_key = normalize_root(&root);
+
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("a.md", "文档 A"),
+            vec![
+                relative_link("notes/target.md", LinkTargetKind::Document, "去目标"),
+                relative_link("notes/target.md", LinkTargetKind::Document, "再一次"),
+                wiki_link("target", "wiki 指向"),
+            ],
+        );
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("b.md", "文档 B"),
+            vec![wiki_link("target", "另一个 wiki")],
+        );
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("c.md", "文档 C"),
+            vec![
+                relative_link("missing.md", LinkTargetKind::Document, "断链"),
+                relative_link("img.png", LinkTargetKind::Asset, "图"),
+                wiki_link("nowhere", "无目标"),
+                wiki_link("dup", "歧义"),
+            ],
+        );
+
+        let documents = vec![
+            markdown_info("notes/target.md", "目标"),
+            markdown_info("a.md", "文档 A"),
+            markdown_info("b.md", "文档 B"),
+            markdown_info("c.md", "文档 C"),
+            markdown_info("x/Dup.md", "副本一"),
+            markdown_info("y/DUP.md", "副本二"),
+        ];
+
+        // Backlinks: direct targets aggregate per source, the unique wiki
+        // stem "target" builds edges, case-insensitively.
+        let links = document_links_for(&current.cache, &root_key, &documents, "notes/target.md")
+            .expect("target links");
+        assert_eq!(
+            links.backlinks,
+            vec![
+                BacklinkEntry {
+                    source_path: "a.md".to_owned(),
+                    source_title: "文档 A".to_owned(),
+                    link_text: "去目标".to_owned(),
+                    count: 3,
+                },
+                BacklinkEntry {
+                    source_path: "b.md".to_owned(),
+                    source_title: "文档 B".to_owned(),
+                    link_text: "另一个 wiki".to_owned(),
+                    count: 1,
+                },
+            ]
+        );
+        assert!(links.outgoing.is_empty());
+        assert_eq!(links.broken_count, 0);
+
+        // Outgoing: missing document counts as broken, assets never do,
+        // unresolved wiki stems count, ambiguous stems do not build edges.
+        let links =
+            document_links_for(&current.cache, &root_key, &documents, "c.md").expect("c links");
+        assert_eq!(
+            links.outgoing,
+            vec![
+                OutgoingEntry {
+                    kind: "document".to_owned(),
+                    target_path: Some("missing.md".to_owned()),
+                    raw_target: "missing.md".to_owned(),
+                    link_text: "断链".to_owned(),
+                    present: false,
+                    ambiguous_count: 0,
+                },
+                OutgoingEntry {
+                    kind: "asset".to_owned(),
+                    target_path: Some("img.png".to_owned()),
+                    raw_target: "img.png".to_owned(),
+                    link_text: "图".to_owned(),
+                    present: false,
+                    ambiguous_count: 0,
+                },
+                OutgoingEntry {
+                    kind: "wiki".to_owned(),
+                    target_path: None,
+                    raw_target: "nowhere".to_owned(),
+                    link_text: "无目标".to_owned(),
+                    present: false,
+                    ambiguous_count: 0,
+                },
+                OutgoingEntry {
+                    kind: "wiki".to_owned(),
+                    target_path: None,
+                    raw_target: "dup".to_owned(),
+                    link_text: "歧义".to_owned(),
+                    present: false,
+                    ambiguous_count: 2,
+                },
+            ]
+        );
+        assert_eq!(links.broken_count, 2);
+
+        // Removing one duplicate from the scan snapshot resolves the
+        // ambiguity in the very next query — no re-indexing involved.
+        let disambiguated: Vec<DocumentInfo> = documents
+            .iter()
+            .filter(|document| document.relative_path != "y/DUP.md")
+            .cloned()
+            .collect();
+        let links = document_links_for(&current.cache, &root_key, &disambiguated, "c.md")
+            .expect("c links after disambiguation");
+        let dup_entry = links
+            .outgoing
+            .iter()
+            .find(|entry| entry.raw_target == "dup")
+            .expect("dup entry");
+        assert_eq!(dup_entry.target_path.as_deref(), Some("x/Dup.md"));
+        assert!(dup_entry.present);
+        assert_eq!(dup_entry.ambiguous_count, 0);
+
+        // The wiki backlink direction follows the same unique-stem rule.
+        let links = document_links_for(&current.cache, &root_key, &disambiguated, "x/Dup.md")
+            .expect("dup backlinks");
+        assert_eq!(links.backlinks.len(), 1);
+        assert_eq!(links.backlinks[0].source_path, "c.md");
+
+        // Path validation matches every other command.
+        assert!(document_links_for(&current.cache, &root_key, &documents, "../out.md").is_err());
+        assert!(document_links_for(&current.cache, &root_key, &documents, "C:/abs.md").is_err());
+        assert!(document_links_for(&current.cache, &root_key, &documents, " ").is_err());
+    }
+
+    /// Pins the serde camelCase wire shape the TS `DocumentLinks` type in
+    /// `src/lib/documentLinks.ts` (re-exported by `backend.ts`) relies on.
+    #[test]
+    fn document_links_serialize_camel_case_for_the_frontend() {
+        let links = DocumentLinks {
+            backlinks: vec![BacklinkEntry {
+                source_path: "a.md".to_owned(),
+                source_title: "A".to_owned(),
+                link_text: "t".to_owned(),
+                count: 2,
+            }],
+            outgoing: vec![OutgoingEntry {
+                kind: "wiki".to_owned(),
+                target_path: None,
+                raw_target: "stem".to_owned(),
+                link_text: "t".to_owned(),
+                present: false,
+                ambiguous_count: 2,
+            }],
+            broken_count: 1,
+        };
+        assert_eq!(
+            serde_json::to_value(&links).expect("serialize document links"),
+            serde_json::json!({
+                "backlinks": [{
+                    "sourcePath": "a.md",
+                    "sourceTitle": "A",
+                    "linkText": "t",
+                    "count": 2
+                }],
+                "outgoing": [{
+                    "kind": "wiki",
+                    "targetPath": null,
+                    "rawTarget": "stem",
+                    "linkText": "t",
+                    "present": false,
+                    "ambiguousCount": 2
+                }],
+                "brokenCount": 1
+            })
+        );
+    }
+
+    #[test]
+    fn list_document_links_stays_fast_on_a_synthetic_link_graph() {
+        // Plan B1 budget: 2,000 documents × 10 links, one lookup well under
+        // 50ms; the assertion bound is deliberately loose for CI noise.
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("perf-library");
+        let root_key = normalize_root(&root);
+        let mut documents = vec![markdown_info("hub.md", "Hub")];
+        {
+            let transaction = current.cache.transaction().expect("begin");
+            {
+                let mut insert = transaction
+                    .prepare(
+                        "INSERT INTO document_links(
+                             library_root, source_path, link_kind, target_path, wiki_stem,
+                             target_kind, link_text, fragment, ordinal
+                         ) VALUES (?1, ?2, 'relative', ?3, NULL, 'document', 't', NULL, ?4)",
+                    )
+                    .expect("prepare insert");
+                for document_index in 0..2_000 {
+                    let source = format!("docs/doc-{document_index}.md");
+                    for ordinal in 0..10 {
+                        let target = if ordinal == 0 {
+                            "hub.md".to_owned()
+                        } else {
+                            format!("docs/doc-{}.md", (document_index + ordinal) % 2_000)
+                        };
+                        insert
+                            .execute(params![root_key, source, target, ordinal as u32])
+                            .expect("insert link");
+                    }
+                }
+            }
+            transaction.commit().expect("commit");
+        }
+        for document_index in 0..2_000 {
+            documents.push(markdown_info(
+                &format!("docs/doc-{document_index}.md"),
+                &format!("Doc {document_index}"),
+            ));
+        }
+
+        let start = Instant::now();
+        let links =
+            document_links_for(&current.cache, &root_key, &documents, "hub.md").expect("hub links");
+        let elapsed = start.elapsed();
+        assert_eq!(links.backlinks.len(), LINKS_LIST_LIMIT);
+        assert_eq!(links.backlinks[0].count, 1);
+        assert!(
+            elapsed < Duration::from_millis(250),
+            "list_document_links took {elapsed:?}"
+        );
+    }
+
+    // ---- Related passages (docs/plan-related-passages.md P0/P1) ----
+    //
+    // The fragment expectations mirror the shared contract case table
+    // F01..F13 in src/lib/relatedFragments.test.ts; keep both in sync.
+
+    #[test]
+    fn related_fragment_extraction_matches_the_shared_contract_cases() {
+        // F01: a 24-char CJK run slices into three 8-char windows.
+        let long_run = "控制系统的稳定性分析需要考虑相位裕度与增益裕度";
+        assert_eq!(long_run.chars().count(), 23);
+        let padded = format!("{long_run}一");
+        assert_eq!(
+            extract_related_fragments(&padded),
+            vec!["控制系统的稳定性", "分析需要考虑相位", "裕度与增益裕度一"]
+        );
+        // F02: CJK punctuation splits runs.
+        assert_eq!(
+            extract_related_fragments("时域响应，频域响应；根轨迹"),
+            vec!["时域响应", "频域响应", "根轨迹"]
+        );
+        // F03: mixed CJK and English runs, length-descending.
+        assert_eq!(
+            extract_related_fragments("傅里叶变换 Fourier transform 基础知识"),
+            vec!["transform", "Fourier", "傅里叶变换", "基础知识"]
+        );
+        // F04: newlines and spaces produce identical fragments.
+        assert_eq!(
+            extract_related_fragments("foo\nbar baz"),
+            extract_related_fragments("foo bar baz")
+        );
+        // F05/F06: punctuation-only and whitespace-only input is empty.
+        assert!(extract_related_fragments("，。！？…—·「」").is_empty());
+        assert!(extract_related_fragments(" \t\r\n ").is_empty());
+        // F07: fragments below three characters are dropped.
+        assert!(extract_related_fragments("ab cd 你好 ok").is_empty());
+        // F08: case-insensitive dedupe keeps the first casing.
+        assert_eq!(
+            extract_related_fragments("Fourier fourier FOURIER"),
+            vec!["Fourier"]
+        );
+        // F09: length-descending order, original position breaks ties.
+        assert_eq!(
+            extract_related_fragments("alpha beta gamma delta epsilon zeta theta1"),
+            vec!["epsilon", "theta1", "alpha", "gamma", "delta", "beta"]
+        );
+        // F10: input beyond 2,000 characters is ignored.
+        let mut oversized = "填".repeat(1_997);
+        oversized.push_str("尾巴 marker-fragment");
+        let fragments = extract_related_fragments(&oversized);
+        assert!(fragments
+            .iter()
+            .all(|fragment| fragment != "marker-fragment"));
+        // F11: FTS syntax stays literal (quotes are delimiters and never
+        // survive into fragments); `OR` itself is too short to remain.
+        assert_eq!(
+            extract_related_fragments("alpha \"beta\" OR NEAR(gamma) *star*"),
+            vec!["alpha", "gamma", "beta", "NEAR", "star"]
+        );
+        // F12: a 12-char run stays whole, a 13-char run slices into 8 + 5.
+        assert_eq!(
+            extract_related_fragments("这一段恰好十二个字符长度"),
+            vec!["这一段恰好十二个字符长度"]
+        );
+        assert_eq!(
+            extract_related_fragments("这一段共有十三个字符长度啊"),
+            vec!["这一段共有十三个", "字符长度啊"]
+        );
+        // F13: a slice remainder below three characters is dropped.
+        let seventeen = "一二三四五六七八九十甲乙丙丁戊己庚";
+        assert_eq!(seventeen.chars().count(), 17);
+        assert_eq!(
+            extract_related_fragments(seventeen),
+            vec!["一二三四五六七八", "九十甲乙丙丁戊己"]
+        );
+    }
+
+    #[test]
+    fn build_related_match_quotes_fragments_and_escapes_inner_quotes() {
+        assert_eq!(build_related_match(&[]), None);
+        assert_eq!(
+            build_related_match(&["傅里叶变换".to_owned(), "frequency".to_owned()]).as_deref(),
+            Some("\"傅里叶变换\" OR \"frequency\"")
+        );
+        // Defense in depth: fragments can never contain quotes (they are
+        // delimiters), but a hand-made one is still escaped by doubling.
+        assert_eq!(
+            build_related_match(&["a\"b".to_owned()]).as_deref(),
+            Some("\"a\"\"b\"")
+        );
+    }
+
+    // The parameter list mirrors the segment columns on purpose.
+    #[allow(clippy::too_many_arguments)]
+    fn insert_related_segment(
+        connection: &Connection,
+        root: &str,
+        relative_path: &str,
+        title: &str,
+        format: &str,
+        locator_kind: Option<&str>,
+        locator_value: Option<&str>,
+        ordinal: u32,
+        content: &str,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO search_segments(
+                     library_root, relative_path, title, format, locator_kind, locator_value,
+                     ordinal, content, needs_ocr
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, 0)",
+                params![
+                    root,
+                    relative_path,
+                    title,
+                    format,
+                    locator_kind,
+                    locator_value,
+                    ordinal,
+                    content
+                ],
+            )
+            .expect("insert related segment");
+    }
+
+    #[test]
+    fn related_passages_hit_all_formats_exclude_self_and_stay_literal() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let root = "related-library";
+        insert_related_segment(
+            &current.cache,
+            root,
+            "notes/alpha.md",
+            "Alpha",
+            "markdown",
+            None,
+            None,
+            0,
+            "傅里叶变换将时域信号映射到频域进行分析，是频谱方法的基础。",
+        );
+        insert_related_segment(
+            &current.cache,
+            root,
+            "papers/beta.pdf",
+            "Beta",
+            "pdf",
+            Some("pdfPage"),
+            Some("3"),
+            2,
+            "第三页同样讨论傅里叶变换将时域信号映射到频域的推导细节。",
+        );
+        insert_related_segment(
+            &current.cache,
+            root,
+            "books/gamma.epub",
+            "Gamma",
+            "epub",
+            Some("epubChapter"),
+            Some("OEBPS/ch1.xhtml"),
+            1,
+            "本章仅提到映射到频域这一个说法，与其余片段无关。",
+        );
+        insert_related_segment(
+            &current.cache,
+            root,
+            "notes/self.md",
+            "Self",
+            "markdown",
+            None,
+            None,
+            0,
+            "傅里叶变换将时域信号映射到频域进行分析。",
+        );
+        insert_related_segment(
+            &current.cache,
+            root,
+            "notes/other.md",
+            "Other",
+            "markdown",
+            None,
+            None,
+            0,
+            "毫无关系的内容，讲的是园艺技巧与浇水频率。",
+        );
+        insert_related_segment(
+            &current.cache,
+            "other-root",
+            "iso.md",
+            "Iso",
+            "markdown",
+            None,
+            None,
+            0,
+            "傅里叶变换将时域信号映射到频域进行分析。",
+        );
+
+        // The selection contains a newline exactly where the indexed text
+        // has none — run splitting keeps the fragments matchable.
+        let results = related_passages_index(
+            &current.cache,
+            root,
+            "傅里叶变换将时域信号\n映射到频域",
+            Some("notes/self.md"),
+            12,
+        )
+        .expect("related search");
+        let paths: Vec<&str> = results
+            .iter()
+            .map(|result| result.relative_path.as_str())
+            .collect();
+        assert!(paths.contains(&"notes/alpha.md"));
+        assert!(paths.contains(&"papers/beta.pdf"));
+        assert!(paths.contains(&"books/gamma.epub"));
+        assert!(!paths.contains(&"notes/self.md"), "self is excluded");
+        assert!(!paths.contains(&"notes/other.md"));
+        assert!(!paths.contains(&"iso.md"), "other roots are isolated");
+
+        // Locators and result ids keep the search_documents shape.
+        let beta = results
+            .iter()
+            .find(|result| result.relative_path == "papers/beta.pdf")
+            .expect("pdf hit");
+        assert_eq!(beta.locator, Some(SearchLocator::PdfPage { page: 3 }));
+        assert_eq!(beta.result_id, "papers/beta.pdf:pdfPage:3");
+        let gamma = results
+            .iter()
+            .find(|result| result.relative_path == "books/gamma.epub")
+            .expect("epub hit");
+        assert_eq!(
+            gamma.locator,
+            Some(SearchLocator::EpubChapter {
+                chapter_id: "OEBPS/ch1.xhtml".to_owned()
+            })
+        );
+        let alpha = results
+            .iter()
+            .find(|result| result.relative_path == "notes/alpha.md")
+            .expect("markdown hit");
+        assert!(alpha.locator.is_none());
+
+        // Multi-fragment hits outrank single-fragment hits (bm25 order).
+        let alpha_rank = paths.iter().position(|path| *path == "notes/alpha.md");
+        let gamma_rank = paths.iter().position(|path| *path == "books/gamma.epub");
+        assert!(alpha_rank < gamma_rank, "ranks: {paths:?}");
+
+        // English selections work the same way.
+        insert_related_segment(
+            &current.cache,
+            root,
+            "notes/en.md",
+            "English",
+            "markdown",
+            None,
+            None,
+            0,
+            "The Fourier transform maps time-domain signals into the frequency domain.",
+        );
+        let english = related_passages_index(
+            &current.cache,
+            root,
+            "Fourier transform maps time-domain signals",
+            None,
+            12,
+        )
+        .expect("english search");
+        assert!(english
+            .iter()
+            .any(|result| result.relative_path == "notes/en.md"));
+
+        // FTS operators inside the selection stay literal instead of
+        // erroring or matching everything.
+        insert_related_segment(
+            &current.cache,
+            root,
+            "notes/near.md",
+            "Near",
+            "markdown",
+            None,
+            None,
+            0,
+            "the NEAR keyword appears here as plain text",
+        );
+        let literal = related_passages_index(
+            &current.cache,
+            root,
+            "NEAR(alpha) AND *star* \"quoted\"",
+            None,
+            12,
+        )
+        .expect("literal search");
+        assert!(literal
+            .iter()
+            .any(|result| result.relative_path == "notes/near.md"));
+        assert!(!literal
+            .iter()
+            .any(|result| result.relative_path == "notes/other.md"));
+
+        // Limits clamp to 1..=50; a zero limit still returns one row.
+        let clamped = related_passages_index(
+            &current.cache,
+            root,
+            "傅里叶变换将时域信号映射到频域",
+            None,
+            0,
+        )
+        .expect("clamped search");
+        assert_eq!(clamped.len(), 1);
+
+        // Selections that normalize to nothing return empty without
+        // touching FTS; traversal in exclude_path is rejected.
+        assert!(
+            related_passages_index(&current.cache, root, "，。！？", None, 12)
+                .expect("empty fragments")
+                .is_empty()
+        );
+        assert!(related_passages_index(&current.cache, root, "ab", None, 12)
+            .expect("short input")
+            .is_empty());
+        assert!(
+            related_passages_index(&current.cache, root, "傅里叶变换", Some("../x.md"), 12)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn related_passages_meet_the_synthetic_performance_budget() {
+        // Plan §3.5: 5,000 segments of ~2 KiB, one query under 500ms.
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = "perf-root";
+        let needle = "控制系统稳定性分析方法与频率响应设计准则";
+        let filler =
+            "这里是一段用于填充的正文，讨论一般性的阅读器实现细节与文档渲染问题。".repeat(20);
+        {
+            let transaction = current.cache.transaction().expect("begin");
+            {
+                let mut insert = transaction
+                    .prepare(
+                        "INSERT INTO search_segments(
+                             library_root, relative_path, title, format, locator_kind,
+                             locator_value, ordinal, content, needs_ocr
+                         ) VALUES (?1, ?2, ?3, 'markdown', NULL, NULL, 0, ?4, 0)",
+                    )
+                    .expect("prepare insert");
+                for index in 0..5_000 {
+                    let path = format!("docs/doc-{index}.md");
+                    let content = if index % 20 == 0 {
+                        format!("{filler}{needle}{filler}")
+                    } else {
+                        filler.clone()
+                    };
+                    insert
+                        .execute(params![root, path, format!("Doc {index}"), content])
+                        .expect("insert segment");
+                }
+            }
+            transaction.commit().expect("commit");
+        }
+
+        let start = Instant::now();
+        let results = related_passages_index(
+            &current.cache,
+            root,
+            "控制系统稳定性分析方法\n与频率响应设计准则",
+            None,
+            12,
+        )
+        .expect("perf search");
+        let elapsed = start.elapsed();
+        assert_eq!(results.len(), 12);
+        assert!(
+            elapsed < Duration::from_millis(500),
+            "related query took {elapsed:?}"
+        );
     }
 }

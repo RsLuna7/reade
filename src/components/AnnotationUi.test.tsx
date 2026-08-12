@@ -69,6 +69,37 @@ describe("SelectionToolbar", () => {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
   });
+
+  it("renders the quote-card action only when a handler is wired (QC)", () => {
+    const view = render(<SelectionToolbar {...baseProps} />);
+    expect(screen.queryByRole("button", { name: "卡片" })).not.toBeInTheDocument();
+    view.unmount();
+
+    const onMakeCard = vi.fn();
+    render(<SelectionToolbar {...baseProps} onMakeCard={onMakeCard} />);
+    fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+    expect(onMakeCard).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables the quote-card action together with the mark actions", () => {
+    render(<SelectionToolbar {...baseProps} onMakeCard={vi.fn()} canHighlight={false} />);
+    expect(screen.getByRole("button", { name: "卡片" })).toBeDisabled();
+  });
+
+  it("gates the related-passages action on the selection length (RP)", () => {
+    const onFindRelated = vi.fn();
+    const view = render(
+      <SelectionToolbar {...baseProps} onFindRelated={onFindRelated} canFindRelated={false} />,
+    );
+    const related = screen.getByRole("button", { name: "相关" });
+    expect(related).toBeDisabled();
+    expect(related).toHaveAttribute("title", "至少选中 8 个字符");
+    view.unmount();
+
+    render(<SelectionToolbar {...baseProps} onFindRelated={onFindRelated} canFindRelated />);
+    fireEvent.click(screen.getByRole("button", { name: "相关" }));
+    expect(onFindRelated).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("AnnotationEditBubble", () => {
@@ -153,6 +184,34 @@ describe("AnnotationList", () => {
     fireEvent.click(screen.getByRole("button", { name: "导出本文档" }));
     expect(onExport).toHaveBeenCalledTimes(1);
     expect(screen.getByRole("button", { name: "改为粉色" })).toBeInTheDocument();
+  });
+
+  it("offers the quote-card action only for marks with an excerpt (QC-D3 M2)", () => {
+    const bookmark = highlight({
+      id: "ann-bookmark",
+      kind: "bookmark",
+      color: null,
+      selectedText: null,
+      title: "某个书签",
+      locator: {
+        kind: "bookmark",
+        target: { format: "markdown", headingId: null, scrollRatio: 0 },
+      },
+    });
+    const onGenerateCard = vi.fn();
+    render(
+      <AnnotationList
+        {...baseProps}
+        annotations={[highlight(), bookmark]}
+        onGenerateCard={onGenerateCard}
+      />,
+    );
+
+    // 书签无摘录:唯一的「卡片」按钮属于高亮条目。
+    const cardButtons = screen.getAllByRole("button", { name: "卡片" });
+    expect(cardButtons).toHaveLength(1);
+    fireEvent.click(cardButtons[0]);
+    expect(onGenerateCard).toHaveBeenCalledWith(expect.objectContaining({ id: "ann-1" }));
   });
 });
 

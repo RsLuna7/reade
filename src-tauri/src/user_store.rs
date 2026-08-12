@@ -48,7 +48,7 @@ use crate::library::{
     validate_relative_library_path, AppState, CommandResult, DocumentInfo, MAX_MARKDOWN_BYTES,
 };
 
-const USER_SCHEMA_VERSION: i64 = 4;
+const USER_SCHEMA_VERSION: i64 = 5;
 const USER_DB_FILE: &str = "reade-user.sqlite3";
 const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
 /// Tombstoned annotations are physically purged 90 days after deletion.
@@ -80,6 +80,11 @@ const MAX_ANNOTATION_NOTE_CHARS: usize = 4_000;
 const MAX_ANNOTATION_TITLE_CHARS: usize = 200;
 const MAX_ANNOTATION_TEXT_CHARS: usize = 2_000;
 const MAX_ANNOTATION_RECTS: usize = 64;
+
+/// Collection names are trimmed and capped (`docs/plan-collections.md`
+/// §3.1); ids follow the annotation id rules (≤ 64 chars, same alphabet).
+/// The TS twin constants live in `src/lib/collections.ts`.
+const MAX_COLLECTION_NAME_CHARS: usize = 100;
 
 /// Import caps mirroring `MAX_TRANSFER_*` in `src/lib/annotationTransfer.ts`.
 const MAX_IMPORT_ANNOTATIONS: usize = 10_000;
@@ -535,6 +540,191 @@ pub fn import_annotations(
     )
 }
 
+// ---- Collections (docs/plan-collections.md §3.2) ----
+//
+// Contract with `src/lib/backend.ts` (snake_case parameter ↔ camelCase
+// invoke key): `collection_id` ↔ `collectionId`, `relative_path` ↔
+// `relativePath`, `ordered_paths` ↔ `orderedPaths`, `id`/`name` unchanged.
+// Every write is scoped to the open `library_root`; item paths are stored
+// as plain strings and never used for file access (opening a document
+// still goes through `open_document`'s canonicalized boundary).
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct Collection {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionSummary {
+    pub id: String,
+    pub name: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub item_count: u64,
+    /// Items whose path is in the current scan snapshot — the list health
+    /// indicator (`presentCount/itemCount` badge).
+    pub present_count: u64,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CollectionItem {
+    pub relative_path: String,
+    pub position: u32,
+    pub added_at: u64,
+    /// Whether the path is in the current scan snapshot; missing items are
+    /// kept (greyed out in the UI) and never auto-deleted (CO-D3).
+    pub present: bool,
+}
+
+/// Collections of the open library with item/present counts, in stable
+/// `(created_at, id)` order (the list itself is never reordered, CO-D4).
+#[tauri::command]
+pub fn list_collections(
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<Vec<CollectionSummary>> {
+    let (root, present) = current_root_and_document_paths(&library)?;
+    let connection = lock_user(&user)?;
+    list_collection_rows(&connection, &normalize_root(&root), &present)
+}
+
+#[tauri::command]
+pub fn create_collection(
+    id: String,
+    name: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<Collection> {
+    let root = current_root(&library)?;
+    let connection = lock_user(&user)?;
+    create_collection_row(
+        &connection,
+        &normalize_root(&root),
+        &id,
+        &name,
+        now_millis(),
+    )
+}
+
+#[tauri::command]
+pub fn rename_collection(
+    id: String,
+    name: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<()> {
+    let root = current_root(&library)?;
+    let connection = lock_user(&user)?;
+    rename_collection_row(
+        &connection,
+        &normalize_root(&root),
+        &id,
+        &name,
+        now_millis(),
+    )
+}
+
+/// Deletes the collection row and its items in one transaction. The
+/// documents themselves — and their annotations, reviews and reading
+/// positions — are untouched by design (plan §2 goal 5).
+#[tauri::command]
+pub fn delete_collection(
+    id: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<()> {
+    let root = current_root(&library)?;
+    let mut connection = lock_user(&user)?;
+    delete_collection_row(&mut connection, &normalize_root(&root), &id)
+}
+
+/// Items of one collection in manual order. Title and format are resolved
+/// by the frontend from its `documents` snapshot, so there is exactly one
+/// source for document titles.
+#[tauri::command]
+pub fn list_collection_items(
+    collection_id: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<Vec<CollectionItem>> {
+    let (root, present) = current_root_and_document_paths(&library)?;
+    let connection = lock_user(&user)?;
+    list_collection_item_rows(
+        &connection,
+        &normalize_root(&root),
+        &collection_id,
+        &present,
+    )
+}
+
+/// Appends a document to a collection. The path must be part of the
+/// current scan snapshot (documents can only be *added* while they exist
+/// in the library); re-adding an existing item is idempotent and returns
+/// the stored row unchanged.
+#[tauri::command]
+pub fn add_collection_item(
+    collection_id: String,
+    relative_path: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<CollectionItem> {
+    let (root, present) = current_root_and_document_paths(&library)?;
+    let mut connection = lock_user(&user)?;
+    add_collection_item_row(
+        &mut connection,
+        &normalize_root(&root),
+        &present,
+        &collection_id,
+        &relative_path,
+        now_millis(),
+    )
+}
+
+#[tauri::command]
+pub fn remove_collection_item(
+    collection_id: String,
+    relative_path: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<()> {
+    let root = current_root(&library)?;
+    let mut connection = lock_user(&user)?;
+    remove_collection_item_row(
+        &mut connection,
+        &normalize_root(&root),
+        &collection_id,
+        &relative_path,
+        now_millis(),
+    )
+}
+
+/// Rewrites the manual order (CO-D4): `ordered_paths` must be exactly the
+/// current item set — anything extra, missing or duplicated aborts before
+/// the first write.
+#[tauri::command]
+pub fn reorder_collection_items(
+    collection_id: String,
+    ordered_paths: Vec<String>,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<()> {
+    let root = current_root(&library)?;
+    let mut connection = lock_user(&user)?;
+    reorder_collection_item_rows(
+        &mut connection,
+        &normalize_root(&root),
+        &collection_id,
+        &ordered_paths,
+        now_millis(),
+    )
+}
+
 fn lock_user<'a>(state: &'a State<'_, UserState>) -> CommandResult<MutexGuard<'a, Connection>> {
     state.inner().lock()
 }
@@ -600,6 +790,7 @@ fn run_migration_chain(
             2 => migrate_to_v2(&transaction)?,
             3 => migrate_to_v3(&transaction)?,
             4 => migrate_to_v4(&transaction)?,
+            5 => migrate_to_v5(&transaction)?,
             _ => return Err(format!("Unknown user data migration step {step}")),
         }
         transaction
@@ -799,6 +990,41 @@ fn migrate_to_v4(transaction: &Connection) -> CommandResult<()> {
                  ON annotation_reviews(library_root, suspended, due_at);",
         )
         .map_err(|error| format!("Cannot create the annotation review schema: {error}"))?;
+    Ok(())
+}
+
+/// v5: named reading collections (`docs/plan-collections.md` §3.1). Two
+/// tables, no foreign keys (the `annotation_reviews` precedent): orphan
+/// defense lives in the command layer, which deletes a collection's items
+/// in the same transaction as the collection row. `collection_items`
+/// stores nothing but normalized library-relative path strings — deleting
+/// a collection can never touch documents or annotations. The migration
+/// backfills nothing.
+fn migrate_to_v5(transaction: &Connection) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            "CREATE TABLE collections (
+                 id TEXT PRIMARY KEY,
+                 library_root TEXT NOT NULL,
+                 name TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX collections_by_root ON collections(library_root, created_at ASC);
+             CREATE TABLE collection_items (
+                 collection_id TEXT NOT NULL,
+                 library_root TEXT NOT NULL,
+                 relative_path TEXT NOT NULL,
+                 position INTEGER NOT NULL,
+                 added_at INTEGER NOT NULL,
+                 PRIMARY KEY (collection_id, relative_path)
+             );
+             CREATE INDEX collection_items_by_collection
+                 ON collection_items(collection_id, position);
+             CREATE INDEX collection_items_by_path
+                 ON collection_items(library_root, relative_path);",
+        )
+        .map_err(|error| format!("Cannot create the collections schema: {error}"))?;
     Ok(())
 }
 
@@ -1211,6 +1437,23 @@ fn rebind_annotation_rows(
             params![new_path, root, old_path],
         )
         .map_err(|error| format!("Cannot rebind annotations: {error}"))?;
+    // Collection items follow the same rebind confirmation (CO-D3): the
+    // membership follows the content to its new path. `UPDATE OR IGNORE`
+    // skips items whose collection already contains the new path (primary
+    // key conflict); the follow-up DELETE clears those leftovers.
+    transaction
+        .execute(
+            "UPDATE OR IGNORE collection_items SET relative_path = ?1
+             WHERE library_root = ?2 AND relative_path = ?3",
+            params![new_path, root, old_path],
+        )
+        .map_err(|error| format!("Cannot rebind collection items: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM collection_items WHERE library_root = ?1 AND relative_path = ?2",
+            params![root, old_path],
+        )
+        .map_err(|error| format!("Cannot drop stale collection items: {error}"))?;
     // The old path's fingerprint row is spent: its identity now lives at the
     // new path (whose row the scan maintains). Dropping it keeps future
     // detections from pairing against a path that no longer exists.
@@ -2097,17 +2340,401 @@ fn sanitize_optional_text(
     Ok(Some(trimmed.to_owned()))
 }
 
-fn validate_annotation_id(id: &str) -> CommandResult<()> {
+/// Shared id rules for client-generated identifiers (annotations and
+/// collections use the same alphabet and length cap).
+fn validate_id_value(id: &str, label: &str) -> CommandResult<()> {
     if id.is_empty() || id.chars().count() > MAX_ANNOTATION_ID_CHARS {
-        return Err("Annotation id is invalid".to_owned());
+        return Err(format!("{label} id is invalid"));
     }
     if !id
         .chars()
         .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
     {
-        return Err("Annotation id contains unsupported characters".to_owned());
+        return Err(format!("{label} id contains unsupported characters"));
     }
     Ok(())
+}
+
+fn validate_annotation_id(id: &str) -> CommandResult<()> {
+    validate_id_value(id, "Annotation")
+}
+
+// ---- Collection row implementations ----
+
+fn validate_collection_id(id: &str) -> CommandResult<()> {
+    validate_id_value(id, "Collection")
+}
+
+/// Trimmed, non-empty, capped name — the same sanitation the web store
+/// applies through `sanitizeCollectionName` in `src/lib/collections.ts`.
+fn validate_collection_name(name: &str) -> CommandResult<String> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err("Collection name must not be empty".to_owned());
+    }
+    if trimmed.chars().count() > MAX_COLLECTION_NAME_CHARS {
+        return Err(format!(
+            "Collection name exceeds {MAX_COLLECTION_NAME_CHARS} characters"
+        ));
+    }
+    Ok(trimmed.to_owned())
+}
+
+/// Ownership gate shared by every per-collection operation: the id must
+/// exist inside the open library root (the cross-library capture rules of
+/// the annotation store).
+fn ensure_collection_in_root(connection: &Connection, root: &str, id: &str) -> CommandResult<()> {
+    validate_collection_id(id)?;
+    let owned: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM collections WHERE id = ?1 AND library_root = ?2",
+            params![id, root],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot verify collection ownership: {error}"))?;
+    if owned == 0 {
+        return Err("Collection was not found".to_owned());
+    }
+    Ok(())
+}
+
+fn touch_collection(connection: &Connection, root: &str, id: &str, now: u64) -> CommandResult<()> {
+    connection
+        .execute(
+            "UPDATE collections SET updated_at = ?1 WHERE id = ?2 AND library_root = ?3",
+            params![now as i64, id, root],
+        )
+        .map_err(|error| format!("Cannot touch collection: {error}"))?;
+    Ok(())
+}
+
+fn list_collection_rows(
+    connection: &Connection,
+    root: &str,
+    present: &HashSet<String>,
+) -> CommandResult<Vec<CollectionSummary>> {
+    let mut collections: Vec<CollectionSummary> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT id, name, created_at, updated_at FROM collections
+                 WHERE library_root = ?1
+                 ORDER BY created_at ASC, id ASC",
+            )
+            .map_err(|error| format!("Cannot prepare the collection list: {error}"))?;
+        let rows = statement
+            .query_map(params![root], |row| {
+                Ok(CollectionSummary {
+                    id: row.get(0)?,
+                    name: row.get(1)?,
+                    created_at: row.get::<_, i64>(2)? as u64,
+                    updated_at: row.get::<_, i64>(3)? as u64,
+                    item_count: 0,
+                    present_count: 0,
+                })
+            })
+            .map_err(|error| format!("Cannot list collections: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Cannot decode collections: {error}"))?
+    };
+
+    let mut counts: HashMap<String, (u64, u64)> = HashMap::new();
+    {
+        let mut statement = connection
+            .prepare(
+                "SELECT collection_id, relative_path FROM collection_items
+                 WHERE library_root = ?1",
+            )
+            .map_err(|error| format!("Cannot prepare the collection counts: {error}"))?;
+        let rows = statement
+            .query_map(params![root], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .map_err(|error| format!("Cannot count collection items: {error}"))?;
+        for row in rows {
+            let (collection_id, relative_path) =
+                row.map_err(|error| format!("Cannot decode collection counts: {error}"))?;
+            let entry = counts.entry(collection_id).or_insert((0, 0));
+            entry.0 += 1;
+            if present.contains(&relative_path) {
+                entry.1 += 1;
+            }
+        }
+    }
+    for collection in &mut collections {
+        if let Some(&(item_count, present_count)) = counts.get(&collection.id) {
+            collection.item_count = item_count;
+            collection.present_count = present_count;
+        }
+    }
+    Ok(collections)
+}
+
+fn create_collection_row(
+    connection: &Connection,
+    root: &str,
+    id: &str,
+    name: &str,
+    now: u64,
+) -> CommandResult<Collection> {
+    validate_collection_id(id)?;
+    let name = validate_collection_name(name)?;
+    // The id is a global primary key (mirroring the IndexedDB keyPath), so
+    // an id held by any library refuses the insert up front.
+    let existing: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM collections WHERE id = ?1",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot verify the collection id: {error}"))?;
+    if existing > 0 {
+        return Err("Collection id already exists".to_owned());
+    }
+    connection
+        .execute(
+            "INSERT INTO collections(id, library_root, name, created_at, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, root, name, now as i64, now as i64],
+        )
+        .map_err(|error| format!("Cannot create the collection: {error}"))?;
+    Ok(Collection {
+        id: id.to_owned(),
+        name,
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+fn rename_collection_row(
+    connection: &Connection,
+    root: &str,
+    id: &str,
+    name: &str,
+    now: u64,
+) -> CommandResult<()> {
+    validate_collection_id(id)?;
+    let name = validate_collection_name(name)?;
+    let updated = connection
+        .execute(
+            "UPDATE collections SET name = ?1, updated_at = ?2
+             WHERE id = ?3 AND library_root = ?4",
+            params![name, now as i64, id, root],
+        )
+        .map_err(|error| format!("Cannot rename the collection: {error}"))?;
+    if updated == 0 {
+        return Err("Collection was not found".to_owned());
+    }
+    Ok(())
+}
+
+fn delete_collection_row(connection: &mut Connection, root: &str, id: &str) -> CommandResult<()> {
+    ensure_collection_in_root(connection, root, id)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin the collection deletion: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM collection_items WHERE collection_id = ?1 AND library_root = ?2",
+            params![id, root],
+        )
+        .map_err(|error| format!("Cannot delete the collection items: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM collections WHERE id = ?1 AND library_root = ?2",
+            params![id, root],
+        )
+        .map_err(|error| format!("Cannot delete the collection: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit the collection deletion: {error}"))
+}
+
+fn list_collection_item_rows(
+    connection: &Connection,
+    root: &str,
+    collection_id: &str,
+    present: &HashSet<String>,
+) -> CommandResult<Vec<CollectionItem>> {
+    ensure_collection_in_root(connection, root, collection_id)?;
+    let mut statement = connection
+        .prepare(
+            "SELECT relative_path, position, added_at FROM collection_items
+             WHERE collection_id = ?1 AND library_root = ?2
+             ORDER BY position ASC, relative_path ASC",
+        )
+        .map_err(|error| format!("Cannot prepare the collection items: {error}"))?;
+    let rows = statement
+        .query_map(params![collection_id, root], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, i64>(2)? as u64,
+            ))
+        })
+        .map_err(|error| format!("Cannot list collection items: {error}"))?;
+    let mut items = Vec::new();
+    for row in rows {
+        let (relative_path, position, added_at) =
+            row.map_err(|error| format!("Cannot decode a collection item: {error}"))?;
+        let is_present = present.contains(&relative_path);
+        items.push(CollectionItem {
+            relative_path,
+            position,
+            added_at,
+            present: is_present,
+        });
+    }
+    Ok(items)
+}
+
+fn add_collection_item_row(
+    connection: &mut Connection,
+    root: &str,
+    present: &HashSet<String>,
+    collection_id: &str,
+    relative_path: &str,
+    now: u64,
+) -> CommandResult<CollectionItem> {
+    ensure_collection_in_root(connection, root, collection_id)?;
+    validate_relative_library_path(relative_path)?;
+    let normalized = normalize_relative_path(Path::new(relative_path));
+    if normalized.is_empty() {
+        return Err("A non-empty relative path is required".to_owned());
+    }
+    // Adding requires the document in the current scan snapshot; missing
+    // items can only *become* missing later (rename/delete on disk) and
+    // are then greyed out instead of purged.
+    if !present.contains(&normalized) {
+        return Err("Document is not in the current library".to_owned());
+    }
+    let existing: Option<(u32, i64)> = connection
+        .query_row(
+            "SELECT position, added_at FROM collection_items
+             WHERE collection_id = ?1 AND relative_path = ?2 AND library_root = ?3",
+            params![collection_id, normalized, root],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot inspect the collection item: {error}"))?;
+    if let Some((position, added_at)) = existing {
+        // Idempotent re-add: the stored row (and the collection's
+        // updated_at) stay untouched.
+        return Ok(CollectionItem {
+            relative_path: normalized,
+            position,
+            added_at: added_at as u64,
+            present: true,
+        });
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin the collection insert: {error}"))?;
+    let position: u32 = transaction
+        .query_row(
+            "SELECT COALESCE(MAX(position) + 1, 0) FROM collection_items
+             WHERE collection_id = ?1 AND library_root = ?2",
+            params![collection_id, root],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot compute the item position: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO collection_items(
+                 collection_id, library_root, relative_path, position, added_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![collection_id, root, normalized, position, now as i64],
+        )
+        .map_err(|error| format!("Cannot add the collection item: {error}"))?;
+    touch_collection(&transaction, root, collection_id, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit the collection insert: {error}"))?;
+    Ok(CollectionItem {
+        relative_path: normalized,
+        position,
+        added_at: now,
+        present: true,
+    })
+}
+
+fn remove_collection_item_row(
+    connection: &mut Connection,
+    root: &str,
+    collection_id: &str,
+    relative_path: &str,
+    now: u64,
+) -> CommandResult<()> {
+    ensure_collection_in_root(connection, root, collection_id)?;
+    validate_relative_library_path(relative_path)?;
+    let normalized = normalize_relative_path(Path::new(relative_path));
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin the collection removal: {error}"))?;
+    let removed = transaction
+        .execute(
+            "DELETE FROM collection_items
+             WHERE collection_id = ?1 AND relative_path = ?2 AND library_root = ?3",
+            params![collection_id, normalized, root],
+        )
+        .map_err(|error| format!("Cannot remove the collection item: {error}"))?;
+    if removed == 0 {
+        return Err("Collection item was not found".to_owned());
+    }
+    touch_collection(&transaction, root, collection_id, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit the collection removal: {error}"))
+}
+
+fn reorder_collection_item_rows(
+    connection: &mut Connection,
+    root: &str,
+    collection_id: &str,
+    ordered_paths: &[String],
+    now: u64,
+) -> CommandResult<()> {
+    ensure_collection_in_root(connection, root, collection_id)?;
+    let existing: Vec<String> = {
+        let mut statement = connection
+            .prepare(
+                "SELECT relative_path FROM collection_items
+                 WHERE collection_id = ?1 AND library_root = ?2",
+            )
+            .map_err(|error| format!("Cannot prepare the reorder check: {error}"))?;
+        let rows = statement
+            .query_map(params![collection_id, root], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Cannot read the collection order: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Cannot decode the collection order: {error}"))?
+    };
+    let ordered_set: HashSet<&str> = ordered_paths.iter().map(String::as_str).collect();
+    let existing_set: HashSet<&str> = existing.iter().map(String::as_str).collect();
+    if ordered_paths.len() != existing.len()
+        || ordered_set.len() != ordered_paths.len()
+        || ordered_set != existing_set
+    {
+        return Err("Reordered paths do not match the collection items".to_owned());
+    }
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin the collection reorder: {error}"))?;
+    {
+        let mut update = transaction
+            .prepare(
+                "UPDATE collection_items SET position = ?1
+                 WHERE collection_id = ?2 AND relative_path = ?3 AND library_root = ?4",
+            )
+            .map_err(|error| format!("Cannot prepare the reorder update: {error}"))?;
+        for (position, relative_path) in ordered_paths.iter().enumerate() {
+            update
+                .execute(params![position as u32, collection_id, relative_path, root])
+                .map_err(|error| format!("Cannot reorder a collection item: {error}"))?;
+        }
+    }
+    touch_collection(&transaction, root, collection_id, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit the collection reorder: {error}"))
 }
 
 #[cfg(test)]
@@ -2278,9 +2905,9 @@ mod tests {
                     &connection,
                     "SELECT count(*) FROM sqlite_master
                      WHERE name IN ('annotations', 'annotations_fts', 'documents',
-                                    'annotation_reviews')",
+                                    'annotation_reviews', 'collections', 'collection_items')",
                 ),
-                4
+                6
             );
             let annotation = sanitized_sample("ann-1", "notes/a.md");
             upsert_annotation_row(&connection, ROOT, &annotation).expect("insert");
@@ -3379,10 +4006,12 @@ mod tests {
 
         // Upgrading and reopening are both idempotent: the review table and
         // its due index exist exactly once, existing annotations survive.
+        // (The chain continues to the current version, v5 as of the
+        // collections migration.)
         for _ in 0..2 {
             let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
             let connection = locked(&state);
-            assert_eq!(user_version(&connection), 4);
+            assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
                 count_rows(
                     &connection,
@@ -3425,6 +4054,549 @@ mod tests {
             0
         );
         assert_eq!(count_rows(&backup, "SELECT count(*) FROM annotations"), 1);
+    }
+
+    // ---- Collections (docs/plan-collections.md C0) ----
+
+    /// Hand-builds a v4 database (v2 annotation schema + the real v3/v4
+    /// migration steps) so the v4 → v5 step can be tested in isolation.
+    fn build_v4_database(directory: &Path) -> PathBuf {
+        let db_path = directory.join(USER_DB_FILE);
+        let connection = Connection::open(&db_path).expect("hand-build v4");
+        connection.execute_batch(V2_SCHEMA_DDL).expect("v2 schema");
+        migrate_to_v3(&connection).expect("v3 step");
+        migrate_to_v4(&connection).expect("v4 step");
+        connection
+            .execute(
+                "INSERT INTO annotations(
+                     id, library_root, relative_path, kind, color, note, selected_text,
+                     title, locator_json, created_at, updated_at, sort_index,
+                     searchable_text, deleted_at
+                 ) VALUES ('ann-v4', ?1, 'notes/a.md', 'highlight', 'yellow', NULL, 'hello',
+                           NULL, ?2, 100, 100, 'M|00000|00000000', 'hello\u{1f}', NULL)",
+                params![
+                    ROOT,
+                    r#"{"kind":"markdown","quote":"hello","prefix":"","suffix":"","headingId":null}"#
+                ],
+            )
+            .expect("insert v4 annotation");
+        insert_document_row(&connection, ROOT, "notes/a.md", "pmd5:aaaa");
+        insert_review_row(&connection, ROOT, "ann-v4", 2, 1_000, Some(500), false);
+        connection
+            .pragma_update(None, "user_version", 4)
+            .expect("mark v4");
+        db_path
+    }
+
+    #[test]
+    fn migrates_v4_databases_to_v5_with_backup_and_idempotent_reopen() {
+        let directory = tempdir().expect("temp dir");
+        build_v4_database(directory.path());
+
+        // Upgrading and reopening are both idempotent: the collection
+        // tables exist exactly once and every earlier table keeps its data.
+        for _ in 0..2 {
+            let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
+            let connection = locked(&state);
+            assert_eq!(user_version(&connection), 5);
+            assert_eq!(
+                count_rows(
+                    &connection,
+                    "SELECT count(*) FROM sqlite_master
+                     WHERE type = 'table' AND name IN ('collections', 'collection_items')",
+                ),
+                2
+            );
+            assert_eq!(
+                count_rows(
+                    &connection,
+                    "SELECT count(*) FROM sqlite_master
+                     WHERE type = 'index'
+                       AND name IN ('collections_by_root', 'collection_items_by_collection',
+                                    'collection_items_by_path')",
+                ),
+                3
+            );
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM annotations"),
+                1
+            );
+            assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 1);
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
+                1
+            );
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM collections"),
+                0,
+                "the migration backfills nothing"
+            );
+        }
+
+        // The pre-upgrade backup snapshots the v4 state.
+        let backup_path = directory.path().join("reade-user.backup-v4.sqlite3");
+        assert!(backup_path.exists(), "v4 backup must be created");
+        let backup = Connection::open(&backup_path).expect("open backup");
+        assert_eq!(user_version(&backup), 4);
+        assert_eq!(
+            count_rows(
+                &backup,
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'table' AND name = 'collections'",
+            ),
+            0
+        );
+        assert_eq!(count_rows(&backup, "SELECT count(*) FROM annotations"), 1);
+    }
+
+    fn present_set(paths: &[&str]) -> HashSet<String> {
+        paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn collection_crud_validates_ids_names_presence_and_ownership() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        let present = present_set(&["a.md", "b.md", "sub/c.pdf"]);
+
+        // Id rules match the annotation id alphabet and length cap.
+        assert!(create_collection_row(&connection, ROOT, &"x".repeat(65), "名单", 1_000).is_err());
+        assert!(create_collection_row(&connection, ROOT, "bad id!", "名单", 1_000).is_err());
+        assert!(create_collection_row(&connection, ROOT, "", "名单", 1_000).is_err());
+        // Name rules: trimmed, non-empty, ≤ 100 chars.
+        assert!(create_collection_row(&connection, ROOT, "col-a", "", 1_000).is_err());
+        assert!(create_collection_row(&connection, ROOT, "col-a", "   ", 1_000).is_err());
+        assert!(
+            create_collection_row(&connection, ROOT, "col-a", &"名".repeat(101), 1_000).is_err()
+        );
+
+        let created = create_collection_row(&connection, ROOT, "col-a", "  考研数学  ", 1_000)
+            .expect("create");
+        assert_eq!(
+            created,
+            Collection {
+                id: "col-a".to_owned(),
+                name: "考研数学".to_owned(),
+                created_at: 1_000,
+                updated_at: 1_000,
+            }
+        );
+        // A hundred-char name is exactly at the cap.
+        create_collection_row(&connection, ROOT, "col-cap", &"名".repeat(100), 1_100)
+            .expect("name at cap");
+        // The id is globally unique, even across libraries (IndexedDB
+        // keyPath parity).
+        assert!(create_collection_row(&connection, ROOT, "col-a", "重复", 1_200).is_err());
+        assert!(create_collection_row(&connection, "C:/other", "col-a", "重复", 1_200).is_err());
+
+        // Ownership: operations against another root see "not found".
+        assert!(rename_collection_row(&connection, "C:/other", "col-a", "新名", 2_000).is_err());
+        assert!(delete_collection_row(&mut connection, "C:/other", "col-a").is_err());
+        assert!(list_collection_item_rows(&connection, "C:/other", "col-a", &present).is_err());
+        rename_collection_row(&connection, ROOT, "col-a", " 数学一 ", 2_000).expect("rename");
+        let renamed: String = connection
+            .query_row(
+                "SELECT name FROM collections WHERE id = 'col-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read renamed");
+        assert_eq!(renamed, "数学一");
+
+        // Adding validates the path shape and the scan-snapshot presence.
+        assert!(add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present,
+            "col-a",
+            "../outside.md",
+            3_000
+        )
+        .is_err());
+        assert!(add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present,
+            "col-a",
+            "missing.md",
+            3_000
+        )
+        .is_err());
+        assert!(add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present,
+            "col-missing",
+            "a.md",
+            3_000
+        )
+        .is_err());
+
+        // Positions append 0, 1, 2 …
+        let first =
+            add_collection_item_row(&mut connection, ROOT, &present, "col-a", "a.md", 3_000)
+                .expect("add a");
+        assert_eq!(
+            (first.position, first.added_at, first.present),
+            (0, 3_000, true)
+        );
+        let second =
+            add_collection_item_row(&mut connection, ROOT, &present, "col-a", "b.md", 3_500)
+                .expect("add b");
+        assert_eq!(second.position, 1);
+        let third =
+            add_collection_item_row(&mut connection, ROOT, &present, "col-a", "sub/c.pdf", 4_000)
+                .expect("add c");
+        assert_eq!(third.position, 2);
+
+        // Re-adding is idempotent: same row back, no timestamp movement.
+        let repeat =
+            add_collection_item_row(&mut connection, ROOT, &present, "col-a", "a.md", 9_000)
+                .expect("re-add a");
+        assert_eq!((repeat.position, repeat.added_at), (0, 3_000));
+        let updated_at: i64 = connection
+            .query_row(
+                "SELECT updated_at FROM collections WHERE id = 'col-a'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("read updated_at");
+        assert_eq!(
+            updated_at, 4_000,
+            "idempotent re-add must not touch updated_at"
+        );
+
+        // Reorder must receive exactly the current set.
+        let reorder = |connection: &mut Connection, paths: &[&str]| {
+            reorder_collection_item_rows(
+                connection,
+                ROOT,
+                "col-a",
+                &paths
+                    .iter()
+                    .map(|path| (*path).to_owned())
+                    .collect::<Vec<_>>(),
+                5_000,
+            )
+        };
+        assert!(reorder(&mut connection, &["a.md", "b.md"]).is_err());
+        assert!(reorder(&mut connection, &["a.md", "b.md", "sub/c.pdf", "d.md"]).is_err());
+        assert!(reorder(&mut connection, &["a.md", "a.md", "b.md"]).is_err());
+        assert!(reorder(&mut connection, &["a.md", "b.md", "d.md"]).is_err());
+        reorder(&mut connection, &["sub/c.pdf", "a.md", "b.md"]).expect("reorder");
+        let ordered = list_collection_item_rows(&connection, ROOT, "col-a", &present)
+            .expect("list after reorder");
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|item| (item.relative_path.as_str(), item.position))
+                .collect::<Vec<_>>(),
+            vec![("sub/c.pdf", 0), ("a.md", 1), ("b.md", 2)]
+        );
+
+        // Removal: unknown items error, removal keeps the others.
+        assert!(
+            remove_collection_item_row(&mut connection, ROOT, "col-a", "missing.md", 6_000)
+                .is_err()
+        );
+        remove_collection_item_row(&mut connection, ROOT, "col-a", "b.md", 6_000).expect("remove");
+        assert_eq!(
+            list_collection_item_rows(&connection, ROOT, "col-a", &present)
+                .expect("list after removal")
+                .len(),
+            2
+        );
+
+        // Summaries: itemCount vs presentCount with one missing path, and
+        // per-root isolation.
+        let shrunk = present_set(&["a.md"]);
+        create_collection_row(&connection, "C:/other", "col-iso", "别的库", 7_000)
+            .expect("create isolated");
+        let listed = list_collection_rows(&connection, ROOT, &shrunk).expect("list summaries");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].id, "col-a");
+        assert_eq!((listed[0].item_count, listed[0].present_count), (2, 1));
+        assert_eq!(listed[1].id, "col-cap");
+        assert_eq!((listed[1].item_count, listed[1].present_count), (0, 0));
+    }
+
+    #[test]
+    fn delete_collection_removes_items_but_never_documents_or_annotations() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        let present = present_set(&["a.md", "b.md"]);
+        upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-1", "a.md"))
+            .expect("insert annotation");
+        insert_document_row(&connection, ROOT, "a.md", "pmd5:aaaa");
+        create_collection_row(&connection, ROOT, "col-del", "要删除", 1_000).expect("create");
+        add_collection_item_row(&mut connection, ROOT, &present, "col-del", "a.md", 2_000)
+            .expect("add a");
+        add_collection_item_row(&mut connection, ROOT, &present, "col-del", "b.md", 2_100)
+            .expect("add b");
+
+        delete_collection_row(&mut connection, ROOT, "col-del").expect("delete");
+
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM collections"),
+            0
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM collection_items"),
+            0
+        );
+        // The direct assertion behind "deleting a list never deletes the
+        // documents": annotation and fingerprint rows are untouched.
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            1
+        );
+        assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 1);
+        assert!(delete_collection_row(&mut connection, ROOT, "col-del").is_err());
+    }
+
+    #[test]
+    fn rebind_migrates_collection_items_and_clears_duplicate_leftovers() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        let present = present_set(&["old.md", "other.md", "moved/new.md"]);
+        upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-1", "old.md"))
+            .expect("insert annotation");
+        insert_document_row(&connection, ROOT, "old.md", "pmd5:aaaa");
+        insert_document_row(&connection, ROOT, "moved/new.md", "pmd5:aaaa");
+
+        create_collection_row(&connection, ROOT, "col-a", "清单甲", 1_000).expect("create a");
+        add_collection_item_row(&mut connection, ROOT, &present, "col-a", "old.md", 2_000)
+            .expect("a: old");
+        add_collection_item_row(&mut connection, ROOT, &present, "col-a", "other.md", 2_100)
+            .expect("a: other");
+        create_collection_row(&connection, ROOT, "col-b", "清单乙", 1_100).expect("create b");
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present,
+            "col-b",
+            "moved/new.md",
+            2_200,
+        )
+        .expect("b: new");
+        add_collection_item_row(&mut connection, ROOT, &present, "col-b", "old.md", 2_300)
+            .expect("b: old");
+        // A second library's rows must stay untouched.
+        create_collection_row(&connection, "C:/other", "col-iso", "隔离", 1_200)
+            .expect("create isolated");
+        add_collection_item_row(
+            &mut connection,
+            "C:/other",
+            &present,
+            "col-iso",
+            "old.md",
+            2_400,
+        )
+        .expect("isolated: old");
+
+        let migrated = rebind_annotation_rows(&mut connection, ROOT, "old.md", "moved/new.md")
+            .expect("rebind");
+        assert_eq!(migrated, 1);
+
+        // col-a's membership followed the content, keeping its position.
+        let items =
+            list_collection_item_rows(&connection, ROOT, "col-a", &present).expect("list col-a");
+        assert_eq!(
+            items
+                .iter()
+                .map(|item| (item.relative_path.as_str(), item.position))
+                .collect::<Vec<_>>(),
+            vec![("moved/new.md", 0), ("other.md", 1)]
+        );
+        // col-b already contained the target: the old row is gone, the
+        // existing row stays, nothing is duplicated.
+        let items =
+            list_collection_item_rows(&connection, ROOT, "col-b", &present).expect("list col-b");
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].relative_path, "moved/new.md");
+        assert_eq!(items[0].added_at, 2_200);
+        // The isolated library still points at its own old.md.
+        let isolated = list_collection_item_rows(&connection, "C:/other", "col-iso", &present)
+            .expect("list isolated");
+        assert_eq!(isolated[0].relative_path, "old.md");
+    }
+
+    /// Pins the serde camelCase wire shape the TS `Collection` /
+    /// `CollectionSummary` / `CollectionItem` types in `src/lib/backend.ts`
+    /// rely on.
+    #[test]
+    fn collection_payloads_serialize_camel_case_for_the_frontend() {
+        let summary = CollectionSummary {
+            id: "col".to_owned(),
+            name: "考研数学".to_owned(),
+            created_at: 1,
+            updated_at: 2,
+            item_count: 3,
+            present_count: 4,
+        };
+        assert_eq!(
+            serde_json::to_value(&summary).expect("serialize summary"),
+            serde_json::json!({
+                "id": "col",
+                "name": "考研数学",
+                "createdAt": 1,
+                "updatedAt": 2,
+                "itemCount": 3,
+                "presentCount": 4
+            })
+        );
+        let item = CollectionItem {
+            relative_path: "a.md".to_owned(),
+            position: 0,
+            added_at: 5,
+            present: true,
+        };
+        assert_eq!(
+            serde_json::to_value(&item).expect("serialize item"),
+            serde_json::json!({
+                "relativePath": "a.md",
+                "position": 0,
+                "addedAt": 5,
+                "present": true
+            })
+        );
+    }
+
+    /// Two-end contract fixture CC01..CC13: the same operation sequence is
+    /// replayed in `src/lib/webCollections.test.ts` and both sides must
+    /// produce these exact snapshots. Keep the numbers in sync.
+    #[test]
+    fn collections_contract_fixture_matches_the_web_snapshots() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        let present_all = present_set(&[
+            "math/真题.pdf",
+            "notes/错题.md",
+            "notes/公式.md",
+            "papers/robot.epub",
+        ]);
+        // The final snapshot simulates 公式.md having vanished from disk.
+        let present_final = present_set(&["math/真题.pdf", "notes/错题.md", "papers/robot.epub"]);
+
+        // CC01/CC02: two collections, the first name arrives untrimmed.
+        create_collection_row(&connection, ROOT, "col-a", " 考研数学 ", 1_000).expect("CC01");
+        create_collection_row(&connection, ROOT, "col-b", "组会论文", 2_000).expect("CC02");
+        // CC03..CC07: five items across the two collections.
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-a",
+            "math/真题.pdf",
+            3_000,
+        )
+        .expect("CC03");
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-a",
+            "notes/错题.md",
+            4_000,
+        )
+        .expect("CC04");
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-a",
+            "notes/公式.md",
+            5_000,
+        )
+        .expect("CC05");
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-b",
+            "papers/robot.epub",
+            6_000,
+        )
+        .expect("CC06");
+        add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-b",
+            "notes/错题.md",
+            7_000,
+        )
+        .expect("CC07");
+        // CC08: idempotent re-add leaves every timestamp alone.
+        let repeat = add_collection_item_row(
+            &mut connection,
+            ROOT,
+            &present_all,
+            "col-a",
+            "notes/错题.md",
+            8_000,
+        )
+        .expect("CC08");
+        assert_eq!((repeat.position, repeat.added_at), (1, 4_000));
+        // CC09: manual reorder of col-a.
+        reorder_collection_item_rows(
+            &mut connection,
+            ROOT,
+            "col-a",
+            &[
+                "notes/公式.md".to_owned(),
+                "math/真题.pdf".to_owned(),
+                "notes/错题.md".to_owned(),
+            ],
+            9_000,
+        )
+        .expect("CC09");
+        // CC10/CC11: shrink then delete the second collection.
+        remove_collection_item_row(&mut connection, ROOT, "col-b", "papers/robot.epub", 10_000)
+            .expect("CC10");
+        delete_collection_row(&mut connection, ROOT, "col-b").expect("CC11");
+
+        // CC12: the summary snapshot.
+        let collections =
+            list_collection_rows(&connection, ROOT, &present_final).expect("CC12 list");
+        assert_eq!(
+            collections,
+            vec![CollectionSummary {
+                id: "col-a".to_owned(),
+                name: "考研数学".to_owned(),
+                created_at: 1_000,
+                updated_at: 9_000,
+                item_count: 3,
+                present_count: 2,
+            }]
+        );
+        // CC13: the item snapshot.
+        let items = list_collection_item_rows(&connection, ROOT, "col-a", &present_final)
+            .expect("CC13 items");
+        assert_eq!(
+            items,
+            vec![
+                CollectionItem {
+                    relative_path: "notes/公式.md".to_owned(),
+                    position: 0,
+                    added_at: 5_000,
+                    present: false,
+                },
+                CollectionItem {
+                    relative_path: "math/真题.pdf".to_owned(),
+                    position: 1,
+                    added_at: 3_000,
+                    present: true,
+                },
+                CollectionItem {
+                    relative_path: "notes/错题.md".to_owned(),
+                    position: 2,
+                    added_at: 4_000,
+                    present: true,
+                },
+            ]
+        );
+        assert!(list_collection_item_rows(&connection, ROOT, "col-b", &present_final).is_err());
     }
 
     #[test]
