@@ -1,15 +1,21 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
+import { ChevronDown, ChevronRight, Search } from "lucide-react";
 import type {
   Annotation,
   AnnotationColor,
+  AnnotationKind,
 } from "../lib/backend";
 import {
   ANNOTATION_COLORS,
+  APPROXIMATE_ANCHOR_LABEL,
   annotationKindLabel,
   annotationListTitle,
   isAnnotationMarkKind,
   type AnnotationMarkKind,
 } from "../lib/annotations";
+import { previewGroupAnnotations } from "../lib/annotationHub";
+import { isRelocatableAnnotation } from "../lib/annotationRelocate";
+import type { RebindDryRunReport } from "../lib/rebindDryRun";
 
 export type AnnotationTool = "view" | AnnotationMarkKind;
 
@@ -264,6 +270,8 @@ export type AnnotationListSort = "time" | "position";
 interface AnnotationListProps {
   annotations: Annotation[];
   brokenIds: Set<string>;
+  /** Ids anchored through a non-exact step (normalized/fuzzy weak hint). */
+  approximateIds?: Set<string>;
   loading?: boolean;
   sort?: AnnotationListSort;
   onSortChange?: (sort: AnnotationListSort) => void;
@@ -272,12 +280,15 @@ interface AnnotationListProps {
   onDelete: (annotation: Annotation) => void;
   onEditNote: (annotation: Annotation) => void;
   onChangeColor?: (annotation: Annotation, color: AnnotationColor) => void;
+  /** "在文档中定位此文本" for unanchored quote-bearing annotations (§5.6 B). */
+  onRelocate?: (annotation: Annotation) => void;
   onClearAll?: () => void;
 }
 
 export function AnnotationList({
   annotations,
   brokenIds,
+  approximateIds,
   loading = false,
   sort = "time",
   onSortChange,
@@ -286,6 +297,7 @@ export function AnnotationList({
   onDelete,
   onEditNote,
   onChangeColor,
+  onRelocate,
   onClearAll,
 }: AnnotationListProps) {
   if (loading) {
@@ -294,6 +306,78 @@ export function AnnotationList({
   if (!annotations.length) {
     return <p className="toc-empty">这篇文档还没有标注。选中文字后可添加高亮、下划线或书签。</p>;
   }
+  const anchored = annotations.filter((annotation) => !brokenIds.has(annotation.id));
+  const orphans = annotations.filter((annotation) => brokenIds.has(annotation.id));
+
+  // Orphans keep the full card (note/color/delete) — a downgraded card, not
+  // an error state; only the in-document jump is gone.
+  const renderItem = (annotation: Annotation, broken: boolean) => {
+    const canRecolor = isAnnotationMarkKind(annotation.kind) && Boolean(onChangeColor);
+    const approximate = !broken && Boolean(approximateIds?.has(annotation.id));
+    return (
+      <li key={annotation.id} className={`annotation-list-item${broken ? " is-broken" : ""}`}>
+        <button type="button" className="annotation-list-main" onClick={() => onSelect(annotation)}>
+          <span
+            className={`annotation-list-kind annotation-list-kind--${annotation.kind}${
+              annotation.color ? ` annotation-list-kind--${annotation.color}` : ""
+            }`}
+          >
+            {annotationKindLabel(annotation.kind)}
+            {approximate ? (
+              <span
+                className="annotation-method-dot"
+                role="img"
+                title={APPROXIMATE_ANCHOR_LABEL}
+                aria-label={APPROXIMATE_ANCHOR_LABEL}
+              />
+            ) : null}
+          </span>
+          <span className="annotation-list-title">{annotationListTitle(annotation)}</span>
+          {annotation.note ? <span className="annotation-list-note">{annotation.note}</span> : null}
+        </button>
+        {canRecolor ? (
+          <div
+            className="annotation-toolbar-colors annotation-list-colors"
+            role="group"
+            aria-label="更改颜色"
+            onMouseDown={(event) => event.preventDefault()}
+          >
+            {ANNOTATION_COLORS.map((item) => (
+              <button
+                key={item}
+                type="button"
+                className={`annotation-color-swatch annotation-color-swatch--${item}${
+                  annotation.color === item ? " active" : ""
+                }`}
+                aria-label={`改为${ANNOTATION_COLOR_LABELS[item]}色`}
+                aria-pressed={annotation.color === item}
+                onClick={() => onChangeColor?.(annotation, item)}
+              />
+            ))}
+          </div>
+        ) : null}
+        <div className="annotation-list-actions">
+          {broken && onRelocate && isRelocatableAnnotation(annotation) ? (
+            <button
+              type="button"
+              aria-label="在文档中定位此文本"
+              title="在文档中定位此文本"
+              onClick={() => onRelocate(annotation)}
+            >
+              重新定位
+            </button>
+          ) : null}
+          <button type="button" onClick={() => onEditNote(annotation)}>
+            笔记
+          </button>
+          <button type="button" onClick={() => onDelete(annotation)}>
+            删除
+          </button>
+        </div>
+      </li>
+    );
+  };
+
   return (
     <div className="annotation-list-wrap">
       {(onSortChange || onExport || onClearAll) ? (
@@ -332,57 +416,27 @@ export function AnnotationList({
           </div>
         </div>
       ) : null}
-      <ol className="annotation-list">
-        {annotations.map((annotation) => {
-          const broken = brokenIds.has(annotation.id);
-          const canRecolor = isAnnotationMarkKind(annotation.kind) && Boolean(onChangeColor);
-          return (
-            <li key={annotation.id} className={`annotation-list-item${broken ? " is-broken" : ""}`}>
-              <button type="button" className="annotation-list-main" onClick={() => onSelect(annotation)}>
-                <span
-                  className={`annotation-list-kind annotation-list-kind--${annotation.kind}${
-                    annotation.color ? ` annotation-list-kind--${annotation.color}` : ""
-                  }`}
-                >
-                  {annotationKindLabel(annotation.kind)}
-                </span>
-                <span className="annotation-list-title">{annotationListTitle(annotation)}</span>
-                {annotation.note ? <span className="annotation-list-note">{annotation.note}</span> : null}
-                {broken ? <span className="annotation-list-broken">定位失效</span> : null}
-              </button>
-              {canRecolor ? (
-                <div
-                  className="annotation-toolbar-colors annotation-list-colors"
-                  role="group"
-                  aria-label="更改颜色"
-                  onMouseDown={(event) => event.preventDefault()}
-                >
-                  {ANNOTATION_COLORS.map((item) => (
-                    <button
-                      key={item}
-                      type="button"
-                      className={`annotation-color-swatch annotation-color-swatch--${item}${
-                        annotation.color === item ? " active" : ""
-                      }`}
-                      aria-label={`改为${ANNOTATION_COLOR_LABELS[item]}色`}
-                      aria-pressed={annotation.color === item}
-                      onClick={() => onChangeColor?.(annotation, item)}
-                    />
-                  ))}
-                </div>
-              ) : null}
-              <div className="annotation-list-actions">
-                <button type="button" onClick={() => onEditNote(annotation)}>
-                  笔记
-                </button>
-                <button type="button" onClick={() => onDelete(annotation)}>
-                  删除
-                </button>
-              </div>
-            </li>
-          );
-        })}
-      </ol>
+      {anchored.length ? (
+        <ol className="annotation-list">
+          {anchored.map((annotation) => renderItem(annotation, false))}
+        </ol>
+      ) : null}
+      {orphans.length ? (
+        // Hypothesis Orphans pattern: the group only exists while it has
+        // members, quotes are struck through, everything stays operable.
+        <section className="annotation-orphan-group" aria-label="未锚定标注">
+          <h3 className="annotation-orphan-heading">
+            未锚定
+            <span className="side-panel-count">{orphans.length}</span>
+          </h3>
+          <p className="annotation-orphan-hint">
+            文档内容可能已被修改，以下标注暂时无法定位到正文；笔记与内容仍完整保留。
+          </p>
+          <ol className="annotation-list">
+            {orphans.map((annotation) => renderItem(annotation, true))}
+          </ol>
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -390,30 +444,509 @@ export function AnnotationList({
 export interface AnnotationLibraryGroup {
   path: string;
   title: string;
+  /** 路径已不在当前扫描中(失联组):置尾灰显、只读展示、仍可导出。 */
+  missing?: boolean;
   annotations: Annotation[];
 }
 
 export type AnnotationLibraryStatus = "idle" | "loading" | "error" | "ready";
+
+/** 全库检索与筛选状态(App 拥有;检索输入经 240ms 防抖后触发查询)。 */
+export interface AnnotationLibraryFilters {
+  query: string;
+  kinds: AnnotationKind[];
+  colors: AnnotationColor[];
+}
+
+const ANNOTATION_KIND_CHIPS: ReadonlyArray<[AnnotationKind, string]> = [
+  ["highlight", "高亮"],
+  ["underline", "下划线"],
+  ["bookmark", "书签"],
+];
+
+function toggleFilterValue<T>(values: readonly T[], value: T): T[] {
+  return values.includes(value)
+    ? values.filter((item) => item !== value)
+    : [...values, value];
+}
+
+/**
+ * 检索框 + 类型 chip × 颜色点(方案四 §3.1 前端接线)。侧栏 tab 与全屏
+ * 中枢共用;chip/色点为纯前端过滤,与检索结果求交由调用方完成。
+ */
+export function AnnotationFilterControls({
+  filters,
+  onChange,
+}: {
+  filters: AnnotationLibraryFilters;
+  onChange: (filters: AnnotationLibraryFilters) => void;
+}) {
+  return (
+    <div className="annotation-filter-controls">
+      <div className="annotation-library-search">
+        <Search size={13} aria-hidden="true" />
+        <input
+          type="search"
+          value={filters.query}
+          placeholder="搜索全库标注"
+          aria-label="搜索全库标注"
+          onChange={(event) => onChange({ ...filters, query: event.target.value })}
+        />
+      </div>
+      <div className="annotation-filter-row" role="group" aria-label="筛选标注类型与颜色">
+        {ANNOTATION_KIND_CHIPS.map(([kind, label]) => (
+          <button
+            key={kind}
+            type="button"
+            className={`annotation-filter-chip${filters.kinds.includes(kind) ? " active" : ""}`}
+            aria-pressed={filters.kinds.includes(kind)}
+            onClick={() => onChange({ ...filters, kinds: toggleFilterValue(filters.kinds, kind) })}
+          >
+            {label}
+          </button>
+        ))}
+        <div
+          className="annotation-toolbar-colors annotation-filter-colors"
+          role="group"
+          aria-label="筛选标注颜色"
+        >
+          {ANNOTATION_COLORS.map((color) => (
+            <button
+              key={color}
+              type="button"
+              className={`annotation-color-swatch annotation-color-swatch--${color}${
+                filters.colors.includes(color) ? " active" : ""
+              }`}
+              aria-label={`筛选${ANNOTATION_COLOR_LABELS[color]}色标注`}
+              aria-pressed={filters.colors.includes(color)}
+              onClick={() =>
+                onChange({ ...filters, colors: toggleFilterValue(filters.colors, color) })
+              }
+            />
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AnnotationEntryContent({ annotation }: { annotation: Annotation }) {
+  return (
+    <>
+      <span
+        className={`annotation-list-kind annotation-list-kind--${annotation.kind}${
+          annotation.color ? ` annotation-list-kind--${annotation.color}` : ""
+        }`}
+      >
+        {annotationKindLabel(annotation.kind)}
+      </span>
+      <span className="annotation-list-title">{annotationListTitle(annotation)}</span>
+      {annotation.note ? <span className="annotation-list-note">{annotation.note}</span> : null}
+    </>
+  );
+}
+
+/**
+ * 按文档分组的条目列表(方案四 §3.2):组头可折叠(本地 state,不持久化),
+ * 每组默认前 20 条 + 「展开全部」;失联组灰显、条目只读但可整组导出。
+ * 侧栏 tab 与全屏中枢共享此组件,仅容器与密度不同。
+ */
+export function AnnotationLibraryGroupList({
+  groups,
+  currentPath = null,
+  onSelect,
+  onExportGroup,
+}: {
+  groups: AnnotationLibraryGroup[];
+  currentPath?: string | null;
+  onSelect: (annotation: Annotation) => void;
+  onExportGroup?: (group: AnnotationLibraryGroup) => void;
+}) {
+  const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(new Set());
+  const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set());
+
+  const toggleCollapsed = (path: string) => {
+    setCollapsedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) next.delete(path);
+      else next.add(path);
+      return next;
+    });
+  };
+
+  return (
+    <>
+      {groups.map((group) => {
+        const collapsed = collapsedPaths.has(group.path);
+        const preview = expandedPaths.has(group.path)
+          ? { visible: group.annotations, hiddenCount: 0 }
+          : previewGroupAnnotations(group.annotations);
+        return (
+          <section
+            key={group.path}
+            className={`annotation-library-group${group.missing ? " is-missing" : ""}`}
+            aria-label={group.title}
+            data-group-path={group.path}
+          >
+            <h3 className="annotation-library-doc">
+              <button
+                type="button"
+                className="annotation-library-collapse"
+                aria-expanded={!collapsed}
+                onClick={() => toggleCollapsed(group.path)}
+              >
+                {collapsed ? (
+                  <ChevronRight size={13} aria-hidden="true" />
+                ) : (
+                  <ChevronDown size={13} aria-hidden="true" />
+                )}
+                <span className="annotation-library-doc-title" title={group.path}>
+                  {group.title}
+                </span>
+              </button>
+              {group.path === currentPath ? (
+                <span className="annotation-library-current">当前</span>
+              ) : null}
+              <span className="side-panel-count">{group.annotations.length}</span>
+              {onExportGroup ? (
+                <button
+                  type="button"
+                  className="annotation-library-export"
+                  aria-label={`导出 ${group.title} 的标注`}
+                  title="导出该文档的标注（Markdown → 剪贴板）"
+                  onClick={() => onExportGroup(group)}
+                >
+                  导出该文档
+                </button>
+              ) : null}
+            </h3>
+            {!collapsed && group.missing ? (
+              <p className="annotation-library-missing-hint">
+                文档已移动或删除，标注仍保留；若文件仍在库内新位置，刷新后会提示迁移。
+              </p>
+            ) : null}
+            {!collapsed ? (
+              <>
+                <ol className="annotation-list">
+                  {preview.visible.map((annotation) => (
+                    <li key={annotation.id} className="annotation-list-item">
+                      {group.missing ? (
+                        <div className="annotation-list-main annotation-list-main--static">
+                          <AnnotationEntryContent annotation={annotation} />
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          className="annotation-list-main"
+                          onClick={() => onSelect(annotation)}
+                        >
+                          <AnnotationEntryContent annotation={annotation} />
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ol>
+                {preview.hiddenCount > 0 ? (
+                  <button
+                    type="button"
+                    className="annotation-library-expand"
+                    onClick={() =>
+                      setExpandedPaths((current) => new Set(current).add(group.path))
+                    }
+                  >
+                    展开全部 {group.annotations.length} 条
+                  </button>
+                ) : null}
+              </>
+            ) : null}
+          </section>
+        );
+      })}
+    </>
+  );
+}
+
+/**
+ * One annotated document whose path vanished from the current scan: either
+ * an ambiguous fingerprint move (several candidates) or a document whose
+ * path and fingerprint both failed to match (§5.6 C).
+ */
+export interface LostDocumentEntry {
+  path: string;
+  annotationCount: number;
+  /** Candidate paths sharing the last known content fingerprint. */
+  candidates: string[];
+}
+
+export interface LibraryDocumentOption {
+  relativePath: string;
+  title: string;
+}
+
+interface LostDocumentRowProps {
+  entry: LostDocumentEntry;
+  documents: LibraryDocumentOption[];
+  onDryRun: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
+  onRebind: (oldPath: string, newPath: string) => Promise<void>;
+}
+
+type LostDocumentRowState =
+  | { phase: "idle" }
+  | { phase: "verifying" }
+  | { phase: "verified"; target: string; report: RebindDryRunReport }
+  | { phase: "rebinding"; target: string; report: RebindDryRunReport }
+  | { phase: "error"; message: string };
+
+function LostDocumentRow({ entry, documents, onDryRun, onRebind }: LostDocumentRowProps) {
+  const [target, setTarget] = useState("");
+  const [state, setState] = useState<LostDocumentRowState>({ phase: "idle" });
+
+  const pickTarget = (value: string) => {
+    setTarget(value);
+    // A different target invalidates any previous dry-run report.
+    setState({ phase: "idle" });
+  };
+
+  const runDryRun = async () => {
+    if (!target) return;
+    setState({ phase: "verifying" });
+    try {
+      const report = await onDryRun(entry.path, target);
+      setState({ phase: "verified", target, report });
+    } catch (cause) {
+      setState({
+        phase: "error",
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  };
+
+  const runRebind = async () => {
+    if (state.phase !== "verified") return;
+    setState({ phase: "rebinding", target: state.target, report: state.report });
+    try {
+      await onRebind(entry.path, state.target);
+      // On success the entry disappears from the list; no local state left.
+    } catch (cause) {
+      setState({
+        phase: "error",
+        message: cause instanceof Error ? cause.message : String(cause),
+      });
+    }
+  };
+
+  const candidateSet = new Set(entry.candidates);
+  const otherDocuments = documents.filter((item) => !candidateSet.has(item.relativePath));
+  const verified = state.phase === "verified" || state.phase === "rebinding";
+  const busy = state.phase === "verifying" || state.phase === "rebinding";
+
+  return (
+    <li className="lost-document-item">
+      <div className="lost-document-head">
+        <span className="lost-document-path" title={entry.path}>
+          {entry.path}
+        </span>
+        <span className="side-panel-count">{entry.annotationCount}</span>
+      </div>
+      <label className="lost-document-target">
+        迁移到
+        <select
+          className="setting-select"
+          aria-label={`为 ${entry.path} 选择迁移目标文档`}
+          value={target}
+          disabled={busy}
+          onChange={(event) => pickTarget(event.target.value)}
+        >
+          <option value="">选择目标文档…</option>
+          {entry.candidates.length ? (
+            <optgroup label="内容指纹相同的候选">
+              {entry.candidates.map((candidate) => (
+                <option key={candidate} value={candidate}>
+                  {candidate}
+                </option>
+              ))}
+            </optgroup>
+          ) : null}
+          <optgroup label="手动选择库内文档">
+            {otherDocuments.map((item) => (
+              <option key={item.relativePath} value={item.relativePath}>
+                {item.relativePath}
+              </option>
+            ))}
+          </optgroup>
+        </select>
+      </label>
+      <div className="lost-document-actions">
+        <button type="button" disabled={!target || busy} onClick={() => void runDryRun()}>
+          {state.phase === "verifying" ? "验证中…" : "验证锚定"}
+        </button>
+        <button
+          type="button"
+          disabled={!verified || busy}
+          title={verified ? undefined : "先验证锚定率，再迁移标注"}
+          onClick={() => void runRebind()}
+        >
+          {state.phase === "rebinding" ? "迁移中…" : "迁移标注"}
+        </button>
+      </div>
+      {verified ? (
+        <p className="lost-document-report" role="status">
+          {`${state.report.total} 条标注中 ${state.report.anchorable} 条可重新锚定`}
+          {state.report.skipped > 0
+            ? `，另有 ${state.report.skipped} 条书签不参与文本验证`
+            : ""}
+          。确认后迁移全部记录。
+        </p>
+      ) : null}
+      {state.phase === "error" ? (
+        <p className="lost-document-report is-error" role="alert">
+          {state.message}
+        </p>
+      ) : null}
+    </li>
+  );
+}
+
+interface LostDocumentsSectionProps {
+  entries: LostDocumentEntry[];
+  documents: LibraryDocumentOption[];
+  onDryRun: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
+  onRebind: (oldPath: string, newPath: string) => Promise<void>;
+}
+
+/**
+ * 集中重绑入口（MarginNote「找回失联笔记」骨架 + KOReader 向导的 dry-run）：
+ * 每个失联文档先选目标、验证 TextQuote 锚定率，用户确认后才迁移；
+ * 绝不自动迁移歧义候选，也不提供删除以外的破坏性建议。
+ */
+export function LostDocumentsSection({
+  entries,
+  documents,
+  onDryRun,
+  onRebind,
+}: LostDocumentsSectionProps) {
+  if (!entries.length) return null;
+  return (
+    <section className="lost-documents" aria-label="失联文档">
+      <h3 className="annotation-orphan-heading">
+        失联文档
+        <span className="side-panel-count">{entries.length}</span>
+      </h3>
+      <p className="annotation-orphan-hint">
+        以下文档带有标注，但在当前文档库中找不到原路径。选择目标文档并验证锚定率后，可迁移其标注；验证基于目标文档正文，实际效果以打开后为准。
+      </p>
+      <ul className="lost-document-list">
+        {entries.map((entry) => (
+          <LostDocumentRow
+            key={entry.path}
+            entry={entry}
+            documents={documents}
+            onDryRun={onDryRun}
+            onRebind={onRebind}
+          />
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 interface AnnotationLibraryPanelProps {
   status: AnnotationLibraryStatus;
   groups: AnnotationLibraryGroup[];
   error?: string | null;
   currentPath?: string | null;
+  /** Lost-document rebind entries; the section hides itself when empty. */
+  lostDocuments?: LostDocumentEntry[];
+  documents?: LibraryDocumentOption[];
+  /** 检索与筛选状态(不传则隐藏检索/筛选行,保持旧用法兼容)。 */
+  filters?: AnnotationLibraryFilters;
+  onFiltersChange?: (filters: AnnotationLibraryFilters) => void;
+  /** 检索或筛选已生效:计数行改为命中统计,导出按钮改为「导出当前结果」。 */
+  filterActive?: boolean;
+  onDryRunRebind?: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
+  onRebindLostDocument?: (oldPath: string, newPath: string) => Promise<void>;
   onRefresh: () => void;
   onExport: () => void;
+  /** 组头「导出该文档」;不传则不渲染该动作。 */
+  onExportGroup?: (group: AnnotationLibraryGroup) => void;
+  /** 导出标注为 JSON 数据文件(§5.7 信封,含墓碑)。 */
+  onExportJson?: () => void;
+  /** 导出标注为 Readwise 兼容 CSV(仅现存高亮/下划线)。 */
+  onExportCsv?: () => void;
+  /** 从 JSON 数据文件导入标注(选择文件 → dry-run 摘要 → 确认)。 */
+  onImport?: () => void;
   onSelect: (annotation: Annotation) => void;
+  /** 全屏中枢入口(方案四 A2);不传则不显示链接。 */
+  onOpenHub?: () => void;
 }
 
-/** 全库标注总览:按文档分组展示,点击条目跳转到对应文档内标注。 */
+/** 「导出标注…」的格式二选(JSON / CSV)与「导入标注…」入口,选择后收起。 */
+function AnnotationTransferActions({
+  onExportJson,
+  onExportCsv,
+  onImport,
+}: Pick<AnnotationLibraryPanelProps, "onExportJson" | "onExportCsv" | "onImport">) {
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  if (!onExportJson && !onExportCsv && !onImport) return null;
+  const pick = (handler?: () => void) => {
+    setExportMenuOpen(false);
+    handler?.();
+  };
+  return (
+    <>
+      {onExportJson || onExportCsv ? (
+        <button
+          type="button"
+          aria-expanded={exportMenuOpen}
+          onClick={() => setExportMenuOpen((open) => !open)}
+        >
+          导出标注…
+        </button>
+      ) : null}
+      {onImport ? (
+        <button type="button" onClick={() => pick(onImport)}>
+          导入标注…
+        </button>
+      ) : null}
+      {exportMenuOpen ? (
+        <div className="annotation-transfer-menu" role="group" aria-label="选择导出格式">
+          {onExportJson ? (
+            <button type="button" onClick={() => pick(onExportJson)}>
+              JSON 数据文件
+            </button>
+          ) : null}
+          {onExportCsv ? (
+            <button type="button" onClick={() => pick(onExportCsv)}>
+              Readwise CSV
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
+/** 全库标注总览:检索/筛选 + 按文档分组折叠,点击条目跳转到对应文档内标注。 */
 export function AnnotationLibraryPanel({
   status,
   groups,
   error = null,
   currentPath = null,
+  lostDocuments = [],
+  documents = [],
+  filters,
+  onFiltersChange,
+  filterActive = false,
+  onDryRunRebind,
+  onRebindLostDocument,
   onRefresh,
   onExport,
+  onExportGroup,
+  onExportJson,
+  onExportCsv,
+  onImport,
   onSelect,
+  onOpenHub,
 }: AnnotationLibraryPanelProps) {
   if (status === "idle" || status === "loading") {
     return <p className="toc-empty">正在汇总全库标注…</p>;
@@ -432,15 +965,28 @@ export function AnnotationLibraryPanel({
       </div>
     );
   }
+  const filterControls =
+    filters && onFiltersChange ? (
+      <AnnotationFilterControls filters={filters} onChange={onFiltersChange} />
+    ) : null;
   if (!groups.length) {
     return (
       <div className="annotation-library">
-        <p className="toc-empty">整个文档库还没有标注。</p>
+        {filterControls}
+        <p className="toc-empty">
+          {filterActive ? "没有命中的标注。" : "整个文档库还没有标注。"}
+        </p>
         <div className="annotation-list-toolbar">
           <div className="annotation-list-toolbar-actions">
             <button type="button" onClick={onRefresh}>
               刷新
             </button>
+            {/* 空库也能导入:导入入口不依赖已有标注。 */}
+            {!filterActive && onImport ? (
+              <button type="button" onClick={onImport}>
+                导入标注…
+              </button>
+            ) : null}
           </div>
         </div>
       </div>
@@ -449,53 +995,134 @@ export function AnnotationLibraryPanel({
   const total = groups.reduce((sum, group) => sum + group.annotations.length, 0);
   return (
     <div className="annotation-library">
+      {onOpenHub ? (
+        <button type="button" className="annotation-hub-link" onClick={onOpenHub}>
+          在中枢中打开
+        </button>
+      ) : null}
+      {filterControls}
       <div className="annotation-list-toolbar">
-        <span className="annotation-library-total">共 {total} 条</span>
+        <span className="annotation-library-total">
+          {filterActive
+            ? `命中 ${total} 条，来自 ${groups.length} 个文档`
+            : `共 ${total} 条`}
+        </span>
         <div className="annotation-list-toolbar-actions">
           <button type="button" onClick={onRefresh}>
             刷新
           </button>
           <button type="button" onClick={onExport}>
-            导出全库
+            {filterActive ? "导出当前结果" : "导出全库"}
           </button>
+          {/* 文件级导出/导入始终作用于全库,与上方的筛选状态无关。 */}
+          {!filterActive ? (
+            <AnnotationTransferActions
+              onExportJson={onExportJson}
+              onExportCsv={onExportCsv}
+              onImport={onImport}
+            />
+          ) : null}
         </div>
       </div>
-      {groups.map((group) => (
-        <section key={group.path} className="annotation-library-group" aria-label={group.title}>
-          <h3 className="annotation-library-doc">
-            <span className="annotation-library-doc-title" title={group.path}>
-              {group.title}
-            </span>
-            {group.path === currentPath ? (
-              <span className="annotation-library-current">当前</span>
-            ) : null}
-            <span className="side-panel-count">{group.annotations.length}</span>
-          </h3>
-          <ol className="annotation-list">
-            {group.annotations.map((annotation) => (
-              <li key={annotation.id} className="annotation-list-item">
-                <button
-                  type="button"
-                  className="annotation-list-main"
-                  onClick={() => onSelect(annotation)}
-                >
-                  <span
-                    className={`annotation-list-kind annotation-list-kind--${annotation.kind}${
-                      annotation.color ? ` annotation-list-kind--${annotation.color}` : ""
-                    }`}
-                  >
-                    {annotationKindLabel(annotation.kind)}
-                  </span>
-                  <span className="annotation-list-title">{annotationListTitle(annotation)}</span>
-                  {annotation.note ? (
-                    <span className="annotation-list-note">{annotation.note}</span>
-                  ) : null}
-                </button>
-              </li>
-            ))}
-          </ol>
-        </section>
-      ))}
+      {!filterActive && onDryRunRebind && onRebindLostDocument ? (
+        <LostDocumentsSection
+          entries={lostDocuments}
+          documents={documents}
+          onDryRun={onDryRunRebind}
+          onRebind={onRebindLostDocument}
+        />
+      ) : null}
+      <AnnotationLibraryGroupList
+        groups={groups}
+        currentPath={currentPath}
+        onSelect={onSelect}
+        onExportGroup={onExportGroup}
+      />
+    </div>
+  );
+}
+
+/** Dry-run 摘要数据(由 `planAnnotationImport` 的计数派生)。 */
+export interface AnnotationImportSummary {
+  /** 导入文件名;桌面端为完整路径的文件名部分。 */
+  fileName: string | null;
+  added: number;
+  skipped: number;
+  updated: number;
+  deletions: number;
+  /** 内容指纹命中现有文档、建议走重绑链的文档数。 */
+  rebindDocuments: number;
+  /** 实际会写入的记录数(0 = 无事可做,只显示关闭)。 */
+  totalWrites: number;
+}
+
+interface AnnotationImportConfirmProps {
+  summary: AnnotationImportSummary;
+  busy?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+}
+
+/**
+ * 导入前的 dry-run 摘要确认(Q6:先摘要,用户确认后才落库)。
+ * 计数为零的类别照样列出,让"什么都不会发生"也一目了然。
+ */
+export function AnnotationImportConfirm({
+  summary,
+  busy = false,
+  onConfirm,
+  onCancel,
+}: AnnotationImportConfirmProps) {
+  const counters: Array<[string, number]> = [
+    ["新增", summary.added],
+    ["跳过（已存在）", summary.skipped],
+    ["更新（较新版本）", summary.updated],
+    ["删除传播", summary.deletions],
+  ];
+  return (
+    <div
+      className="annotation-import-dialog reade-motion-panel"
+      role="dialog"
+      aria-label="确认导入标注"
+    >
+      <div className="annotation-import-heading">导入标注</div>
+      {summary.fileName ? (
+        <p className="annotation-import-file" title={summary.fileName}>
+          {summary.fileName}
+        </p>
+      ) : null}
+      <ul className="annotation-import-summary">
+        {counters.map(([label, count]) => (
+          <li key={label} data-zero={count === 0}>
+            <span>{label}</span>
+            <span className="annotation-import-count">{count}</span>
+          </li>
+        ))}
+      </ul>
+      {summary.rebindDocuments > 0 ? (
+        <p className="annotation-import-hint">
+          {summary.rebindDocuments}{" "}
+          个文档的原路径不在当前库中，但内容指纹与库内文档一致；导入后可在「失联文档」区完成迁移，路径不会被自动改写。
+        </p>
+      ) : null}
+      {summary.totalWrites === 0 ? (
+        <p className="annotation-import-hint">文件中的标注均已存在，无需导入。</p>
+      ) : null}
+      <div className="annotation-import-actions">
+        <button type="button" disabled={busy} onClick={onCancel}>
+          {summary.totalWrites === 0 ? "关闭" : "取消"}
+        </button>
+        {summary.totalWrites > 0 ? (
+          <button
+            type="button"
+            className="annotation-import-confirm"
+            disabled={busy}
+            onClick={onConfirm}
+          >
+            {busy ? "导入中…" : `导入 ${summary.totalWrites} 条更改`}
+          </button>
+        ) : null}
+      </div>
     </div>
   );
 }

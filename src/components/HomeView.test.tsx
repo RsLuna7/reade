@@ -1,0 +1,229 @@
+// @vitest-environment jsdom
+import "@testing-library/jest-dom/vitest";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { HomeView, formatRelativeTime } from "./HomeView";
+import {
+  listReadingSessions,
+  readDocument,
+  type DocumentInfo,
+  type ReadingSession,
+} from "../lib/backend";
+import { writeHomeBaseline } from "../lib/homeData";
+import { writeReadingPosition } from "../lib/readingPositions";
+import { DEFAULT_READING_SETTINGS, useReaderStore } from "../store/useReaderStore";
+
+vi.mock("../lib/backend", async () => {
+  const actual = await vi.importActual<typeof import("../lib/backend")>("../lib/backend");
+  return {
+    ...actual,
+    listReadingSessions: vi.fn(async () => []),
+    readDocument: vi.fn(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# Doc",
+    })),
+  };
+});
+
+const ROOT = "D:\\books";
+const HOUR_MS = 60 * 60 * 1000;
+
+function doc(relativePath: string, overrides: Partial<DocumentInfo> = {}): DocumentInfo {
+  return {
+    relativePath,
+    title: relativePath.replace(/\.[^.]+$/, ""),
+    size: 1024,
+    modified: Date.now() - 40 * 24 * HOUR_MS,
+    format: "markdown",
+    indexStatus: "ready",
+    indexError: null,
+    ...overrides,
+  };
+}
+
+function session(
+  relativePath: string,
+  endedAt: number,
+  overrides: Partial<ReadingSession> = {},
+): ReadingSession {
+  return {
+    id: `${relativePath}:${endedAt}`,
+    relativePath,
+    format: "markdown",
+    title: null,
+    startedAt: endedAt - 10 * 60 * 1000,
+    endedAt,
+    activeSeconds: 600,
+    ...overrides,
+  };
+}
+
+function setHomeState(documents: DocumentInfo[]): void {
+  useReaderStore.setState({
+    snapshot: { rootPath: ROOT, documents },
+    documents,
+    currentPath: null,
+    currentContent: null,
+    currentLocator: null,
+    searchQuery: "",
+    searchResults: [],
+    readingSettings: { ...DEFAULT_READING_SETTINGS },
+    motionLevel: "off",
+    activeView: "home",
+    dailyGoalMinutes: 0,
+    loading: false,
+    error: null,
+  });
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  vi.mocked(listReadingSessions).mockReset().mockImplementation(async () => []);
+  vi.mocked(readDocument).mockClear();
+});
+
+afterEach(cleanup);
+
+describe("HomeView (desktop)", () => {
+  it("lists recent documents with progress and reopens one on click", async () => {
+    const documents = [doc("guide.md", { title: "入门指南" }), doc("other.md")];
+    setHomeState(documents);
+    writeReadingPosition(ROOT, "guide.md", { kind: "scroll", scrollRatio: 0.4 });
+    writeReadingPosition(ROOT, "guide.md", { kind: "scroll", scrollRatio: 0.62 });
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("guide.md", Date.now() - HOUR_MS),
+    ]);
+
+    render(<HomeView />);
+
+    const title = await screen.findByText("入门指南");
+    expect(screen.getByText("读到 62%")).toBeInTheDocument();
+    // 「今日进度」卡在会话落在同一自然日时也会显示同样的时长文案,
+    // 因此把断言限定在「继续阅读」卡内(修复对运行时刻敏感的原断言)。
+    const continueCard = screen.getByRole("region", { name: "继续阅读" });
+    expect(within(continueCard).getByText("10 分钟")).toBeInTheDocument();
+
+    const row = title.closest("button");
+    expect(row).not.toBeNull();
+    // 卡片行是原生 button:可 Tab 聚焦、Enter 激活。
+    row!.focus();
+    expect(row).toHaveFocus();
+    fireEvent.click(row!);
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("guide.md");
+    });
+    // store 契约:从主页打开文档自动切回阅读面。
+    expect(useReaderStore.getState().activeView).toBe("reader");
+    expect(readDocument).toHaveBeenCalledWith("guide.md");
+  });
+
+  it("shows the guidance empty state for a library without history", async () => {
+    setHomeState([doc("fresh-start.md")]);
+
+    render(<HomeView />);
+
+    expect(
+      await screen.findByText("还没有阅读记录，从左侧选择一篇文档开始。"),
+    ).toBeInTheDocument();
+    // 首次访问尚无 baseline:新动态卡提示下次来访生效。
+    expect(
+      screen.getByText("从下次来访开始，这里会列出库里新增或修改的文档。"),
+    ).toBeInTheDocument();
+  });
+
+  it("hides the goal ring at goal 0 and shows it with a configured goal", async () => {
+    setHomeState([doc("guide.md")]);
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("guide.md", Date.now() - 5 * 60 * 1000),
+    ]);
+
+    const view = render(<HomeView />);
+    await screen.findByRole("region", { name: "今日进度" });
+    await waitFor(() => {
+      expect(view.container.querySelector(".home-progress-value")).not.toBeNull();
+    });
+    expect(view.container.querySelector(".stats-goal-ring")).toBeNull();
+    expect(screen.getByText(/目标|还没有开始阅读|未设定每日目标/)).toBeInTheDocument();
+
+    useReaderStore.setState({ dailyGoalMinutes: 30 });
+    await waitFor(() => {
+      expect(view.container.querySelector(".stats-goal-ring")).not.toBeNull();
+    });
+    expect(screen.getByText(/目标 30 分 · 完成 \d+%/)).toBeInTheDocument();
+  });
+
+  it("lists documents modified after the baseline and opens them", async () => {
+    const now = Date.now();
+    const documents = [
+      doc("changed.md", { title: "新修改的文档", modified: now - 10 * 60 * 1000 }),
+      doc("old.md", { modified: now - 50 * 24 * HOUR_MS }),
+    ];
+    setHomeState(documents);
+    writeHomeBaseline(ROOT, now - HOUR_MS);
+
+    render(<HomeView />);
+
+    const freshCard = await screen.findByRole("region", { name: "库内新动态" });
+    expect(freshCard).toHaveTextContent("1 篇有更新");
+    expect(freshCard).toHaveTextContent("新修改的文档");
+    expect(freshCard).not.toHaveTextContent("old");
+
+    fireEvent.click(screen.getByText("新修改的文档").closest("button")!);
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("changed.md");
+    });
+  });
+
+  it("keeps the review card out of the tree until the probe provides data", async () => {
+    setHomeState([doc("guide.md")]);
+
+    const view = render(<HomeView />);
+    await screen.findByRole("region", { name: "继续阅读" });
+    expect(screen.queryByRole("region", { name: "今日回顾" })).not.toBeInTheDocument();
+    expect(screen.queryByText("开始回顾")).not.toBeInTheDocument();
+
+    const onStart = vi.fn();
+    view.rerender(<HomeView reviewSummary={{ pendingCount: 3, onStart }} />);
+    expect(await screen.findByRole("region", { name: "今日回顾" })).toHaveTextContent(
+      "待回顾 3 条标注",
+    );
+    fireEvent.click(screen.getByRole("button", { name: "开始回顾" }));
+    expect(onStart).toHaveBeenCalledTimes(1);
+  });
+
+  it("shows the completed review state when nothing is due", async () => {
+    setHomeState([doc("guide.md")]);
+
+    render(
+      <HomeView reviewSummary={{ pendingCount: 0, reviewedToday: 5, onStart: vi.fn() }} />,
+    );
+
+    const card = await screen.findByRole("region", { name: "今日回顾" });
+    expect(card).toHaveTextContent("今天的回顾已完成，共回顾 5 条。");
+    expect(screen.queryByRole("button", { name: "开始回顾" })).not.toBeInTheDocument();
+  });
+
+  it("degrades to the empty state when the session store fails", async () => {
+    setHomeState([doc("guide.md")]);
+    vi.mocked(listReadingSessions).mockRejectedValue(new Error("sqlite unavailable"));
+
+    render(<HomeView />);
+
+    expect(
+      await screen.findByText("还没有阅读记录，从左侧选择一篇文档开始。"),
+    ).toBeInTheDocument();
+  });
+});
+
+describe("formatRelativeTime", () => {
+  it("buckets recent stamps into human-readable steps", () => {
+    const now = Date.now();
+    expect(formatRelativeTime(now - 20_000, now)).toBe("刚刚");
+    expect(formatRelativeTime(now - 5 * 60_000, now)).toBe("5 分钟前");
+    expect(formatRelativeTime(now - 3 * HOUR_MS, now)).toBe("3 小时前");
+    expect(formatRelativeTime(now - 30 * HOUR_MS, now)).toBe("昨天");
+    expect(formatRelativeTime(now - 6 * 24 * HOUR_MS, now)).toBe("6 天前");
+  });
+});

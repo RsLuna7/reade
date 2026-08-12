@@ -20,6 +20,7 @@ import {
   Globe2,
   HardDrive,
   Highlighter,
+  House,
   Library,
   ListTree,
   Moon,
@@ -43,34 +44,76 @@ import {
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
 import { DocumentTree } from "./components/DocumentTree";
-import { EpubReader } from "./components/EpubReader";
+import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
+import { applyThemeMutation } from "./lib/themeTransition";
 import {
   APP_RUNTIME,
   DEFAULT_LIBRARY_ROOT,
   assetDataUrl,
+  detectMovedDocuments,
+  importAnnotations,
   listAnnotations,
+  listAnnotationsForTransfer,
+  listDocumentFingerprints,
+  listReadingSessions,
   onDocumentIndexStatus,
   onLibraryChanged,
   onLibraryIndexProgress,
   openExternalLink,
+  pickAnnotationImportFile,
   readAsset,
+  readDocument,
+  readPdfReadingMode,
+  rebindDocumentAnnotations,
   recordReadingSession,
+  reviewSummary,
+  saveAnnotationExportFile,
+  searchAnnotations,
   type Annotation,
   type AnnotationColor,
+  type LibrarySnapshot,
+  type MovedDocumentCandidate,
+  type ReviewSummary,
 } from "./lib/backend";
 import { createReadingTracker, type ReadingTracker } from "./lib/readingTracker";
 import {
+  clearAnnotationMarks,
   collectElementText,
   findTextQuote,
+  isAnnotationMarkKind,
   rangeFromOffsets,
   rangeOffsetsWithinRoot,
+  wrapRangeWithMark,
 } from "./lib/annotations";
+import {
+  applyRelocatedAnnotation,
+  captureRelocatedSelection,
+  findRelocationRange,
+  isRelocatableAnnotation,
+  type QuoteBearingLocator,
+} from "./lib/annotationRelocate";
+import {
+  dryRunTextQuoteAnchors,
+  flattenEpubDocumentText,
+  type RebindDryRunReport,
+} from "./lib/rebindDryRun";
 import {
   buildAnnotationsMarkdown,
   compareAnnotationSortKeys,
   type AnnotationSortKey,
 } from "./lib/annotationExport";
+import {
+  buildAnnotationEnvelope,
+  buildReadwiseCsv,
+  getOrCreateDeviceId,
+  parseAnnotationEnvelope,
+  planAnnotationImport,
+  serializeAnnotationEnvelope,
+  type AnnotationImportPlan,
+} from "./lib/annotationTransfer";
+import { groupAnnotationsByDocument } from "./lib/annotationHub";
+import { filterAnnotations, normalizeAnnotationQuery } from "./lib/annotationSearch";
 import {
   buildBookmarkForContext,
   buildMarkFromPending,
@@ -80,15 +123,36 @@ import {
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import {
   AnnotationEditBubble,
+  AnnotationImportConfirm,
   AnnotationList,
   AnnotationLibraryPanel,
   AnnotationToolsPanel,
   SelectionToolbar,
+  type AnnotationLibraryFilters,
   type AnnotationLibraryGroup,
   type AnnotationLibraryStatus,
   type AnnotationListSort,
+  type LibraryDocumentOption,
+  type LostDocumentEntry,
 } from "./components/AnnotationUi";
+import {
+  CONTINUE_READING_WINDOW_MS,
+  hasContinueCandidates,
+  writeHomeBaseline,
+} from "./lib/homeData";
 import { extractToc, type TocItem } from "./lib/markdown";
+import {
+  listLibraryReadingPositions,
+  readReadingPosition,
+  writeReadingPosition,
+  type ReadingPosition,
+} from "./lib/readingPositions";
+import { buildTocHeat, type TocHeatResult } from "./lib/tocHeat";
+import {
+  buildPdfTocCoverage,
+  coverageFromRatios,
+  measureHeadingRatios,
+} from "./lib/tocCoverage";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
 import {
@@ -99,14 +163,21 @@ import {
   type ReaderMotionLevel,
 } from "./store/useReaderStore";
 import { cancelMotion, runMotion } from "./lib/motion";
-import type { PdfReaderHandle } from "./components/PdfReader";
+import type { PdfPagePosition, PdfReaderHandle } from "./components/PdfReader";
+import type { HomeReviewSummary } from "./components/HomeView";
+import type { ReviewSession } from "./components/ReviewView";
 
 const LAST_LIBRARY_KEY = "reade-last-library";
 const IS_WEB_RUNTIME = APP_RUNTIME === "web";
+/** data-annotation-id of the temporary relocate preview mark (§5.6 B). */
+const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
 const ABSOLUTE_PROTOCOL = /^[a-z][a-z\d+.-]*:/i;
 const PdfReader = lazy(() => import("./components/PdfReader").then((module) => ({ default: module.PdfReader })));
 const StatsView = lazy(() => import("./components/StatsView").then((module) => ({ default: module.StatsView })));
+const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ default: module.HomeView })));
+const ReviewView = lazy(() => import("./components/ReviewView").then((module) => ({ default: module.ReviewView })));
+const AnnotationHubView = lazy(() => import("./components/AnnotationHubView").then((module) => ({ default: module.AnnotationHubView })));
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -129,6 +200,12 @@ function useMediaQuery(query: string): boolean {
 
 function fileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
+}
+
+/** 本地日期戳(YYYYMMDD),用于导出文件的默认文件名。 */
+function transferDateStamp(now = new Date()): string {
+  const pad = (value: number) => String(value).padStart(2, "0");
+  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
 }
 
 function formatFileSize(bytes: number): string {
@@ -185,6 +262,40 @@ function resolveLibraryPath(source: string, documentPath: string): string | null
   }
 
   return base.join("/");
+}
+
+/**
+ * Search roots for the §5.6 relocate pass, matching where the annotation's
+ * quote could live. PDF roots are ordered by page proximity to the stored
+ * page so the nearest rendered occurrence wins.
+ */
+function collectRelocationRoots(
+  article: HTMLElement,
+  locator: QuoteBearingLocator,
+): HTMLElement[] {
+  if (locator.kind === "markdown") {
+    const root = article.querySelector<HTMLElement>(".markdown-body");
+    return root ? [root] : [];
+  }
+  if (locator.kind === "epub") {
+    const root = article.querySelector<HTMLElement>(".epub-reader");
+    return root ? [root] : [];
+  }
+  const pageSelector = locator.view === "reading" ? ".pdf-reading-page" : ".pdf-page";
+  const entries: Array<{ page: number; root: HTMLElement }> = [];
+  for (const page of Array.from(article.querySelectorAll<HTMLElement>(pageSelector))) {
+    const root =
+      locator.view === "reading"
+        ? page.querySelector<HTMLElement>(".markdown-body")
+        : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer");
+    if (!root || !root.textContent?.trim()) continue;
+    const pageNumber = Number(page.dataset.pageNumber);
+    entries.push({ page: Number.isFinite(pageNumber) ? pageNumber : 0, root });
+  }
+  entries.sort(
+    (a, b) => Math.abs(a.page - locator.page) - Math.abs(b.page - locator.page),
+  );
+  return entries.map((entry) => entry.root);
 }
 
 function referencedImages(markdown: string): string[] {
@@ -394,6 +505,10 @@ export function ReadingSettingsPanel({
   const update = useReaderStore((state) => state.updateReadingSettings);
   const motionLevel = useReaderStore((state) => state.motionLevel);
   const setMotionLevel = useReaderStore((state) => state.setMotionLevel);
+  const fuzzyAnnotationAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
+  const setFuzzyAnnotationAnchoring = useReaderStore(
+    (state) => state.setFuzzyAnnotationAnchoring,
+  );
   const resetReaderPreferences = useReaderStore((state) => state.resetReaderPreferences);
   const clearDocumentCache = useReaderStore((state) => state.clearDocumentCache);
   const [clearingCache, setClearingCache] = useState(false);
@@ -518,6 +633,29 @@ export function ReadingSettingsPanel({
             </button>
           ))}
         </div>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">标注模糊定位</legend>
+        <div className="motion-level-control" role="group" aria-label="标注模糊定位开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={fuzzyAnnotationAnchoring === enabled}
+              className={fuzzyAnnotationAnchoring === enabled ? "active" : undefined}
+              onClick={() => setFuzzyAnnotationAnchoring(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
+        </p>
       </fieldset>
 
       <button
@@ -669,36 +807,65 @@ export function ThemeStylePicker({
   );
 }
 
-function TocNavigation({
+export function TocNavigation({
   items,
   activeId,
   onSelect,
+  heat,
+  reachedIds,
+  onSelectTop,
 }: {
   items: TocItem[];
   activeId: string | null;
   onSelect: (id: string) => void;
+  /** 方案三 T1 批注密度;不传时渲染与传统输出逐字节一致。 */
+  heat?: TocHeatResult | null;
+  /** 方案三 T2 已读覆盖:已达条目集合;缓存未就绪传 null 即全部未达。 */
+  reachedIds?: ReadonlySet<string> | null;
+  /** 文首/失效章节说明行的跳转目标(滚动到文档顶部)。 */
+  onSelectTop?: () => void;
 }) {
   return (
     <div className="toc-section">
+      {heat && heat.unassignedCount > 0 ? (
+        <button type="button" className="toc-unassigned" onClick={onSelectTop}>
+          文首或已变更章节另有 {heat.unassignedCount} 条标注
+        </button>
+      ) : null}
       {items.length ? (
         <ol className="toc-list">
-          {items.map((item, index) => (
-            <li key={`${item.id}:${index}`}>
-              <a
-                className={`toc-link${activeId === item.id ? " active" : ""}`}
-                style={{ "--toc-depth": item.level } as CSSProperties}
-                href={`#${item.id}`}
-                aria-current={activeId === item.id ? "location" : undefined}
-                title={item.title}
-                onClick={(event) => {
-                  event.preventDefault();
-                  onSelect(item.id);
-                }}
-              >
-                {item.title}
-              </a>
-            </li>
-          ))}
+          {items.map((item, index) => {
+            const heatEntry = heat?.byId.get(item.id);
+            const heatLabel = heatEntry ? `本节 ${heatEntry.count} 条标注` : null;
+            const reached = Boolean(reachedIds?.has(item.id));
+            return (
+              <li key={`${item.id}:${index}`}>
+                <a
+                  className={`toc-link${activeId === item.id ? " active" : ""}${
+                    reached ? " is-reached" : ""
+                  }${heatEntry ? " has-heat" : ""}`}
+                  style={{ "--toc-depth": item.level } as CSSProperties}
+                  href={`#${item.id}`}
+                  aria-current={activeId === item.id ? "location" : undefined}
+                  title={heatLabel ? `${item.title}（${heatLabel}）` : item.title}
+                  aria-label={heatLabel ? `${item.title}，${heatLabel}` : undefined}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    onSelect(item.id);
+                  }}
+                >
+                  {item.title}
+                  {heatEntry ? (
+                    <span
+                      className="toc-heat"
+                      data-level={heatEntry.level}
+                      aria-hidden="true"
+                    />
+                  ) : null}
+                </a>
+              </li>
+            );
+          })}
         </ol>
       ) : (
         <p className="toc-empty">这篇文档没有可导航的标题。</p>
@@ -715,8 +882,12 @@ function SidePanel({
   tocItems,
   activeId,
   onSelectHeading,
+  tocHeat,
+  tocReachedIds,
+  onSelectDocumentTop,
   annotations,
   brokenIds,
+  approximateIds,
   annotationsLoading,
   annotationSort,
   onAnnotationSortChange,
@@ -725,22 +896,39 @@ function SidePanel({
   onDeleteAnnotation,
   onEditAnnotationNote,
   onChangeAnnotationColor,
+  onRelocateAnnotation,
   onClearAnnotations,
   libraryStatus,
   libraryGroups,
   libraryError,
   currentPath,
+  lostDocuments,
+  libraryDocuments,
+  libraryFilters,
+  onLibraryFiltersChange,
+  libraryFilterActive,
+  onDryRunRebind,
+  onRebindLostDocument,
   onRefreshLibraryAnnotations,
   onExportLibraryAnnotations,
+  onExportLibraryGroup,
+  onExportLibraryJson,
+  onExportLibraryCsv,
+  onImportLibraryAnnotations,
   onSelectLibraryAnnotation,
+  onOpenLibraryHub,
 }: {
   tab: SidePanelTab;
   onTabChange: (tab: SidePanelTab) => void;
   tocItems: TocItem[];
   activeId: string | null;
   onSelectHeading: (id: string) => void;
+  tocHeat?: TocHeatResult | null;
+  tocReachedIds?: ReadonlySet<string> | null;
+  onSelectDocumentTop?: () => void;
   annotations: Annotation[];
   brokenIds: Set<string>;
+  approximateIds: Set<string>;
   annotationsLoading: boolean;
   annotationSort: AnnotationListSort;
   onAnnotationSortChange: (sort: AnnotationListSort) => void;
@@ -749,14 +937,27 @@ function SidePanel({
   onDeleteAnnotation: (annotation: Annotation) => void;
   onEditAnnotationNote: (annotation: Annotation) => void;
   onChangeAnnotationColor: (annotation: Annotation, color: AnnotationColor) => void;
+  onRelocateAnnotation: (annotation: Annotation) => void;
   onClearAnnotations: () => void;
   libraryStatus: AnnotationLibraryStatus;
   libraryGroups: AnnotationLibraryGroup[];
   libraryError: string | null;
   currentPath: string | null;
+  lostDocuments: LostDocumentEntry[];
+  libraryDocuments: LibraryDocumentOption[];
+  libraryFilters: AnnotationLibraryFilters;
+  onLibraryFiltersChange: (filters: AnnotationLibraryFilters) => void;
+  libraryFilterActive: boolean;
+  onDryRunRebind: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
+  onRebindLostDocument: (oldPath: string, newPath: string) => Promise<void>;
   onRefreshLibraryAnnotations: () => void;
   onExportLibraryAnnotations: () => void;
+  onExportLibraryGroup: (group: AnnotationLibraryGroup) => void;
+  onExportLibraryJson: () => void;
+  onExportLibraryCsv: () => void;
+  onImportLibraryAnnotations: () => void;
   onSelectLibraryAnnotation: (annotation: Annotation) => void;
+  onOpenLibraryHub?: () => void;
 }) {
   return (
     <div className="toc-inner">
@@ -791,11 +992,19 @@ function SidePanel({
         </button>
       </div>
       {tab === "toc" ? (
-        <TocNavigation items={tocItems} activeId={activeId} onSelect={onSelectHeading} />
+        <TocNavigation
+          items={tocItems}
+          activeId={activeId}
+          onSelect={onSelectHeading}
+          heat={tocHeat}
+          reachedIds={tocReachedIds}
+          onSelectTop={onSelectDocumentTop}
+        />
       ) : tab === "annotations" ? (
         <AnnotationList
           annotations={annotations}
           brokenIds={brokenIds}
+          approximateIds={approximateIds}
           loading={annotationsLoading}
           sort={annotationSort}
           onSortChange={onAnnotationSortChange}
@@ -804,6 +1013,7 @@ function SidePanel({
           onDelete={onDeleteAnnotation}
           onEditNote={onEditAnnotationNote}
           onChangeColor={onChangeAnnotationColor}
+          onRelocate={onRelocateAnnotation}
           onClearAll={onClearAnnotations}
         />
       ) : (
@@ -812,9 +1022,21 @@ function SidePanel({
           groups={libraryGroups}
           error={libraryError}
           currentPath={currentPath}
+          lostDocuments={lostDocuments}
+          documents={libraryDocuments}
+          filters={libraryFilters}
+          onFiltersChange={onLibraryFiltersChange}
+          filterActive={libraryFilterActive}
+          onDryRunRebind={onDryRunRebind}
+          onRebindLostDocument={onRebindLostDocument}
           onRefresh={onRefreshLibraryAnnotations}
           onExport={onExportLibraryAnnotations}
+          onExportGroup={onExportLibraryGroup}
+          onExportJson={onExportLibraryJson}
+          onExportCsv={onExportLibraryCsv}
+          onImport={onImportLibraryAnnotations}
           onSelect={onSelectLibraryAnnotation}
+          onOpenHub={onOpenLibraryHub}
         />
       )}
     </div>
@@ -836,6 +1058,7 @@ function App() {
   const annotationTool = useReaderStore((state) => state.annotationTool);
   const highlightColor = useReaderStore((state) => state.highlightColor);
   const underlineColor = useReaderStore((state) => state.underlineColor);
+  const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -896,6 +1119,30 @@ function App() {
     () => new Set([...markdownBrokenIds, ...readerBrokenIds]),
     [markdownBrokenIds, readerBrokenIds],
   );
+  // Non-exact anchor hits (§5.6 weak hint): recomputed on every paint, like
+  // the broken set, never persisted.
+  const [markdownApproximateIds, setMarkdownApproximateIds] = useState<string[]>([]);
+  const [readerApproximateIds, setReaderApproximateIds] = useState<string[]>([]);
+  const approximateAnnotationIds = useMemo(
+    () => new Set([...markdownApproximateIds, ...readerApproximateIds]),
+    [markdownApproximateIds, readerApproximateIds],
+  );
+  // §5.5 fingerprint move candidates, kept so declined/ambiguous pairings can
+  // surface in the lost-documents rebind list (§5.6 C).
+  const [moveCandidates, setMoveCandidates] = useState<MovedDocumentCandidate[]>([]);
+  // Pending relocate preview: the annotation keeps its original locator until
+  // the user confirms; cancel removes the preview marks and changes nothing.
+  const [relocatePreview, setRelocatePreview] = useState<{
+    annotation: Annotation;
+    captured: PendingSelection;
+    fuzzyHit: boolean;
+  } | null>(null);
+  // §5.7 导入确认:dry-run 计划先展示,用户确认后才落库。
+  const [importReview, setImportReview] = useState<{
+    fileName: string | null;
+    plan: AnnotationImportPlan;
+  } | null>(null);
+  const [importBusy, setImportBusy] = useState(false);
   const compactLibraryLayout = useMediaQuery("(max-width: 640px)");
   const readerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLDivElement>(null);
@@ -907,6 +1154,13 @@ function App() {
   const noticeSequence = useRef(0);
   const scrollFrame = useRef<number | null>(null);
   const scrollPositions = useRef(new Map<string, number>());
+  // H0 阅读位置持久化:滚动 rAF 内只采样,真正的 localStorage 写入走
+  // 500ms trailing debounce;PDF 在落盘时才做页面测量。
+  const persistPositionTimer = useRef<number | null>(null);
+  const pendingPositionSample = useRef<
+    { root: string; path: string; kind: "scroll" | "pdf"; ratio: number } | null
+  >(null);
+  const pdfRestoreTimer = useRef<number | null>(null);
   const pendingAnnotationJump = useRef<Annotation | null>(null);
   const jumpRetryTimer = useRef<number | null>(null);
   const trackerRef = useRef<ReadingTracker | null>(null);
@@ -914,6 +1168,7 @@ function App() {
     annotations,
     loading: annotationsLoading,
     canUndo,
+    reload: reloadAnnotations,
     save: saveAnnotation,
     remove: removeAnnotation,
     clearAll: clearAnnotations,
@@ -932,13 +1187,27 @@ function App() {
     initialWebRoute.current?.heading ?? null,
   );
   const restoredLibrary = useRef(false);
+  // H-D1 方案 A:桌面冷启动落点只判定一次;之后库刷新/切换维持
+  // "自动打开第一篇"的现状行为。
+  const coldStartDecided = useRef(false);
+  // 5.5 文档移动检测:每个库快照只检测一次;同一对 old→new 在一次会话内
+  // 只询问一次,避免监听刷新反复弹确认。
+  const lastMoveCheckSnapshot = useRef<LibrarySnapshot | null>(null);
+  const promptedMovePairs = useRef(new Set<string>());
 
   const currentDocument = useMemo(
     () => documents.find((document) => document.relativePath === currentPath) ?? null,
     [currentPath, documents],
   );
   const statsOpen = !IS_WEB_RUNTIME && activeView === "stats";
+  const homeOpen = activeView === "home";
+  const reviewOpen = activeView === "review";
+  const annotationsOpen = activeView === "annotations";
+  /** 任一全屏视图打开时,阅读面保持挂载但隐藏(stats 的既有挂载模式)。 */
+  const overlayViewOpen = statsOpen || homeOpen || reviewOpen || annotationsOpen;
   const themeMode = THEME_META[theme].mode;
+  // 回顾会话跨视图保留(App 内存 state):「打开原文」跳走后同日回来续接。
+  const [reviewSession, setReviewSession] = useState<ReviewSession | null>(null);
 
   // 阅读时长追踪:仅桌面端;窗口聚焦可见且近期有交互才计时。
   useEffect(() => {
@@ -975,13 +1244,13 @@ function App() {
     };
   }, []);
 
-  // 会话跟随当前文档;统计视图打开时结束当前会话(顺带落盘)。
+  // 会话跟随当前文档;离开阅读面(统计或主页)时结束当前会话(顺带落盘)。
   const trackedFormat = currentDocument?.format ?? null;
   const trackedTitle = currentDocument?.title ?? null;
   useEffect(() => {
     const tracker = trackerRef.current;
     if (!tracker) return;
-    if (!statsOpen && currentPath && trackedFormat) {
+    if (activeView === "reader" && currentPath && trackedFormat) {
       tracker.openDocument({
         relativePath: currentPath,
         format: trackedFormat,
@@ -990,7 +1259,51 @@ function App() {
     } else {
       tracker.openDocument(null);
     }
-  }, [statsOpen, currentPath, trackedFormat, trackedTitle]);
+  }, [activeView, currentPath, trackedFormat, trackedTitle]);
+
+  // 主页「库内新动态」的 baseline 在离开主页时推进(方案 §3.3 ③):
+  // 停留期间列表保持稳定,离开即视为已读完这批动态。
+  const previousHomeOpen = useRef(false);
+  useEffect(() => {
+    if (previousHomeOpen.current && !homeOpen) {
+      const rootPath = useReaderStore.getState().snapshot?.rootPath;
+      if (rootPath) writeHomeBaseline(rootPath, Date.now());
+    }
+    previousHomeOpen.current = homeOpen;
+  }, [homeOpen]);
+
+  // 方案二 R1:主页④卡的数据探测。本地日界由前端计算后传给后端(后端不做
+  // 时区推断);探测失败 → null → 卡整体不渲染,不留死 UI。
+  const [homeReviewProbe, setHomeReviewProbe] = useState<ReviewSummary | null>(null);
+  useEffect(() => {
+    if (!homeOpen || !snapshot) return;
+    let cancelled = false;
+    const nowMs = Date.now();
+    const dayStart = new Date(nowMs);
+    dayStart.setHours(0, 0, 0, 0);
+    reviewSummary(dayStart.getTime(), nowMs).then(
+      (summary) => {
+        if (!cancelled) setHomeReviewProbe(summary);
+      },
+      () => {
+        if (!cancelled) setHomeReviewProbe(null);
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [homeOpen, snapshot]);
+
+  const homeReviewSummary = useMemo<HomeReviewSummary | null>(() => {
+    if (!homeReviewProbe) return null;
+    // 既无到期也无今日记录时不渲染卡片(从未使用回顾的用户不被打扰)。
+    if (homeReviewProbe.dueCount <= 0 && homeReviewProbe.reviewedToday <= 0) return null;
+    return {
+      pendingCount: homeReviewProbe.dueCount,
+      reviewedToday: homeReviewProbe.reviewedToday,
+      onStart: () => setActiveView("review"),
+    };
+  }, [homeReviewProbe, setActiveView]);
 
   const renderedMarkdown = useMemo(
     () => displayMarkdown(currentContent?.kind === "markdown" ? currentContent.markdown : ""),
@@ -1004,6 +1317,131 @@ function App() {
   const handleActiveHeadingChange = useCallback((id: string | null) => {
     if (currentPath) setActiveHeadingState({ path: currentPath, id });
   }, [currentPath]);
+
+  // 方案三 T1:批注密度归属(纯数据,零 DOM 测量),批注增删实时重算。
+  // epub 的 TOC id 是 domId 哈希,由 EpubReader 的公开封装建立映射。
+  const epubChapterTocIds = useMemo(() => {
+    if (currentContent?.kind !== "epub") return undefined;
+    return new Map(
+      currentContent.document.chapters.map((chapter) => [
+        chapter.id,
+        epubChapterTocId(chapter.id),
+      ]),
+    );
+  }, [currentContent]);
+
+  const tocHeat = useMemo<TocHeatResult | null>(() => {
+    if (!currentContent || !toc.length) return null;
+    return buildTocHeat({
+      items: toc,
+      annotations,
+      format: currentContent.kind,
+      epubChapterTocIds,
+    });
+  }, [annotations, currentContent, epubChapterTocIds, toc]);
+
+  // 方案三 T2:已读覆盖。持久化高水位(maxScrollRatio/maxPage)进内存 state,
+  // 500ms 落盘节流时同步推进;标题纵向位置渲染后一次性测量并缓存。
+  const [readingHighWater, setReadingHighWater] = useState<
+    { path: string; maxScrollRatio: number; maxPage: number } | null
+  >(null);
+  const [headingRatios, setHeadingRatios] = useState<
+    { path: string; ratios: Map<string, number> } | null
+  >(null);
+
+  useEffect(() => {
+    const rootPath = snapshot?.rootPath;
+    if (!currentPath || !rootPath) {
+      setReadingHighWater(null);
+      return;
+    }
+    const persisted = readReadingPosition(rootPath, currentPath);
+    setReadingHighWater({
+      path: currentPath,
+      maxScrollRatio: persisted?.kind === "scroll" ? persisted.maxScrollRatio : 0,
+      maxPage: persisted?.kind === "pdf" ? persisted.maxPage : 0,
+    });
+  }, [currentPath, snapshot?.rootPath]);
+
+  /** 高水位随每次位置落盘推进(已被 500ms 节流,滚动热路径零新增工作)。 */
+  const applyStoredHighWater = useCallback(
+    (path: string, stored: ReadingPosition | null) => {
+      if (!stored) return;
+      setReadingHighWater((current) => {
+        if (!current || current.path !== path) return current;
+        const maxScrollRatio =
+          stored.kind === "scroll"
+            ? Math.max(current.maxScrollRatio, stored.maxScrollRatio)
+            : current.maxScrollRatio;
+        const maxPage =
+          stored.kind === "pdf" ? Math.max(current.maxPage, stored.maxPage) : current.maxPage;
+        if (
+          maxScrollRatio === current.maxScrollRatio &&
+          maxPage === current.maxPage
+        ) {
+          return current;
+        }
+        return { path: current.path, maxScrollRatio, maxPage };
+      });
+    },
+    [],
+  );
+
+  // T2 测量点:渲染后在空闲期对 TOC 目标元素做一次 offset/scrollHeight 测量,
+  // 内容(toc/currentContent)或排版参数变化时缓存失效重测;滚动路径不测量。
+  useEffect(() => {
+    setHeadingRatios(null);
+    if (!currentPath || !toc.length) return;
+    if (!currentContent || currentContent.kind === "pdf") return;
+    const path = currentPath;
+    const ids = toc.map((item) => item.id);
+    let cancelled = false;
+    const measure = () => {
+      if (cancelled) return;
+      const reader = readerRef.current;
+      if (!reader) return;
+      const ratios = measureHeadingRatios(reader, ids);
+      if (ratios) setHeadingRatios({ path, ratios });
+    };
+    if (typeof window.requestIdleCallback === "function") {
+      const handle = window.requestIdleCallback(() => measure());
+      return () => {
+        cancelled = true;
+        window.cancelIdleCallback(handle);
+      };
+    }
+    const handle = window.setTimeout(measure, 60);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(handle);
+    };
+  }, [currentContent, currentPath, readingSettings, toc]);
+
+  const tocReachedIds = useMemo<ReadonlySet<string> | null>(() => {
+    if (!currentPath || !readingHighWater || readingHighWater.path !== currentPath) {
+      return null;
+    }
+    if (currentContent?.kind === "pdf") {
+      return buildPdfTocCoverage(
+        toc,
+        readingHighWater.maxPage > 0 ? readingHighWater.maxPage : null,
+      );
+    }
+    if (!headingRatios || headingRatios.path !== currentPath) return null;
+    return coverageFromRatios(headingRatios.ratios, readingHighWater.maxScrollRatio);
+  }, [currentContent?.kind, currentPath, headingRatios, readingHighWater, toc]);
+
+  const scrollToDocumentTop = useCallback(() => {
+    const reader = readerRef.current;
+    if (!reader) return;
+    const behavior: ScrollBehavior = motionLevel === "off" ? "auto" : "smooth";
+    if (behavior === "smooth" && typeof reader.scrollTo === "function") {
+      reader.scrollTo({ top: 0, behavior });
+    } else {
+      reader.scrollTop = 0;
+    }
+    setCompactTocOpen(false);
+  }, [motionLevel]);
 
   const readerStyle = {
     "--reader-font-size": `${readingSettings.fontSize}px`,
@@ -1052,6 +1490,76 @@ function App() {
     const max = reader.scrollHeight - reader.clientHeight;
     return max > 0 ? reader.scrollTop / max : 0;
   }, []);
+
+  /**
+   * H0 写入支路的落盘端:scroll 类直接用采样时的 ratio(即使文档已切换,
+   * 采样值自身仍是自洽的);pdf 类需要现场测量,仅当文档未变时执行。
+   */
+  const flushPendingPosition = useCallback(() => {
+    const sample = pendingPositionSample.current;
+    if (!sample) return;
+    pendingPositionSample.current = null;
+    if (sample.kind === "pdf") {
+      if (useReaderStore.getState().currentPath !== sample.path) return;
+      const position = pdfReaderHandleRef.current?.getPosition();
+      if (!position) return;
+      const stored = writeReadingPosition(sample.root, sample.path, {
+        kind: "pdf",
+        page: position.page,
+        offsetRatio: position.offsetRatio,
+      });
+      applyStoredHighWater(sample.path, stored);
+      return;
+    }
+    const stored = writeReadingPosition(sample.root, sample.path, {
+      kind: "scroll",
+      scrollRatio: sample.ratio,
+    });
+    applyStoredHighWater(sample.path, stored);
+  }, [applyStoredHighWater]);
+
+  /**
+   * H0 恢复支路(pdf):PDF 页懒加载、阅读器组件本身经 Suspense 异步挂载,
+   * 复用书签跳转的重试兜底模式,直到 restorePosition 命中或轮次耗尽。
+   */
+  const schedulePdfPositionRestore = useCallback(
+    (path: string, position: PdfPagePosition) => {
+      if (pdfRestoreTimer.current !== null) {
+        window.clearTimeout(pdfRestoreTimer.current);
+        pdfRestoreTimer.current = null;
+      }
+      const MAX_ROUNDS = 20;
+      const attempt = (round: number) => {
+        pdfRestoreTimer.current = null;
+        if (useReaderStore.getState().currentPath !== path) return;
+        const restored = pdfReaderHandleRef.current?.restorePosition(position) ?? false;
+        if (restored || round >= MAX_ROUNDS) return;
+        pdfRestoreTimer.current = window.setTimeout(() => attempt(round + 1), 200);
+      };
+      attempt(0);
+    },
+    [],
+  );
+
+  useEffect(() => {
+    // 关闭前把尚未落盘的位置刷出去;卸载时同样兜底。
+    const flushNow = () => {
+      if (persistPositionTimer.current !== null) {
+        window.clearTimeout(persistPositionTimer.current);
+        persistPositionTimer.current = null;
+      }
+      flushPendingPosition();
+    };
+    window.addEventListener("pagehide", flushNow);
+    return () => {
+      window.removeEventListener("pagehide", flushNow);
+      flushNow();
+      if (pdfRestoreTimer.current !== null) {
+        window.clearTimeout(pdfRestoreTimer.current);
+        pdfRestoreTimer.current = null;
+      }
+    };
+  }, [flushPendingPosition]);
 
   const handleCreateBookmark = useCallback(async () => {
     if (!currentPath || !currentContent) return;
@@ -1390,6 +1898,83 @@ function App() {
     [showNotice, updateColor],
   );
 
+  const clearRelocatePreview = useCallback(() => {
+    const article = articleRef.current;
+    if (article) clearAnnotationMarks(article, RELOCATE_PREVIEW_ID);
+    setRelocatePreview(null);
+  }, []);
+
+  /**
+   * §5.6 B「在文档中定位此文本」: 用宽松档(空白规范化 + 临时 fuzzy)找最近似
+   * 位置,画临时预览高亮并滚动到位。此处只预览;确认之前不改写任何 locator。
+   * PDF 需先切到标注所属视图,内容异步就绪,对"根尚未渲染"做有限重试。
+   */
+  const handleRelocateAnnotation = useCallback(
+    (annotation: Annotation) => {
+      if (!isRelocatableAnnotation(annotation)) return;
+      clearRelocatePreview();
+      const locator = annotation.locator as QuoteBearingLocator;
+      const viewSwitched = ensurePdfViewForAnnotation(annotation);
+      const behavior: ScrollBehavior = motionLevel === "off" ? "auto" : "smooth";
+      const MAX_ROUNDS = 8;
+      const attempt = (round: number) => {
+        const article = articleRef.current;
+        const reader = readerRef.current;
+        if (!article || !reader) return;
+        const roots = collectRelocationRoots(article, locator);
+        if (!roots.length) {
+          if (round < MAX_ROUNDS) window.setTimeout(() => attempt(round + 1), 200);
+          else showNotice("当前视图尚未渲染可搜索的正文，未找到近似位置，标注保持原样。");
+          return;
+        }
+        const match = findRelocationRange(roots, locator);
+        if (!match) {
+          // 明确告知,不提供删除以外的建议;locator 原样保留。
+          showNotice("未在当前文档中找到近似文本，标注保持原样。");
+          return;
+        }
+        // 先采集(wrap 会拆分文本节点,必须在测量之后)。
+        const captured = captureRelocatedSelection({
+          readerRoot: reader,
+          kind: locator.kind,
+          range: match.range,
+          pdfMode: locator.kind === "pdf" ? locator.view : undefined,
+        });
+        if (!captured) {
+          showNotice("未能重新采集定位信息，标注保持原样。");
+          return;
+        }
+        const markKind = isAnnotationMarkKind(annotation.kind) ? annotation.kind : "highlight";
+        const elements = wrapRangeWithMark(
+          match.range,
+          RELOCATE_PREVIEW_ID,
+          annotation.color ?? "yellow",
+          markKind,
+        );
+        for (const element of elements) element.classList.add("annotation-relocate-preview");
+        if (elements[0]) scrollElementWithinContainer(reader, elements[0], behavior);
+        setRelocatePreview({ annotation, captured, fuzzyHit: match.method === "fuzzy" });
+      };
+      if (viewSwitched) window.setTimeout(() => attempt(0), 350);
+      else attempt(0);
+    },
+    [clearRelocatePreview, ensurePdfViewForAnnotation, motionLevel, showNotice],
+  );
+
+  const confirmRelocateAnnotation = useCallback(async () => {
+    if (!relocatePreview) return;
+    // 用户确认是改写 locator 的唯一路径:全套 quote/prefix/suffix/hint 重新
+    // 采集,sortIndex 重算,经 upsert 持久化。
+    const updated = applyRelocatedAnnotation(relocatePreview.annotation, relocatePreview.captured);
+    try {
+      await saveAnnotation(updated, { recordUndo: false });
+      clearRelocatePreview();
+      showNotice("已把标注移动到新位置");
+    } catch (cause) {
+      showNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [clearRelocatePreview, relocatePreview, saveAnnotation, showNotice]);
+
   const commitNoteDraft = useCallback(async () => {
     if (!noteDraft) return;
     if (noteDraft.mode === "create") {
@@ -1527,33 +2112,103 @@ function App() {
   }, [annotations]);
 
   useEffect(() => {
-    if (sidePanelTab === "library" && libraryAnnotations.status === "idle") {
+    if (
+      (sidePanelTab === "library" || activeView === "annotations") &&
+      libraryAnnotations.status === "idle"
+    ) {
       void loadLibraryAnnotations();
     }
-  }, [libraryAnnotations.status, loadLibraryAnnotations, sidePanelTab]);
+  }, [activeView, libraryAnnotations.status, loadLibraryAnnotations, sidePanelTab]);
 
-  const libraryGroups = useMemo<AnnotationLibraryGroup[]>(() => {
-    if (libraryAnnotations.status !== "ready") return [];
-    const titles = new Map(documents.map((document) => [document.relativePath, document.title]));
-    const grouped = new Map<string, Annotation[]>();
-    for (const annotation of libraryAnnotations.items) {
-      const list = grouped.get(annotation.relativePath);
-      if (list) list.push(annotation);
-      else grouped.set(annotation.relativePath, [annotation]);
+  // 方案四 A1:全库检索与筛选。检索输入 240ms 防抖(沿库搜索的既有模式),
+  // 桌面走 search_annotations(FTS5 trigram),Web 由 wrapper 走同构内存过滤;
+  // 类型/颜色筛选保持纯前端,与检索结果求交。
+  const [libraryFilters, setLibraryFilters] = useState<AnnotationLibraryFilters>({
+    query: "",
+    kinds: [],
+    colors: [],
+  });
+  const [librarySearch, setLibrarySearch] = useState<
+    { query: string; items: Annotation[] } | null
+  >(null);
+  const librarySearchRequest = useRef(0);
+
+  useEffect(() => {
+    const request = ++librarySearchRequest.current;
+    if (!normalizeAnnotationQuery(libraryFilters.query)) {
+      setLibrarySearch(null);
+      return;
     }
-    return Array.from(grouped.entries())
-      .map(([path, items]) => ({
-        path,
-        title: titles.get(path) ?? fileName(path),
-        annotations: [...items].sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id)),
-      }))
-      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
-  }, [documents, libraryAnnotations]);
+    const timer = window.setTimeout(() => {
+      searchAnnotations(libraryFilters.query).then(
+        (items) => {
+          if (librarySearchRequest.current === request) {
+            setLibrarySearch({ query: libraryFilters.query, items });
+          }
+        },
+        (cause) => {
+          console.error("Reade: 标注检索失败", cause);
+          if (librarySearchRequest.current === request) {
+            setLibrarySearch({ query: libraryFilters.query, items: [] });
+          }
+        },
+      );
+    }, 240);
+    return () => window.clearTimeout(timer);
+  }, [libraryFilters.query]);
+
+  const documentTitles = useMemo(
+    () => new Map(documents.map((document) => [document.relativePath, document.title])),
+    [documents],
+  );
+  const presentDocumentPaths = useMemo(
+    () => new Set(documents.map((document) => document.relativePath)),
+    [documents],
+  );
+
+  const libraryFilterActive =
+    librarySearch !== null ||
+    libraryFilters.kinds.length > 0 ||
+    libraryFilters.colors.length > 0;
+
+  const libraryHubItems = useMemo(() => {
+    const base = librarySearch
+      ? librarySearch.items
+      : libraryAnnotations.status === "ready"
+        ? libraryAnnotations.items
+        : [];
+    if (!libraryFilters.kinds.length && !libraryFilters.colors.length) return base;
+    return filterAnnotations(base, {
+      kinds: libraryFilters.kinds,
+      colors: libraryFilters.colors,
+    });
+  }, [libraryAnnotations, libraryFilters.colors, libraryFilters.kinds, librarySearch]);
+
+  // 分组走 annotationHub 纯函数:普通组按路径排序,失联组(路径不在当前
+  // 扫描中)置尾灰显;组内按 sortIndex 位置排序(决策 A-D2)。
+  const libraryGroups = useMemo<AnnotationLibraryGroup[]>(() => {
+    if (!librarySearch && libraryAnnotations.status !== "ready") return [];
+    return groupAnnotationsByDocument(libraryHubItems, presentDocumentPaths).map((group) => ({
+      path: group.relativePath,
+      title: documentTitles.get(group.relativePath) ?? fileName(group.relativePath),
+      missing: group.missing,
+      annotations: group.annotations,
+    }));
+  }, [
+    documentTitles,
+    libraryAnnotations.status,
+    libraryHubItems,
+    librarySearch,
+    presentDocumentPaths,
+  ]);
 
   const handleSelectLibraryAnnotation = useCallback(
     (annotation: Annotation) => {
       setCompactTocOpen(false);
       if (annotation.relativePath === currentPath) {
+        // 从全屏视图(中枢/回顾)点击当前文档的标注时,先切回阅读面再定位;
+        // 跨文档路径由 selectDocument 自动切回(store 契约)。
+        if (useReaderStore.getState().activeView !== "reader") setActiveView("reader");
         jumpToAnnotation(annotation);
         return;
       }
@@ -1561,8 +2216,15 @@ function App() {
       pendingAnnotationJump.current = annotation;
       void selectDocument(annotation.relativePath);
     },
-    [currentPath, jumpToAnnotation, selectDocument],
+    [currentPath, jumpToAnnotation, selectDocument, setActiveView],
   );
+
+  /** 全屏中枢入口(方案四 A2):来自全库 tab 顶部链接,footer 不加第四图标。 */
+  const openAnnotationHub = useCallback(() => {
+    setCompactTocOpen(false);
+    setMobileLibraryOpen(false);
+    setActiveView("annotations");
+  }, [setActiveView]);
 
   useEffect(() => {
     const pending = pendingAnnotationJump.current;
@@ -1610,15 +2272,134 @@ function App() {
     showNotice(copied ? `已复制 ${annotations.length} 条标注` : "复制失败，请重试。");
   }, [annotationSortKeys, annotations, copyTextToClipboard, currentDocument?.title, currentPath, showNotice]);
 
+  // 导出范围跟随当前视图:检索/筛选激活时导出的即是命中集合(方案四 §3.2)。
   const handleExportLibraryAnnotations = useCallback(async () => {
-    if (libraryAnnotations.status !== "ready" || !libraryAnnotations.items.length) return;
-    const titles = new Map(documents.map((document) => [document.relativePath, document.title]));
-    const markdown = buildAnnotationsMarkdown(libraryAnnotations.items, { documentTitles: titles });
+    if (!libraryHubItems.length) return;
+    const markdown = buildAnnotationsMarkdown(libraryHubItems, { documentTitles });
     const copied = await copyTextToClipboard(markdown);
-    showNotice(
-      copied ? `已复制 ${libraryAnnotations.items.length} 条标注` : "复制失败，请重试。",
-    );
-  }, [copyTextToClipboard, documents, libraryAnnotations, showNotice]);
+    showNotice(copied ? `已复制 ${libraryHubItems.length} 条标注` : "复制失败，请重试。");
+  }, [copyTextToClipboard, documentTitles, libraryHubItems, showNotice]);
+
+  const handleExportLibraryGroup = useCallback(
+    async (group: AnnotationLibraryGroup) => {
+      if (!group.annotations.length) return;
+      const markdown = buildAnnotationsMarkdown(group.annotations, {
+        documentTitles: new Map([[group.path, group.title]]),
+      });
+      const copied = await copyTextToClipboard(markdown);
+      showNotice(copied ? `已复制 ${group.annotations.length} 条标注` : "复制失败，请重试。");
+    },
+    [copyTextToClipboard, showNotice],
+  );
+
+  // ---- §5.7 文件级导出/导入(JSON 信封 + Readwise CSV) ----
+
+  const handleExportAnnotationsJson = useCallback(async () => {
+    try {
+      const [records, fingerprints] = await Promise.all([
+        listAnnotationsForTransfer(),
+        listDocumentFingerprints(),
+      ]);
+      if (!records.length) {
+        showNotice("当前文档库还没有可导出的标注。");
+        return;
+      }
+      const envelope = buildAnnotationEnvelope(records, {
+        deviceId: getOrCreateDeviceId(),
+        includeDeleted: true,
+        contentHashes: new Map(
+          fingerprints.map((entry) => [entry.relativePath, entry.contentHash]),
+        ),
+      });
+      const saved = await saveAnnotationExportFile(
+        `reade-annotations-${transferDateStamp()}.json`,
+        serializeAnnotationEnvelope(envelope),
+        "application/json",
+      );
+      if (saved) showNotice(`已导出 ${records.length} 条标注记录（含删除记录）`);
+    } catch (cause) {
+      showNotice(cause instanceof Error ? `导出失败：${cause.message}` : "导出失败");
+    }
+  }, [showNotice]);
+
+  const handleExportAnnotationsCsv = useCallback(async () => {
+    try {
+      const records = await listAnnotationsForTransfer();
+      const { csv, rows } = buildReadwiseCsv(records, { documentTitles });
+      if (!rows) {
+        // 书签没有 Highlight 正文、墓碑属于本地状态,都不出现在 CSV 里。
+        showNotice("没有可导出为 CSV 的高亮或下划线。");
+        return;
+      }
+      const saved = await saveAnnotationExportFile(
+        `reade-annotations-${transferDateStamp()}.csv`,
+        csv,
+        "text/csv",
+      );
+      if (saved) showNotice(`已导出 ${rows} 条高亮到 Readwise CSV`);
+    } catch (cause) {
+      showNotice(cause instanceof Error ? `导出失败：${cause.message}` : "导出失败");
+    }
+  }, [documentTitles, showNotice]);
+
+  const handleImportAnnotations = useCallback(async () => {
+    let picked: { fileName: string; contents: string } | null;
+    try {
+      picked = await pickAnnotationImportFile();
+    } catch (cause) {
+      showNotice(cause instanceof Error ? `导入失败：${cause.message}` : "导入失败");
+      return;
+    }
+    if (!picked) return;
+    try {
+      // 不可信输入:严格 schema 校验失败即整体拒绝,不部分导入。
+      const envelope = parseAnnotationEnvelope(picked.contents);
+      const [existing, fingerprints] = await Promise.all([
+        listAnnotationsForTransfer(),
+        listDocumentFingerprints(),
+      ]);
+      const presentPaths = new Set(documents.map((document) => document.relativePath));
+      const plan = planAnnotationImport(envelope, {
+        existing,
+        presentPaths,
+        presentHashes: new Map(
+          fingerprints
+            .filter((entry) => presentPaths.has(entry.relativePath))
+            .map((entry) => [entry.relativePath, entry.contentHash]),
+        ),
+      });
+      setImportReview({ fileName: picked.fileName, plan });
+    } catch (cause) {
+      showNotice(cause instanceof Error ? `导入失败：${cause.message}` : "导入失败");
+    }
+  }, [documents, showNotice]);
+
+  const confirmImportAnnotations = useCallback(async () => {
+    if (!importReview) return;
+    const { plan } = importReview;
+    setImportBusy(true);
+    try {
+      const written = await importAnnotations(plan.toUpsert, plan.fingerprintRows);
+      setImportReview(null);
+      // 当前文档与全库列表都可能包含刚导入的记录。
+      await reloadAnnotations();
+      setLibraryAnnotations({ status: "idle" });
+      try {
+        setMoveCandidates(await detectMovedDocuments());
+      } catch {
+        // 导入已成功;重绑候选下次打开/刷新库时再校准。
+      }
+      showNotice(
+        plan.rebindSuggestions.length
+          ? `已导入 ${written} 条标注记录；请在「失联文档」区完成 ${plan.rebindSuggestions.length} 个文档的迁移`
+          : `已导入 ${written} 条标注记录`,
+      );
+    } catch (cause) {
+      showNotice(cause instanceof Error ? `导入失败：${cause.message}` : "导入失败");
+    } finally {
+      setImportBusy(false);
+    }
+  }, [importReview, reloadAnnotations, showNotice]);
 
   useEffect(() => {
     setPendingSelection(null);
@@ -1628,6 +2409,10 @@ function App() {
     setAnnotationPanelOpen(false);
     setMarkdownBrokenIds([]);
     setReaderBrokenIds([]);
+    setMarkdownApproximateIds([]);
+    setReaderApproximateIds([]);
+    // Preview marks die with the swapped-out content; only the state remains.
+    setRelocatePreview(null);
     if (jumpRetryTimer.current !== null) {
       window.clearTimeout(jumpRetryTimer.current);
       jumpRetryTimer.current = null;
@@ -1644,9 +2429,11 @@ function App() {
   useEffect(() => {
     if (currentContent?.kind === "markdown") {
       setReaderBrokenIds([]);
+      setReaderApproximateIds([]);
       return;
     }
     setMarkdownBrokenIds([]);
+    setMarkdownApproximateIds([]);
   }, [currentContent?.kind]);
 
   useEffect(() => {
@@ -1864,10 +2651,20 @@ function App() {
   );
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
-    const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
-    themeColor?.setAttribute("content", getThemeColor(theme));
-  }, [theme]);
+    const applyTheme = () => {
+      document.documentElement.dataset.theme = theme;
+      const themeColor = document.querySelector<HTMLMetaElement>('meta[name="theme-color"]');
+      themeColor?.setAttribute("content", getThemeColor(theme));
+    };
+    // Mount (theme-boot.ts already wrote data-theme) and motion-level changes
+    // re-apply the current value: keep those writes instant so only a real
+    // theme switch can cross-fade (M3/D5).
+    if (document.documentElement.dataset.theme === theme) {
+      applyTheme();
+      return;
+    }
+    applyThemeMutation(applyTheme, motionLevel);
+  }, [theme, motionLevel]);
 
   useLayoutEffect(() => {
     document.documentElement.dataset.motion = motionLevel;
@@ -1919,8 +2716,176 @@ function App() {
     return () => { disposed = true; stops.forEach((stop) => stop()); };
   }, [applyDocumentIndexStatus, setIndexProgress, snapshot]);
 
+  // 5.5 指纹重绑链:打开/刷新库后检测"路径消失但内容指纹在新路径出现"的
+  // 文档,提示一次性迁移其标注。确认交互复用外链确认的 window.confirm 模式;
+  // 全部候选(含歧义与被拒绝的配对)进入 state,供 5.6 的"失联文档"集中
+  // 重绑列表消费。
+  useEffect(() => {
+    if (!snapshot || lastMoveCheckSnapshot.current === snapshot) return;
+    lastMoveCheckSnapshot.current = snapshot;
+    void (async () => {
+      let candidates: MovedDocumentCandidate[];
+      try {
+        candidates = await detectMovedDocuments();
+      } catch (cause) {
+        console.error("Reade: 文档移动检测失败", cause);
+        return;
+      }
+      setMoveCandidates(candidates);
+      const pairs = candidates.filter(
+        (candidate) =>
+          !candidate.ambiguous &&
+          !promptedMovePairs.current.has(`${candidate.oldPath}\u0000${candidate.newPath}`),
+      );
+      if (pairs.length === 0) return;
+      for (const pair of pairs) {
+        promptedMovePairs.current.add(`${pair.oldPath}\u0000${pair.newPath}`);
+      }
+      const total = pairs.reduce((sum, pair) => sum + pair.annotationCount, 0);
+      const confirmed = window.confirm(
+        `检测到 ${pairs.length} 个文档已移动，迁移 ${total} 条标注到新路径？`,
+      );
+      if (!confirmed) return;
+      try {
+        let migrated = 0;
+        for (const pair of pairs) {
+          migrated += await rebindDocumentAnnotations(pair.oldPath, pair.newPath);
+        }
+        // 当前文档可能正是迁移目标;全库标注列表也需要重新拉取。
+        await reloadAnnotations();
+        setLibraryAnnotations({ status: "idle" });
+        try {
+          setMoveCandidates(await detectMovedDocuments());
+        } catch {
+          // 迁移已成功;候选列表下次打开/刷新库时再校准。
+        }
+        showNotice(`已迁移 ${migrated} 条标注记录`);
+      } catch (cause) {
+        showNotice(cause instanceof Error ? `标注迁移失败：${cause.message}` : "标注迁移失败");
+      }
+    })();
+  }, [reloadAnnotations, showNotice, snapshot]);
+
+  const libraryDocumentOptions = useMemo<LibraryDocumentOption[]>(
+    () =>
+      documents.map((document) => ({
+        relativePath: document.relativePath,
+        title: document.title,
+      })),
+    [documents],
+  );
+
+  // §5.6 C「失联文档」= 有标注但路径不在当前扫描里的文档;指纹候选(含歧义
+  // 与被拒绝的无歧义配对)作为建议目标,指纹也失配的进入纯手动选择。
+  const lostDocuments = useMemo<LostDocumentEntry[]>(() => {
+    if (!snapshot || libraryAnnotations.status !== "ready") return [];
+    const present = presentDocumentPaths;
+    const counts = new Map<string, number>();
+    for (const annotation of libraryAnnotations.items) {
+      if (present.has(annotation.relativePath)) continue;
+      counts.set(annotation.relativePath, (counts.get(annotation.relativePath) ?? 0) + 1);
+    }
+    const candidatesByOldPath = new Map<string, string[]>();
+    for (const candidate of moveCandidates) {
+      if (present.has(candidate.oldPath) || !present.has(candidate.newPath)) continue;
+      const bucket = candidatesByOldPath.get(candidate.oldPath) ?? [];
+      if (!bucket.includes(candidate.newPath)) bucket.push(candidate.newPath);
+      candidatesByOldPath.set(candidate.oldPath, bucket);
+    }
+    return Array.from(counts.entries())
+      .map(([path, annotationCount]) => ({
+        path,
+        annotationCount,
+        candidates: candidatesByOldPath.get(path) ?? [],
+      }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
+  }, [libraryAnnotations, moveCandidates, presentDocumentPaths, snapshot]);
+
+  /**
+   * Dry run for a manual rebind (KOReader wizard idea): resolve every quote
+   * of the lost path against the candidate's body text via read_document —
+   * no storage is touched here.
+   */
+  const handleDryRunRebind = useCallback(
+    async (oldPath: string, newPath: string): Promise<RebindDryRunReport> => {
+      const [annotationsToMove, content] = await Promise.all([
+        listAnnotations(oldPath),
+        readDocument(newPath),
+      ]);
+      let targetText: string;
+      if (content.kind === "markdown") {
+        targetText = content.markdown;
+      } else if (content.kind === "epub") {
+        targetText = flattenEpubDocumentText(content.document);
+      } else {
+        const reading = await readPdfReadingMode(newPath);
+        targetText = reading.pages.map((page) => page.markdown).join("\n");
+      }
+      return dryRunTextQuoteAnchors(annotationsToMove, targetText);
+    },
+    [],
+  );
+
+  const handleRebindLostDocument = useCallback(
+    async (oldPath: string, newPath: string) => {
+      const migrated = await rebindDocumentAnnotations(oldPath, newPath);
+      await reloadAnnotations();
+      setLibraryAnnotations({ status: "idle" });
+      try {
+        setMoveCandidates(await detectMovedDocuments());
+      } catch {
+        setMoveCandidates((current) =>
+          current.filter((candidate) => candidate.oldPath !== oldPath),
+        );
+      }
+      showNotice(`已迁移 ${migrated} 条标注记录`);
+    },
+    [reloadAnnotations, showNotice],
+  );
+
   useEffect(() => {
     if (snapshot && documents.length > 0 && !currentPath && !loading) {
+      // H-D1 方案 A:桌面冷启动若「继续阅读」有候选(持久化位置或
+      // 30 天内会话非空)则落在主页且不自动打开第一篇;无候选维持现状。
+      // Web 端(含 ?doc= 直达路由)完全不走这个分支。
+      if (!IS_WEB_RUNTIME && !coldStartDecided.current) {
+        coldStartDecided.current = true;
+        const rootPath = snapshot.rootPath;
+        const scannedDocuments = documents;
+        void (async () => {
+          let hasCandidates = hasContinueCandidates(
+            scannedDocuments,
+            listLibraryReadingPositions(rootPath),
+            [],
+          );
+          if (!hasCandidates) {
+            try {
+              const nowMs = Date.now();
+              hasCandidates = hasContinueCandidates(
+                scannedDocuments,
+                {},
+                await listReadingSessions(nowMs - CONTINUE_READING_WINDOW_MS, nowMs),
+              );
+            } catch {
+              hasCandidates = false;
+            }
+          }
+          // 等待会话查询期间用户可能已自行打开文档或切换库。
+          const state = useReaderStore.getState();
+          if (state.currentPath || state.loading || state.snapshot?.rootPath !== rootPath) {
+            return;
+          }
+          if (hasCandidates) {
+            setActiveView("home");
+          } else if (state.documents.length > 0) {
+            void state.selectDocument(state.documents[0].relativePath);
+          }
+        })();
+        return;
+      }
+      // 主页停留期间(冷启动落点或手动打开)不被自动打开第一篇抢占,
+      // 例如文件监听触发的库刷新。
+      if (activeView === "home") return;
       const requestedPath = requestedWebDocument.current;
       requestedWebDocument.current = null;
       const requestedDocument = requestedPath
@@ -1934,7 +2899,7 @@ function App() {
         requestedDocument?.relativePath ?? documents[0].relativePath,
       );
     }
-  }, [currentPath, documents, loading, selectDocument, snapshot]);
+  }, [activeView, currentPath, documents, loading, selectDocument, setActiveView, snapshot]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -1958,6 +2923,7 @@ function App() {
           setPendingSelection(null);
           setNoteDraft(null);
           setMarkEditor(null);
+          clearRelocatePreview();
         }
         return;
       }
@@ -1995,6 +2961,7 @@ function App() {
     annotationTool,
     canUndo,
     chooseAndOpenLibrary,
+    clearRelocatePreview,
     currentContent,
     currentPath,
     handleCreateBookmark,
@@ -2042,14 +3009,35 @@ function App() {
   useLayoutEffect(() => {
     const reader = readerRef.current;
     if (!reader || !currentPath) return;
-    reader.scrollTop = scrollPositions.current.get(currentPath) ?? 0;
+    const sessionTop = scrollPositions.current.get(currentPath);
+    reader.scrollTop = sessionTop ?? 0;
+    // H0 恢复支路:会话内 Map 未命中时查持久化位置。显式导航目标
+    // (搜索定位、标注跳转、分享链接锚点)优先,持久化恢复让位。
+    if (
+      sessionTop === undefined &&
+      !currentLocator &&
+      !pendingAnnotationJump.current &&
+      !pendingHash.current
+    ) {
+      const rootPath = snapshot?.rootPath;
+      const persisted = rootPath ? readReadingPosition(rootPath, currentPath) : null;
+      if (persisted?.kind === "scroll" && currentContent && currentContent.kind !== "pdf") {
+        const range = reader.scrollHeight - reader.clientHeight;
+        if (range > 0) reader.scrollTop = persisted.scrollRatio * range;
+      } else if (persisted?.kind === "pdf" && currentContent?.kind === "pdf") {
+        schedulePdfPositionRestore(currentPath, {
+          page: persisted.page,
+          offsetRatio: persisted.offsetRatio,
+        });
+      }
+    }
     const range = reader.scrollHeight - reader.clientHeight;
     const value = range <= 0 ? 0 : Math.min(100, (reader.scrollTop / range) * 100);
     progressBarRef.current?.style.setProperty(
       "--reading-progress",
       String(Math.min(1, Math.max(0, value / 100))),
     );
-  }, [currentPath, currentContent]);
+  }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath]);
 
   useEffect(() => {
     if (!IS_WEB_RUNTIME || !currentPath) return;
@@ -2094,6 +3082,28 @@ function App() {
         String(Math.min(1, Math.max(0, value / 100))),
       );
 
+      // H0 写入支路:同一 rAF 里只采样(ratio 上面已算好),真正落盘交给
+      // 500ms trailing debounce,避免每帧写 localStorage。
+      const contentKind = currentContent?.kind;
+      if (currentPath && contentKind) {
+        const root = useReaderStore.getState().snapshot?.rootPath;
+        if (root) {
+          pendingPositionSample.current = {
+            root,
+            path: currentPath,
+            kind: contentKind === "pdf" ? "pdf" : "scroll",
+            ratio: range > 0 ? Math.min(1, Math.max(0, reader.scrollTop / range)) : 0,
+          };
+          if (persistPositionTimer.current !== null) {
+            window.clearTimeout(persistPositionTimer.current);
+          }
+          persistPositionTimer.current = window.setTimeout(() => {
+            persistPositionTimer.current = null;
+            flushPendingPosition();
+          }, 500);
+        }
+      }
+
       if (currentContent?.kind !== "markdown") return;
       const headings = Array.from(
         article.querySelectorAll<HTMLElement>("h1[id], h2[id], h3[id], h4[id], h5[id], h6[id]"),
@@ -2110,7 +3120,7 @@ function App() {
         return { path: currentPath, id: nextActive };
       });
     });
-  }, [currentContent?.kind, currentPath]);
+  }, [currentContent?.kind, currentPath, flushPendingPosition]);
 
   useEffect(
     () => () => {
@@ -2325,6 +3335,21 @@ function App() {
             >
               {getThemeSeriesLabel(theme)}
             </button>
+            <button
+              className={`icon-button${homeOpen ? " is-armed" : ""}`}
+              type="button"
+              aria-label={homeOpen ? "返回阅读" : "打开主页"}
+              title="主页"
+              aria-pressed={homeOpen}
+              // 无库时不进主页(Welcome 现状,方案 §3.3 空态)。
+              disabled={!snapshot}
+              onClick={() => {
+                setActiveView(homeOpen ? "reader" : "home");
+                setMobileLibraryOpen(false);
+              }}
+            >
+              <House size={16} aria-hidden="true" />
+            </button>
             {!IS_WEB_RUNTIME && (
               <button
                 className={`icon-button${statsOpen ? " is-armed" : ""}`}
@@ -2397,7 +3422,7 @@ function App() {
                 <Library size={16} aria-hidden="true" />
               )}
             </button>
-            {currentContent && !statsOpen && (
+            {currentContent && !overlayViewOpen && (
               <button
                 className="icon-button toc-toggle"
                 type="button"
@@ -2409,7 +3434,7 @@ function App() {
                 <ListTree size={16} aria-hidden="true" />
               </button>
             )}
-            {currentContent && !statsOpen && (
+            {currentContent && !overlayViewOpen && (
               <>
                 <button
                   className={`icon-button${annotationTool !== "view" ? " is-armed" : ""}`}
@@ -2471,7 +3496,7 @@ function App() {
         </header>
 
         {currentContent && currentDocument ? (
-          <div className="content-grid" hidden={statsOpen}>
+          <div className="content-grid" hidden={overlayViewOpen}>
             <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 <header className="article-header">
@@ -2500,9 +3525,11 @@ function App() {
                   <AnnotatedMarkdown
                     content={renderedMarkdown}
                     annotations={annotations}
+                    fuzzyAnchoring={fuzzyAnchoring}
                     resolveImageSrc={resolveImageSrc}
                     onNavigate={(href) => void handleNavigate(href)}
                     onBrokenIdsChange={setMarkdownBrokenIds}
+                    onApproximateIdsChange={setMarkdownApproximateIds}
                   />
                 )}
                 {currentContent.kind === "pdf" && <Suspense fallback={<div className="pdf-state"><span className="spinner" />正在加载 PDF 阅读器…</div>}><PdfReader
@@ -2514,8 +3541,10 @@ function App() {
                   locator={currentLocator}
                   motionLevel={motionLevel}
                   annotations={annotations}
+                  fuzzyAnchoring={fuzzyAnchoring}
                   readerRef={pdfReaderHandleRef}
                   onBrokenAnnotationsChange={setReaderBrokenIds}
+                  onApproximateAnnotationsChange={setReaderApproximateIds}
                   onTocChange={handleTocChange}
                   onActiveChange={handleActiveHeadingChange}
                 /></Suspense>}
@@ -2525,7 +3554,9 @@ function App() {
                   locator={currentLocator}
                   motionLevel={motionLevel}
                   annotations={annotations}
+                  fuzzyAnchoring={fuzzyAnchoring}
                   onBrokenAnnotationsChange={setReaderBrokenIds}
+                  onApproximateAnnotationsChange={setReaderApproximateIds}
                   onTocChange={handleTocChange}
                   onActiveChange={handleActiveHeadingChange}
                 />}
@@ -2539,8 +3570,12 @@ function App() {
                 tocItems={toc}
                 activeId={activeHeading}
                 onSelectHeading={scrollToHeading}
+                tocHeat={tocHeat}
+                tocReachedIds={tocReachedIds}
+                onSelectDocumentTop={scrollToDocumentTop}
                 annotations={sortedAnnotations}
                 brokenIds={brokenAnnotationIds}
+                approximateIds={approximateAnnotationIds}
                 annotationsLoading={annotationsLoading}
                 annotationSort={annotationSort}
                 onAnnotationSortChange={setAnnotationSort}
@@ -2549,19 +3584,32 @@ function App() {
                 onDeleteAnnotation={(annotation) => void handleDeleteAnnotation(annotation)}
                 onEditAnnotationNote={handleEditAnnotationNote}
                 onChangeAnnotationColor={(annotation, color) => void handleChangeAnnotationColor(annotation, color)}
+                onRelocateAnnotation={handleRelocateAnnotation}
                 onClearAnnotations={() => void handleClearAnnotations()}
                 libraryStatus={libraryAnnotations.status}
                 libraryGroups={libraryGroups}
                 libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
                 currentPath={currentPath}
+                lostDocuments={lostDocuments}
+                libraryDocuments={libraryDocumentOptions}
+                libraryFilters={libraryFilters}
+                onLibraryFiltersChange={setLibraryFilters}
+                libraryFilterActive={libraryFilterActive}
+                onDryRunRebind={handleDryRunRebind}
+                onRebindLostDocument={handleRebindLostDocument}
                 onRefreshLibraryAnnotations={() => void loadLibraryAnnotations()}
                 onExportLibraryAnnotations={() => void handleExportLibraryAnnotations()}
+                onExportLibraryGroup={(group) => void handleExportLibraryGroup(group)}
+                onExportLibraryJson={() => void handleExportAnnotationsJson()}
+                onExportLibraryCsv={() => void handleExportAnnotationsCsv()}
+                onImportLibraryAnnotations={() => void handleImportAnnotations()}
                 onSelectLibraryAnnotation={handleSelectLibraryAnnotation}
+                onOpenLibraryHub={openAnnotationHub}
               />
             </aside>
           </div>
         ) : (
-          !statsOpen && (
+          !overlayViewOpen && (
             <Welcome
               hasLibrary={Boolean(snapshot)}
               documentCount={documents.length}
@@ -2583,6 +3631,63 @@ function App() {
             }
           >
             <StatsView />
+          </Suspense>
+        )}
+
+        {homeOpen && (
+          <Suspense
+            fallback={
+              <div className="stats-state">
+                <span className="spinner" aria-hidden="true" />
+                正在加载主页…
+              </div>
+            }
+          >
+            <HomeView reviewSummary={homeReviewSummary} />
+          </Suspense>
+        )}
+
+        {reviewOpen && (
+          <Suspense
+            fallback={
+              <div className="stats-state">
+                <span className="spinner" aria-hidden="true" />
+                正在加载回顾…
+              </div>
+            }
+          >
+            <ReviewView
+              session={reviewSession}
+              onSessionChange={setReviewSession}
+              onOpenAnnotation={handleSelectLibraryAnnotation}
+              onExit={() => setActiveView("home")}
+            />
+          </Suspense>
+        )}
+
+        {annotationsOpen && (
+          <Suspense
+            fallback={
+              <div className="stats-state">
+                <span className="spinner" aria-hidden="true" />
+                正在加载标注中枢…
+              </div>
+            }
+          >
+            <AnnotationHubView
+              status={libraryAnnotations.status}
+              groups={libraryGroups}
+              error={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
+              currentPath={currentPath}
+              filters={libraryFilters}
+              onFiltersChange={setLibraryFilters}
+              filterActive={libraryFilterActive}
+              onRefresh={() => void loadLibraryAnnotations()}
+              onExport={() => void handleExportLibraryAnnotations()}
+              onExportGroup={(group) => void handleExportLibraryGroup(group)}
+              onSelect={handleSelectLibraryAnnotation}
+              onExit={() => setActiveView("reader")}
+            />
           </Suspense>
         )}
 
@@ -2611,8 +3716,12 @@ function App() {
               scrollToHeading(id);
               setCompactTocOpen(false);
             }}
+            tocHeat={tocHeat}
+            tocReachedIds={tocReachedIds}
+            onSelectDocumentTop={scrollToDocumentTop}
             annotations={sortedAnnotations}
             brokenIds={brokenAnnotationIds}
+            approximateIds={approximateAnnotationIds}
             annotationsLoading={annotationsLoading}
             annotationSort={annotationSort}
             onAnnotationSortChange={setAnnotationSort}
@@ -2624,14 +3733,31 @@ function App() {
             onDeleteAnnotation={(annotation) => void handleDeleteAnnotation(annotation)}
             onEditAnnotationNote={handleEditAnnotationNote}
             onChangeAnnotationColor={(annotation, color) => void handleChangeAnnotationColor(annotation, color)}
+            onRelocateAnnotation={(annotation) => {
+              // 抽屉挡住正文,先收起再定位预览。
+              setCompactTocOpen(false);
+              handleRelocateAnnotation(annotation);
+            }}
             onClearAnnotations={() => void handleClearAnnotations()}
             libraryStatus={libraryAnnotations.status}
             libraryGroups={libraryGroups}
             libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
             currentPath={currentPath}
+            lostDocuments={lostDocuments}
+            libraryDocuments={libraryDocumentOptions}
+            libraryFilters={libraryFilters}
+            onLibraryFiltersChange={setLibraryFilters}
+            libraryFilterActive={libraryFilterActive}
+            onDryRunRebind={handleDryRunRebind}
+            onRebindLostDocument={handleRebindLostDocument}
             onRefreshLibraryAnnotations={() => void loadLibraryAnnotations()}
             onExportLibraryAnnotations={() => void handleExportLibraryAnnotations()}
+            onExportLibraryGroup={(group) => void handleExportLibraryGroup(group)}
+            onExportLibraryJson={() => void handleExportAnnotationsJson()}
+            onExportLibraryCsv={() => void handleExportAnnotationsCsv()}
+            onImportLibraryAnnotations={() => void handleImportAnnotations()}
             onSelectLibraryAnnotation={handleSelectLibraryAnnotation}
+            onOpenLibraryHub={openAnnotationHub}
           />
         </aside>
 
@@ -2664,6 +3790,51 @@ function App() {
               setMarkEditor(null);
             }}
             onClose={() => setMarkEditor(null)}
+          />
+        )}
+
+        {relocatePreview && (
+          <div
+            className="annotation-relocate-bar reade-motion-panel"
+            role="dialog"
+            aria-label="确认重新定位标注"
+          >
+            <span className="annotation-relocate-message">
+              {relocatePreview.fuzzyHit
+                ? "已按相似度找到近似位置（非精确匹配），确认把标注移动到高亮处？"
+                : "已在文档中找到匹配位置，确认把标注移动到高亮处？"}
+            </span>
+            <div className="annotation-relocate-actions">
+              <button type="button" onClick={clearRelocatePreview}>
+                取消
+              </button>
+              <button
+                type="button"
+                className="annotation-relocate-confirm"
+                onClick={() => void confirmRelocateAnnotation()}
+              >
+                移动标注
+              </button>
+            </div>
+          </div>
+        )}
+
+        {importReview && (
+          <AnnotationImportConfirm
+            summary={{
+              fileName: importReview.fileName,
+              added: importReview.plan.added,
+              skipped: importReview.plan.skipped,
+              updated: importReview.plan.updated,
+              deletions: importReview.plan.deletions,
+              rebindDocuments: importReview.plan.rebindSuggestions.length,
+              totalWrites: importReview.plan.toUpsert.length,
+            }}
+            busy={importBusy}
+            onConfirm={() => void confirmImportAnnotations()}
+            onCancel={() => {
+              if (!importBusy) setImportReview(null);
+            }}
           />
         )}
 
