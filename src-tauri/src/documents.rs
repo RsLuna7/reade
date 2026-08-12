@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::io::{Cursor, Read};
 
 use anydoc::model::{
@@ -111,6 +112,9 @@ pub struct EpubDocument {
 pub struct EpubChapter {
     pub id: String,
     pub title: String,
+    /// Outline depth for the right-hand TOC, 1-based. Prefer EPUB nav/ncx nesting
+    /// when present; otherwise fall back to the first heading level in the chapter.
+    pub level: u8,
     pub blocks: Vec<EpubBlock>,
 }
 
@@ -236,7 +240,9 @@ pub fn parse_epub(bytes: &[u8], fallback_title: &str) -> Result<ParsedEpub, Stri
     inspect_epub_container(bytes)?;
     let document = anydoc::to_document(bytes, anydoc::Format::Epub)
         .map_err(|error| format!("EPUB 解析失败：{error}"))?;
-    Ok(convert_epub_document(document, fallback_title))
+    let mut parsed = convert_epub_document(document, fallback_title);
+    apply_epub_nav_levels(bytes, &mut parsed.payload.chapters);
+    Ok(parsed)
 }
 
 fn inspect_epub_container(bytes: &[u8]) -> Result<(), String> {
@@ -411,16 +417,19 @@ fn chapter_start(block: &Block) -> Option<String> {
 }
 
 fn build_chapter(id: String, blocks: Vec<Block>) -> EpubChapter {
-    let title = blocks
+    let (title, level) = blocks
         .iter()
         .find_map(|block| match block {
-            Block::Heading { content, .. } => non_empty(inlines_plain(content)),
+            Block::Heading { level, content, .. } => {
+                non_empty(inlines_plain(content)).map(|title| (title, (*level).clamp(1, 6)))
+            }
             _ => None,
         })
-        .unwrap_or_else(|| chapter_fallback_title(&id));
+        .unwrap_or_else(|| (chapter_fallback_title(&id), 1));
     EpubChapter {
         id,
         title,
+        level,
         blocks: blocks.iter().map(convert_block).collect(),
     }
 }
@@ -432,6 +441,205 @@ fn chapter_fallback_title(id: &str) -> String {
         .map(|(stem, _)| stem)
         .unwrap_or(file)
         .to_owned()
+}
+
+fn apply_epub_nav_levels(bytes: &[u8], chapters: &mut [EpubChapter]) {
+    let Some(levels) = read_epub_nav_levels(bytes) else {
+        return;
+    };
+    if levels.is_empty() {
+        return;
+    }
+    for chapter in chapters {
+        let chapter_path = chapter.id.split('#').next().unwrap_or(&chapter.id);
+        if let Some(level) = lookup_nav_level(&levels, chapter_path) {
+            chapter.level = level;
+        }
+    }
+}
+
+fn lookup_nav_level(levels: &HashMap<String, u8>, chapter_path: &str) -> Option<u8> {
+    if let Some(level) = levels.get(chapter_path) {
+        return Some(*level);
+    }
+    levels.iter().find_map(|(path, level)| {
+        if path.eq_ignore_ascii_case(chapter_path)
+            || path.ends_with(chapter_path)
+            || chapter_path.ends_with(path.as_str())
+        {
+            Some(*level)
+        } else {
+            None
+        }
+    })
+}
+
+fn read_epub_nav_levels(bytes: &[u8]) -> Option<HashMap<String, u8>> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes)).ok()?;
+    let container = read_zip_entry(&mut archive, "META-INF/container.xml")?;
+    let opf_path = attribute_value(&container, "full-path")?;
+    let opf = read_zip_entry(&mut archive, &opf_path)?;
+    let opf_dir = opf_path
+        .rsplit_once('/')
+        .map(|(dir, _)| dir.to_owned())
+        .unwrap_or_default();
+
+    let mut nav_href: Option<String> = None;
+    let mut ncx_href: Option<String> = None;
+    for capture in regex::Regex::new(r#"(?is)<item\b[^>]*>"#)
+        .ok()?
+        .captures_iter(&opf)
+    {
+        let tag = capture.get(0)?.as_str();
+        let href = attribute_value(tag, "href");
+        let media = attribute_value(tag, "media-type")
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let properties = attribute_value(tag, "properties").unwrap_or_default();
+        let Some(href) = href else { continue };
+        if properties
+            .split_whitespace()
+            .any(|property| property.eq_ignore_ascii_case("nav"))
+        {
+            nav_href = Some(href);
+        } else if media == "application/x-dtbncx+xml" {
+            ncx_href = Some(href);
+        }
+    }
+
+    if let Some(href) = nav_href {
+        let nav_path = join_epub_path(&opf_dir, &href);
+        if let Some(nav) = read_zip_entry(&mut archive, &nav_path) {
+            let levels = parse_epub3_nav_levels(&nav, &nav_path);
+            if !levels.is_empty() {
+                return Some(levels);
+            }
+        }
+    }
+    if let Some(href) = ncx_href {
+        let ncx_path = join_epub_path(&opf_dir, &href);
+        if let Some(ncx) = read_zip_entry(&mut archive, &ncx_path) {
+            let levels = parse_epub2_ncx_levels(&ncx, &ncx_path);
+            if !levels.is_empty() {
+                return Some(levels);
+            }
+        }
+    }
+    None
+}
+
+fn read_zip_entry(archive: &mut ZipArchive<Cursor<&[u8]>>, path: &str) -> Option<String> {
+    let mut entry = archive.by_name(path).ok()?;
+    let mut bytes = Vec::new();
+    entry.read_to_end(&mut bytes).ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+fn join_epub_path(base_dir: &str, href: &str) -> String {
+    let href = href.split(['#', '?']).next().unwrap_or(href);
+    if href.starts_with('/') {
+        return href.trim_start_matches('/').replace('\\', "/");
+    }
+    let mut parts = Vec::new();
+    if !base_dir.is_empty() {
+        parts.extend(
+            base_dir
+                .replace('\\', "/")
+                .split('/')
+                .filter(|part| !part.is_empty())
+                .map(str::to_owned),
+        );
+    }
+    for part in href.replace('\\', "/").split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            other => parts.push(other.to_owned()),
+        }
+    }
+    parts.join("/")
+}
+
+fn parse_epub3_nav_levels(nav: &str, nav_path: &str) -> HashMap<String, u8> {
+    let toc = extract_epub_toc_nav(nav).unwrap_or(nav);
+    let mut levels = HashMap::new();
+    let mut depth = 0u8;
+    let tag_regex = regex::Regex::new(r"(?is)</?ol\b[^>]*>|<a\b[^>]*>").expect("nav tag regex");
+    for capture in tag_regex.captures_iter(toc) {
+        let tag = capture
+            .get(0)
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let lower = tag.to_ascii_lowercase();
+        if lower.starts_with("<ol") {
+            depth = depth.saturating_add(1).min(6);
+        } else if lower.starts_with("</ol") {
+            depth = depth.saturating_sub(1);
+        } else if let Some(href) = attribute_value(tag, "href") {
+            if depth == 0 {
+                continue;
+            }
+            let path = join_epub_path(
+                nav_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or(""),
+                &href,
+            );
+            levels
+                .entry(path)
+                .and_modify(|current: &mut u8| *current = (*current).min(depth))
+                .or_insert(depth);
+        }
+    }
+    levels
+}
+
+fn extract_epub_toc_nav(nav: &str) -> Option<&str> {
+    let lower = nav.to_ascii_lowercase();
+    let markers = [
+        "epub:type=\"toc\"",
+        "epub:type='toc'",
+        "role=\"doc-toc\"",
+        "role='doc-toc'",
+    ];
+    let start = markers.iter().find_map(|marker| lower.find(marker))?;
+    let nav_start = lower[..start].rfind("<nav")?;
+    let after = &nav[nav_start..];
+    let after_lower = after.to_ascii_lowercase();
+    let end = after_lower.find("</nav>")? + "</nav>".len();
+    Some(&after[..end])
+}
+
+fn parse_epub2_ncx_levels(ncx: &str, ncx_path: &str) -> HashMap<String, u8> {
+    let mut levels = HashMap::new();
+    let mut depth = 0u8;
+    let tag_regex =
+        regex::Regex::new(r"(?is)</?navpoint\b[^>]*>|<content\b[^>]*>").expect("ncx tag regex");
+    for capture in tag_regex.captures_iter(ncx) {
+        let tag = capture
+            .get(0)
+            .map(|value| value.as_str())
+            .unwrap_or_default();
+        let lower = tag.to_ascii_lowercase();
+        if lower.starts_with("<navpoint") {
+            depth = depth.saturating_add(1).min(6);
+        } else if lower.starts_with("</navpoint") {
+            depth = depth.saturating_sub(1);
+        } else if let Some(src) = attribute_value(tag, "src") {
+            if depth == 0 {
+                continue;
+            }
+            let path = join_epub_path(
+                ncx_path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or(""),
+                &src,
+            );
+            levels
+                .entry(path)
+                .and_modify(|current: &mut u8| *current = (*current).min(depth))
+                .or_insert(depth);
+        }
+    }
+    levels
 }
 
 fn convert_block(block: &Block) -> EpubBlock {
@@ -631,6 +839,28 @@ mod tests {
         writer.finish().expect("finish epub").into_inner()
     }
 
+    fn hierarchical_epub() -> Vec<u8> {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let entries = vec![
+            ("mimetype", "application/epub+zip".to_owned()),
+            ("META-INF/container.xml", r#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.to_owned()),
+            ("OPS/content.opf", r#"<?xml version="1.0"?><package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="uid"><metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:identifier id="uid">reade-test</dc:identifier><dc:title>层级书</dc:title><dc:language>zh</dc:language></metadata><manifest><item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/><item id="cover" href="cover.xhtml" media-type="application/xhtml+xml"/><item id="vol1" href="vol1.xhtml" media-type="application/xhtml+xml"/><item id="c1" href="c1.xhtml" media-type="application/xhtml+xml"/><item id="c2" href="c2.xhtml" media-type="application/xhtml+xml"/></manifest><spine><itemref idref="cover"/><itemref idref="vol1"/><itemref idref="c1"/><itemref idref="c2"/></spine></package>"#.to_owned()),
+            ("OPS/nav.xhtml", r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml" xmlns:epub="http://www.idpf.org/2007/ops"><body><nav epub:type="toc"><ol><li><a href="cover.xhtml">Cover</a></li><li><a href="vol1.xhtml">第一卷</a><ol><li><a href="c1.xhtml">第一章</a></li><li><a href="c2.xhtml">第二章</a></li></ol></li></ol></nav></body></html>"#.to_owned()),
+            ("OPS/cover.xhtml", r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>Cover</h1></body></html>"#.to_owned()),
+            ("OPS/vol1.xhtml", r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一卷</h1></body></html>"#.to_owned()),
+            ("OPS/c1.xhtml", r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第一章</h1><p>正文一</p></body></html>"#.to_owned()),
+            ("OPS/c2.xhtml", r#"<?xml version="1.0"?><html xmlns="http://www.w3.org/1999/xhtml"><body><h1>第二章</h1><p>正文二</p></body></html>"#.to_owned()),
+        ];
+        for (name, content) in entries {
+            writer.start_file(name, options).expect("start epub entry");
+            writer
+                .write_all(content.as_bytes())
+                .expect("write epub entry");
+        }
+        writer.finish().expect("finish epub").into_inner()
+    }
+
     #[test]
     fn only_safe_raster_epub_assets_are_allowed() {
         assert!(allowed_epub_asset("image/png"));
@@ -652,10 +882,38 @@ mod tests {
         assert_eq!(parsed.payload.title, "测试书籍");
         assert_eq!(parsed.payload.chapters.len(), 1);
         assert_eq!(parsed.payload.chapters[0].title, "第一章");
+        assert_eq!(parsed.payload.chapters[0].level, 1);
         assert!(parsed.search_segments[0].2.contains("安全正文"));
         let json = serde_json::to_string(&parsed.payload).expect("serialize DTO");
         assert!(!json.contains("iframe"));
         assert!(!json.contains("evil.invalid"));
+    }
+
+    #[test]
+    fn assigns_toc_levels_from_epub3_nav_nesting() {
+        let parsed = parse_epub(&hierarchical_epub(), "Fallback").expect("parse epub");
+        let levels: Vec<(&str, u8)> = parsed
+            .payload
+            .chapters
+            .iter()
+            .map(|chapter| (chapter.title.as_str(), chapter.level))
+            .collect();
+        assert!(
+            levels.contains(&("Cover", 1)),
+            "cover should be top-level: {levels:?}"
+        );
+        assert!(
+            levels.contains(&("第一卷", 1)),
+            "volume should be top-level: {levels:?}"
+        );
+        assert!(
+            levels.contains(&("第一章", 2)),
+            "nested chapter should be indented: {levels:?}"
+        );
+        assert!(
+            levels.contains(&("第二章", 2)),
+            "nested chapter should be indented: {levels:?}"
+        );
     }
 
     #[test]
