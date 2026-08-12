@@ -65,7 +65,7 @@ export type EpubBlock =
   | { kind: "blockQuote"; blocks: EpubBlock[] }
   | { kind: "codeBlock"; language: string | null; text: string }
   | { kind: "rule" };
-export interface EpubChapter { id: string; title: string; blocks: EpubBlock[] }
+export interface EpubChapter { id: string; title: string; level: number; blocks: EpubBlock[] }
 export interface EpubAsset { id: number; mediaType: string; allowed: boolean; alt: string }
 export interface EpubNote { id: string; kind: string; blocks: EpubBlock[] }
 export interface EpubDocument {
@@ -92,6 +92,79 @@ export interface IndexProgress { total: number; completed: number; ready: number
 export interface DocumentIndexEvent { relativePath: string; title: string; status: IndexStatus; error: string | null }
 
 export interface AssetPayload { relativePath: string; mimeType: string; data: string }
+
+export type AnnotationKind = "highlight" | "underline" | "bookmark";
+export type AnnotationColor = "yellow" | "green" | "blue" | "pink";
+
+export interface AnnotationRect {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+export type BookmarkTarget =
+  | { format: "markdown"; headingId: string | null; scrollRatio: number }
+  | { format: "pdf"; page: number; offsetRatio: number }
+  | { format: "epub"; chapterId: string; headingId: string | null; scrollRatio: number };
+
+export type AnnotationLocator =
+  | {
+      kind: "markdown";
+      quote: string;
+      prefix: string;
+      suffix: string;
+      headingId: string | null;
+    }
+  | {
+      kind: "pdf";
+      page: number;
+      view: "original" | "reading";
+      quote: string;
+      prefix: string;
+      suffix: string;
+      rects: AnnotationRect[];
+    }
+  | {
+      kind: "epub";
+      chapterId: string;
+      blockIndex: number;
+      startOffset: number;
+      endOffset: number;
+      quote: string;
+      prefix: string;
+      suffix: string;
+    }
+  | {
+      kind: "bookmark";
+      target: BookmarkTarget;
+    };
+
+export interface Annotation {
+  id: string;
+  relativePath: string;
+  kind: AnnotationKind;
+  color: AnnotationColor | null;
+  note: string | null;
+  selectedText: string | null;
+  title: string | null;
+  locator: AnnotationLocator;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ReadingSession {
+  id: string;
+  relativePath: string;
+  format: DocumentFormat;
+  title: string | null;
+  /** Unix milliseconds. */
+  startedAt: number;
+  /** Unix milliseconds. */
+  endedAt: number;
+  /** Engaged reading time in whole seconds (idle time excluded). */
+  activeSeconds: number;
+}
 
 const ALLOWED_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
 export const APP_RUNTIME = __READE_RUNTIME__;
@@ -176,4 +249,46 @@ export async function onLibraryIndexProgress(handler: (progress: IndexProgress) 
 export async function onDocumentIndexStatus(handler: (event: DocumentIndexEvent) => void): Promise<UnlistenFn> {
   if (APP_RUNTIME === "web") return () => undefined;
   return (await getTauriBackend()).onDocumentIndexStatus(handler);
+}
+
+export async function listAnnotations(relativePath?: string | null): Promise<Annotation[]> {
+  if (APP_RUNTIME === "web") {
+    const { listWebAnnotations } = await import("./webAnnotations");
+    return listWebAnnotations(relativePath ?? null);
+  }
+  return (await getTauriBackend()).listAnnotations(relativePath ?? null);
+}
+
+export async function upsertAnnotation(annotation: Annotation): Promise<Annotation> {
+  if (APP_RUNTIME === "web") {
+    const { upsertWebAnnotation } = await import("./webAnnotations");
+    return upsertWebAnnotation(annotation);
+  }
+  return (await getTauriBackend()).upsertAnnotation(annotation);
+}
+
+export async function deleteAnnotation(id: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { deleteWebAnnotation } = await import("./webAnnotations");
+    return deleteWebAnnotation(id);
+  }
+  return (await getTauriBackend()).deleteAnnotation(id);
+}
+
+export async function clearDocumentAnnotations(relativePath: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { clearWebDocumentAnnotations } = await import("./webAnnotations");
+    return clearWebDocumentAnnotations(relativePath);
+  }
+  return (await getTauriBackend()).clearDocumentAnnotations(relativePath);
+}
+
+// Reading statistics are desktop-only: getTauriBackend() rejects in the Web
+// build, mirroring readDocumentRange.
+export async function recordReadingSession(session: ReadingSession): Promise<void> {
+  return (await getTauriBackend()).recordReadingSession(session);
+}
+
+export async function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {
+  return (await getTauriBackend()).listReadingSessions(fromMs, toMs);
 }

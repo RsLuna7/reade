@@ -11,7 +11,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ignore::{DirEntry, WalkBuilder};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, AppHandle, Emitter, Manager, State};
 
 use crate::documents::{
@@ -22,13 +22,18 @@ use crate::documents::{
 const MAX_MARKDOWN_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_RANGE_BYTES: u64 = 4 * 1024 * 1024;
+const MAX_ANNOTATION_ID_CHARS: usize = 64;
+const MAX_ANNOTATION_NOTE_CHARS: usize = 4_000;
+const MAX_ANNOTATION_TITLE_CHARS: usize = 200;
+const MAX_ANNOTATION_TEXT_CHARS: usize = 2_000;
 const CACHE_SCHEMA_VERSION: i64 = 1;
 const CACHE_SOFT_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 const CACHE_LOW_WATER_BYTES: u64 = CACHE_SOFT_LIMIT_BYTES * 9 / 10;
 const DEFAULT_SEARCH_LIMIT: u32 = 30;
 const MAX_SEARCH_LIMIT: u32 = 100;
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
-const CONVERTER_REVISION: &str = "reade-multiformat-v1:anydoc-0.1.8:pdf-inspector-0.1.8";
+const CONVERTER_REVISION: &str =
+    "reade-multiformat-v2:anydoc-0.1.8:pdf-inspector-0.1.8:epub-toc-level";
 
 const EXCLUDED_DIRECTORIES: &[&str] = &[
     ".git",
@@ -49,7 +54,7 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
     "vendor",
 ];
 
-type CommandResult<T> = Result<T, String>;
+pub(crate) type CommandResult<T> = Result<T, String>;
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
@@ -134,6 +139,104 @@ struct DocumentIndexEvent {
     title: String,
     status: IndexStatus,
     error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationRect {
+    pub x: f64,
+    pub y: f64,
+    pub w: f64,
+    pub h: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnnotationColor {
+    Yellow,
+    Green,
+    Blue,
+    Pink,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum AnnotationKind {
+    Highlight,
+    Underline,
+    Bookmark,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "format",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum BookmarkTarget {
+    Markdown {
+        heading_id: Option<String>,
+        scroll_ratio: f64,
+    },
+    Pdf {
+        page: u32,
+        offset_ratio: f64,
+    },
+    Epub {
+        chapter_id: String,
+        heading_id: Option<String>,
+        scroll_ratio: f64,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase"
+)]
+pub enum AnnotationLocator {
+    Markdown {
+        quote: String,
+        prefix: String,
+        suffix: String,
+        heading_id: Option<String>,
+    },
+    Pdf {
+        page: u32,
+        view: String,
+        quote: String,
+        prefix: String,
+        suffix: String,
+        rects: Vec<AnnotationRect>,
+    },
+    Epub {
+        chapter_id: String,
+        block_index: u32,
+        start_offset: u32,
+        end_offset: u32,
+        quote: String,
+        prefix: String,
+        suffix: String,
+    },
+    Bookmark {
+        target: BookmarkTarget,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct Annotation {
+    pub id: String,
+    pub relative_path: String,
+    pub kind: AnnotationKind,
+    pub color: Option<AnnotationColor>,
+    pub note: Option<String>,
+    pub selected_text: Option<String>,
+    pub title: Option<String>,
+    pub locator: AnnotationLocator,
+    pub created_at: u64,
+    pub updated_at: u64,
 }
 
 struct OpenEpubAssets {
@@ -589,6 +692,87 @@ pub async fn read_asset(
     run_blocking(move || read_asset_from_root(&root, &relative_path)).await
 }
 
+#[tauri::command]
+pub fn list_annotations(
+    relative_path: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<Vec<Annotation>> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    if let Some(path) = relative_path.as_deref() {
+        validate_relative_library_path(path)?;
+    }
+    list_annotations_from_cache(
+        &current.cache,
+        &normalize_root(root),
+        relative_path.as_deref(),
+    )
+}
+
+#[tauri::command]
+pub fn upsert_annotation(
+    annotation: Annotation,
+    state: State<'_, AppState>,
+) -> CommandResult<Annotation> {
+    let mut current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?
+        .clone();
+    let sanitized = sanitize_annotation(annotation)?;
+    ensure_document_in_library(&current, &root, &sanitized.relative_path)?;
+    upsert_annotation_in_cache(&mut current.cache, &normalize_root(&root), &sanitized)?;
+    Ok(sanitized)
+}
+
+#[tauri::command]
+pub fn delete_annotation(id: String, state: State<'_, AppState>) -> CommandResult<()> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let root_key = normalize_root(root);
+    validate_annotation_id(&id)?;
+    let deleted = current
+        .cache
+        .execute(
+            "DELETE FROM annotations WHERE id = ?1 AND library_root = ?2",
+            params![id, root_key],
+        )
+        .map_err(|error| format!("Cannot delete annotation: {error}"))?;
+    if deleted == 0 {
+        return Err("Annotation was not found".to_owned());
+    }
+    Ok(())
+}
+
+#[tauri::command]
+pub fn clear_document_annotations(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    validate_relative_library_path(&relative_path)?;
+    let normalized = normalize_relative_path(Path::new(&relative_path));
+    current
+        .cache
+        .execute(
+            "DELETE FROM annotations WHERE library_root = ?1 AND relative_path = ?2",
+            params![normalize_root(root), normalized],
+        )
+        .map_err(|error| format!("Cannot clear document annotations: {error}"))?;
+    Ok(())
+}
+
 async fn run_blocking<T, F>(task: F) -> CommandResult<T>
 where
     T: Send + 'static,
@@ -1017,7 +1201,22 @@ fn initialize_cache(connection: &Connection) -> CommandResult<()> {
                  INSERT INTO search_fts(search_fts, rowid, title, content)
                  VALUES ('delete', old.id, old.title, old.content);
                  INSERT INTO search_fts(rowid, title, content) VALUES (new.id, new.title, new.content);
-             END;",
+             END;
+             CREATE TABLE IF NOT EXISTS annotations (
+                 id TEXT PRIMARY KEY,
+                 library_root TEXT NOT NULL,
+                 relative_path TEXT NOT NULL,
+                 kind TEXT NOT NULL,
+                 color TEXT,
+                 note TEXT,
+                 selected_text TEXT,
+                 title TEXT,
+                 locator_json TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL
+             );
+             CREATE INDEX IF NOT EXISTS annotations_by_doc
+                 ON annotations(library_root, relative_path, updated_at DESC);",
         )
         .map_err(|error| format!("Cannot initialize document cache: {error}"))?;
     connection
@@ -1357,6 +1556,317 @@ fn clear_cache_storage(connection: &mut Connection) -> CommandResult<()> {
     reclaim_cache_space(connection)
 }
 
+fn list_annotations_from_cache(
+    connection: &Connection,
+    root: &str,
+    relative_path: Option<&str>,
+) -> CommandResult<Vec<Annotation>> {
+    let mut statement = if relative_path.is_some() {
+        connection.prepare(
+            "SELECT id, relative_path, kind, color, note, selected_text, title, locator_json,
+                    created_at, updated_at
+             FROM annotations
+             WHERE library_root = ?1 AND relative_path = ?2
+             ORDER BY updated_at DESC, id ASC",
+        )
+    } else {
+        connection.prepare(
+            "SELECT id, relative_path, kind, color, note, selected_text, title, locator_json,
+                    created_at, updated_at
+             FROM annotations
+             WHERE library_root = ?1
+             ORDER BY updated_at DESC, id ASC",
+        )
+    }
+    .map_err(|error| format!("Cannot prepare annotation list: {error}"))?;
+
+    let mapped = if let Some(path) = relative_path {
+        statement.query_map(params![root, path], annotation_from_row)
+    } else {
+        statement.query_map(params![root], annotation_from_row)
+    }
+    .map_err(|error| format!("Cannot list annotations: {error}"))?;
+
+    let mut annotations = Vec::new();
+    for row in mapped {
+        annotations.push(row.map_err(|error| format!("Cannot decode annotation: {error}"))?);
+    }
+    Ok(annotations)
+}
+
+fn upsert_annotation_in_cache(
+    connection: &mut Connection,
+    root: &str,
+    annotation: &Annotation,
+) -> CommandResult<()> {
+    let locator_json = serde_json::to_string(&annotation.locator)
+        .map_err(|error| format!("Cannot encode annotation locator: {error}"))?;
+    let kind = annotation_kind_to_db(&annotation.kind);
+    let color = annotation.color.as_ref().map(annotation_color_to_db);
+    connection
+        .execute(
+            "INSERT INTO annotations(
+                 id, library_root, relative_path, kind, color, note, selected_text, title,
+                 locator_json, created_at, updated_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+             ON CONFLICT(id) DO UPDATE SET
+                 library_root = excluded.library_root,
+                 relative_path = excluded.relative_path,
+                 kind = excluded.kind,
+                 color = excluded.color,
+                 note = excluded.note,
+                 selected_text = excluded.selected_text,
+                 title = excluded.title,
+                 locator_json = excluded.locator_json,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at
+             WHERE annotations.library_root = excluded.library_root",
+            params![
+                annotation.id,
+                root,
+                annotation.relative_path,
+                kind,
+                color,
+                annotation.note,
+                annotation.selected_text,
+                annotation.title,
+                locator_json,
+                annotation.created_at as i64,
+                annotation.updated_at as i64,
+            ],
+        )
+        .map_err(|error| format!("Cannot save annotation: {error}"))?;
+    let owned: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM annotations WHERE id = ?1 AND library_root = ?2",
+            params![annotation.id, root],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot verify annotation ownership: {error}"))?;
+    if owned == 0 {
+        return Err("Annotation id belongs to another library".to_owned());
+    }
+    Ok(())
+}
+
+fn annotation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
+    let kind_raw: String = row.get(2)?;
+    let color_raw: Option<String> = row.get(3)?;
+    let locator_json: String = row.get(7)?;
+    let locator = serde_json::from_str(&locator_json).map_err(|error| {
+        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
+    })?;
+    Ok(Annotation {
+        id: row.get(0)?,
+        relative_path: row.get(1)?,
+        kind: annotation_kind_from_db(&kind_raw).map_err(|message| {
+            rusqlite::Error::FromSqlConversionFailure(
+                2,
+                rusqlite::types::Type::Text,
+                message.into(),
+            )
+        })?,
+        color: color_raw
+            .map(|value| annotation_color_from_db(&value))
+            .transpose()
+            .map_err(|message| {
+                rusqlite::Error::FromSqlConversionFailure(
+                    3,
+                    rusqlite::types::Type::Text,
+                    message.into(),
+                )
+            })?,
+        note: row.get(4)?,
+        selected_text: row.get(5)?,
+        title: row.get(6)?,
+        locator,
+        created_at: row.get::<_, i64>(8)? as u64,
+        updated_at: row.get::<_, i64>(9)? as u64,
+    })
+}
+
+fn annotation_kind_to_db(kind: &AnnotationKind) -> &'static str {
+    match kind {
+        AnnotationKind::Highlight => "highlight",
+        AnnotationKind::Underline => "underline",
+        AnnotationKind::Bookmark => "bookmark",
+    }
+}
+
+fn annotation_kind_from_db(value: &str) -> Result<AnnotationKind, String> {
+    match value {
+        "highlight" => Ok(AnnotationKind::Highlight),
+        "underline" => Ok(AnnotationKind::Underline),
+        "bookmark" => Ok(AnnotationKind::Bookmark),
+        _ => Err(format!("Unknown annotation kind: {value}")),
+    }
+}
+
+fn annotation_color_to_db(color: &AnnotationColor) -> &'static str {
+    match color {
+        AnnotationColor::Yellow => "yellow",
+        AnnotationColor::Green => "green",
+        AnnotationColor::Blue => "blue",
+        AnnotationColor::Pink => "pink",
+    }
+}
+
+fn annotation_color_from_db(value: &str) -> Result<AnnotationColor, String> {
+    match value {
+        "yellow" => Ok(AnnotationColor::Yellow),
+        "green" => Ok(AnnotationColor::Green),
+        "blue" => Ok(AnnotationColor::Blue),
+        "pink" => Ok(AnnotationColor::Pink),
+        _ => Err(format!("Unknown annotation color: {value}")),
+    }
+}
+
+fn sanitize_annotation(mut annotation: Annotation) -> CommandResult<Annotation> {
+    validate_annotation_id(&annotation.id)?;
+    validate_relative_library_path(&annotation.relative_path)?;
+    annotation.relative_path = normalize_relative_path(Path::new(&annotation.relative_path));
+    annotation.note = sanitize_optional_text(annotation.note, MAX_ANNOTATION_NOTE_CHARS, "note")?;
+    annotation.title =
+        sanitize_optional_text(annotation.title, MAX_ANNOTATION_TITLE_CHARS, "title")?;
+    annotation.selected_text = sanitize_optional_text(
+        annotation.selected_text,
+        MAX_ANNOTATION_TEXT_CHARS,
+        "selected text",
+    )?;
+    match annotation.kind {
+        AnnotationKind::Highlight | AnnotationKind::Underline => {
+            if annotation.color.is_none() {
+                return Err("Mark annotations require a color".to_owned());
+            }
+            match &annotation.locator {
+                AnnotationLocator::Markdown { .. }
+                | AnnotationLocator::Pdf { .. }
+                | AnnotationLocator::Epub { .. } => {}
+                AnnotationLocator::Bookmark { .. } => {
+                    return Err("Mark annotations cannot use a bookmark locator".to_owned());
+                }
+            }
+        }
+        AnnotationKind::Bookmark => {
+            if !matches!(annotation.locator, AnnotationLocator::Bookmark { .. }) {
+                return Err("Bookmark annotations require a bookmark locator".to_owned());
+            }
+        }
+    }
+    sanitize_locator_text_limits(&annotation.locator)?;
+    if annotation.created_at == 0 || annotation.updated_at == 0 {
+        return Err("Annotation timestamps are required".to_owned());
+    }
+    if annotation.updated_at < annotation.created_at {
+        annotation.updated_at = annotation.created_at;
+    }
+    Ok(annotation)
+}
+
+fn sanitize_locator_text_limits(locator: &AnnotationLocator) -> CommandResult<()> {
+    let (quote, prefix, suffix) = match locator {
+        AnnotationLocator::Markdown {
+            quote,
+            prefix,
+            suffix,
+            ..
+        }
+        | AnnotationLocator::Pdf {
+            quote,
+            prefix,
+            suffix,
+            ..
+        }
+        | AnnotationLocator::Epub {
+            quote,
+            prefix,
+            suffix,
+            ..
+        } => (quote, prefix, suffix),
+        AnnotationLocator::Bookmark { .. } => return Ok(()),
+    };
+    if quote.chars().count() > MAX_ANNOTATION_TEXT_CHARS
+        || prefix.chars().count() > MAX_ANNOTATION_TEXT_CHARS
+        || suffix.chars().count() > MAX_ANNOTATION_TEXT_CHARS
+    {
+        return Err(format!(
+            "Annotation quote context exceeds {MAX_ANNOTATION_TEXT_CHARS} characters"
+        ));
+    }
+    if let AnnotationLocator::Pdf { view, rects, .. } = locator {
+        if view != "original" && view != "reading" {
+            return Err("PDF annotation view must be original or reading".to_owned());
+        }
+        if rects.len() > 64 {
+            return Err("PDF annotation has too many rectangles".to_owned());
+        }
+    }
+    Ok(())
+}
+
+fn sanitize_optional_text(
+    value: Option<String>,
+    max_chars: usize,
+    label: &str,
+) -> CommandResult<Option<String>> {
+    let Some(raw) = value else {
+        return Ok(None);
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    if trimmed.chars().count() > max_chars {
+        return Err(format!("Annotation {label} exceeds {max_chars} characters"));
+    }
+    Ok(Some(trimmed.to_owned()))
+}
+
+fn validate_annotation_id(id: &str) -> CommandResult<()> {
+    if id.is_empty() || id.chars().count() > MAX_ANNOTATION_ID_CHARS {
+        return Err("Annotation id is invalid".to_owned());
+    }
+    if !id
+        .chars()
+        .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+    {
+        return Err("Annotation id contains unsupported characters".to_owned());
+    }
+    Ok(())
+}
+
+pub(crate) fn validate_relative_library_path(relative_path: &str) -> CommandResult<()> {
+    let relative = Path::new(relative_path);
+    if relative_path.trim().is_empty() || relative.is_absolute() {
+        return Err("A non-empty relative path is required".to_owned());
+    }
+    if relative.components().any(|component| {
+        matches!(
+            component,
+            Component::ParentDir | Component::RootDir | Component::Prefix(_)
+        )
+    }) {
+        return Err("Path traversal outside the library is not allowed".to_owned());
+    }
+    Ok(())
+}
+
+fn ensure_document_in_library(
+    current: &LibraryState,
+    root: &Path,
+    relative_path: &str,
+) -> CommandResult<()> {
+    if current
+        .documents
+        .iter()
+        .any(|document| document.relative_path == relative_path)
+    {
+        return Ok(());
+    }
+    resolve_existing_in_root(root, relative_path)?;
+    Ok(())
+}
+
 fn reclaim_cache_space(connection: &Connection) -> CommandResult<()> {
     connection
         .execute_batch("PRAGMA incremental_vacuum; PRAGMA wal_checkpoint(TRUNCATE);")
@@ -1569,7 +2079,7 @@ fn lock_state<'a>(
         .map_err(|_| "Library state lock was poisoned".to_owned())
 }
 
-fn current_root(state: &State<'_, AppState>) -> CommandResult<PathBuf> {
+pub(crate) fn current_root(state: &State<'_, AppState>) -> CommandResult<PathBuf> {
     lock_state(state)?
         .root
         .clone()
@@ -1697,7 +2207,7 @@ fn fallback_title(path: &Path) -> String {
         .to_owned()
 }
 
-fn normalize_relative_path(path: &Path) -> String {
+pub(crate) fn normalize_relative_path(path: &Path) -> String {
     path.components()
         .filter_map(|component| match component {
             Component::Normal(part) => Some(part.to_string_lossy()),
@@ -1707,7 +2217,7 @@ fn normalize_relative_path(path: &Path) -> String {
         .join("/")
 }
 
-fn normalize_root(path: &Path) -> String {
+pub(crate) fn normalize_root(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
 }
 
@@ -2171,5 +2681,160 @@ mod tests {
         assert_eq!(indexed.segments.len(), 1);
         assert_eq!(indexed.segments[0].locator_value.as_deref(), Some("1"));
         assert!(indexed.segments[0].content.contains("searchable"));
+    }
+
+    fn sample_highlight(relative_path: &str) -> Annotation {
+        Annotation {
+            id: "ann-highlight-1".to_owned(),
+            relative_path: relative_path.to_owned(),
+            kind: AnnotationKind::Highlight,
+            color: Some(AnnotationColor::Yellow),
+            note: Some("remember this".to_owned()),
+            selected_text: Some("hello world".to_owned()),
+            title: Some("hello world".to_owned()),
+            locator: AnnotationLocator::Markdown {
+                quote: "hello world".to_owned(),
+                prefix: "say ".to_owned(),
+                suffix: " today".to_owned(),
+                heading_id: Some("intro".to_owned()),
+            },
+            created_at: 100,
+            updated_at: 100,
+        }
+    }
+
+    #[test]
+    fn annotations_survive_conversion_cache_clear_and_soft_limit_eviction() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("annot-library");
+        let root_key = normalize_root(&root);
+        current.root = Some(root.clone());
+        current.documents = vec![DocumentInfo {
+            relative_path: "notes/a.md".to_owned(),
+            title: "A".to_owned(),
+            size: 1,
+            modified: 1,
+            format: DocumentFormat::Markdown,
+            index_status: IndexStatus::Ready,
+            index_error: None,
+        }];
+        let annotation = sample_highlight("notes/a.md");
+        upsert_annotation_in_cache(&mut current.cache, &root_key, &annotation)
+            .expect("save annotation");
+
+        insert_cache_document(&current.cache, &root_key, "notes/a.md", "body", 1);
+        insert_cache_document(
+            &current.cache,
+            "other-library",
+            "old.md",
+            &"x".repeat(1024 * 1024),
+            2,
+        );
+        clear_cache_storage(&mut current.cache).expect("clear conversion cache");
+        enforce_cache_soft_limit_with_limits(&mut current.cache, &root, 64 * 1024, 57 * 1024)
+            .expect("enforce soft limit");
+
+        let listed = list_annotations_from_cache(&current.cache, &root_key, Some("notes/a.md"))
+            .expect("list");
+        assert_eq!(listed, vec![annotation]);
+    }
+
+    #[test]
+    fn annotation_upsert_rejects_path_traversal_and_isolates_libraries() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("lib-a");
+        current.root = Some(root.clone());
+        current.documents = vec![DocumentInfo {
+            relative_path: "doc.md".to_owned(),
+            title: "Doc".to_owned(),
+            size: 1,
+            modified: 1,
+            format: DocumentFormat::Markdown,
+            index_status: IndexStatus::Ready,
+            index_error: None,
+        }];
+
+        let mut bad = sample_highlight("../secret.md");
+        assert!(sanitize_annotation(bad.clone()).is_err());
+        bad.relative_path = "doc.md".to_owned();
+        let saved = sanitize_annotation(bad).expect("sanitize");
+        upsert_annotation_in_cache(&mut current.cache, &normalize_root(&root), &saved)
+            .expect("save in lib-a");
+
+        let other_root = normalize_root(Path::new("lib-b"));
+        let listed_other =
+            list_annotations_from_cache(&current.cache, &other_root, None).expect("list other");
+        assert!(listed_other.is_empty());
+        assert_eq!(
+            list_annotations_from_cache(&current.cache, &normalize_root(&root), None)
+                .expect("list own")
+                .len(),
+            1
+        );
+    }
+
+    #[test]
+    fn underline_annotations_round_trip_and_clear_by_document() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("underline-lib");
+        let root_key = normalize_root(&root);
+        current.root = Some(root.clone());
+        current.documents = vec![
+            DocumentInfo {
+                relative_path: "a.md".to_owned(),
+                title: "A".to_owned(),
+                size: 1,
+                modified: 1,
+                format: DocumentFormat::Markdown,
+                index_status: IndexStatus::Ready,
+                index_error: None,
+            },
+            DocumentInfo {
+                relative_path: "b.md".to_owned(),
+                title: "B".to_owned(),
+                size: 1,
+                modified: 1,
+                format: DocumentFormat::Markdown,
+                index_status: IndexStatus::Ready,
+                index_error: None,
+            },
+        ];
+
+        let mut underline = sample_highlight("a.md");
+        underline.id = "ann-underline-1".to_owned();
+        underline.kind = AnnotationKind::Underline;
+        underline.color = Some(AnnotationColor::Blue);
+        let sanitized = sanitize_annotation(underline).expect("sanitize underline");
+        upsert_annotation_in_cache(&mut current.cache, &root_key, &sanitized).expect("save");
+
+        let keep = sample_highlight("b.md");
+        upsert_annotation_in_cache(&mut current.cache, &root_key, &keep).expect("save other");
+
+        let listed =
+            list_annotations_from_cache(&current.cache, &root_key, Some("a.md")).expect("list a");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].kind, AnnotationKind::Underline);
+
+        current
+            .cache
+            .execute(
+                "DELETE FROM annotations WHERE library_root = ?1 AND relative_path = ?2",
+                params![root_key, "a.md"],
+            )
+            .expect("clear a");
+        assert!(
+            list_annotations_from_cache(&current.cache, &root_key, Some("a.md"))
+                .expect("list cleared")
+                .is_empty()
+        );
+        assert_eq!(
+            list_annotations_from_cache(&current.cache, &root_key, Some("b.md"))
+                .expect("list b")
+                .len(),
+            1
+        );
     }
 }
