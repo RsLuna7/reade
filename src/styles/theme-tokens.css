@@ -194,3 +194,52 @@
   --selection: rgba(110, 162, 245, 0.28);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
 }
+
+/*
+  ---------- 青瓷 celadon: eye-care green (M3/D1). Low-chroma warm-green
+  paper, ink-green text, tea-brown accent — deliberately not a green accent
+  so selection/heatmap tints never collide with the fixed annotation green
+  (#78dc8c stays the only saturated green on the page). ----------
+*/
+
+:root[data-theme="celadon-light"] {
+  color-scheme: light;
+  --theme-color: #e3ede0;
+  --paper: #edf4ea;
+  --paper-raised: #f6faf3;
+  --chrome: #e3ede0;
+  --chrome-strong: #d7e4d3;
+  --ink: #1f2b24;
+  --ink-soft: #4c5f53;
+  --muted: #6f8177;
+  --line: rgba(31, 43, 36, 0.14);
+  --line-strong: rgba(31, 43, 36, 0.24);
+  --accent: #8a6138;
+  --accent-soft: #ece4d2;
+  --accent-ink: #6d4a28;
+  --teal: #3e7268;
+  --teal-soft: #d9eae2;
+  --selection: rgba(138, 97, 56, 0.2);
+  --shadow: 0 18px 55px rgba(35, 48, 40, 0.12);
+}
+
+:root[data-theme="celadon-dark"] {
+  color-scheme: dark;
+  --theme-color: #141f1c;
+  --paper: #141f1c;
+  --paper-raised: #1d2a25;
+  --chrome: #0f1815;
+  --chrome-strong: #2a3a34;
+  --ink: #d8e4dc;
+  --ink-soft: #9cb0a4;
+  --muted: #6d8177;
+  --line: rgba(216, 228, 220, 0.11);
+  --line-strong: rgba(216, 228, 220, 0.19);
+  --accent: #c69c66;
+  --accent-soft: #332c22;
+  --accent-ink: #e0c39a;
+  --teal: #6cb0a3;
+  --teal-soft: #1e322d;
+  --selection: rgba(198, 156, 102, 0.3);
+  --shadow: 0 20px 60px rgba(0, 0, 0, 0.34);
+}

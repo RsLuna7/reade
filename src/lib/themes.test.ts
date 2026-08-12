@@ -49,6 +49,17 @@ describe("theme registry", () => {
     expect(SERIES_FONT_PRESET.mist).toBe("system");
   });
 
+  it("registers the celadon series with a tea-brown accent (M3/D1)", () => {
+    expect(getThemeSeriesLabel("celadon-light")).toBe("青瓷");
+    expect(THEME_META["celadon-light"].themeColor).toBe("#e3ede0");
+    expect(THEME_META["celadon-dark"].themeColor).toBe("#141f1c");
+    // Tea-brown, not green: the accent (and the selection/heatmap tints mixed
+    // from it) must never collide with the fixed annotation green #78dc8c.
+    expect(THEME_META["celadon-light"].swatch.accent).toBe("#8a6138");
+    expect(THEME_META["celadon-dark"].swatch.accent).toBe("#c69c66");
+    expect(SERIES_FONT_PRESET.celadon).toBe("system");
+  });
+
   it("maps legacy single-word ids into the paper series", () => {
     expect(LEGACY_THEME_ID_MAP.light).toBe("paper-light");
     expect(LEGACY_THEME_ID_MAP.dark).toBe("paper-dark");

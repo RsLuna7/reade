@@ -13,6 +13,7 @@ export const THEME_SERIES = [
   { id: "paper", label: "纸感" },
   { id: "ink", label: "墨韵" },
   { id: "mist", label: "清透" },
+  { id: "celadon", label: "青瓷" },
 ] as const;
 
 export type ThemeSeriesId = (typeof THEME_SERIES)[number]["id"];
@@ -87,6 +88,22 @@ export const THEME_META: Record<ReaderTheme, ThemeMeta> = {
     themeColor: "#16181b",
     swatch: { paper: "#16181b", chrome: "#101214", accent: "#6ea2f5" },
   },
+  "celadon-light": {
+    id: "celadon-light",
+    series: "celadon",
+    label: "青瓷浅色",
+    mode: "light",
+    themeColor: "#e3ede0",
+    swatch: { paper: "#edf4ea", chrome: "#e3ede0", accent: "#8a6138" },
+  },
+  "celadon-dark": {
+    id: "celadon-dark",
+    series: "celadon",
+    label: "青瓷深色",
+    mode: "dark",
+    themeColor: "#141f1c",
+    swatch: { paper: "#141f1c", chrome: "#0f1815", accent: "#c69c66" },
+  },
 };
 
 /**
@@ -107,6 +124,7 @@ export const SERIES_FONT_PRESET: Record<ThemeSeriesId, "system" | "serif"> = {
   paper: "system",
   ink: "serif",
   mist: "system",
+  celadon: "system",
 };
 
 const THEME_ID_SET = new Set<string>(THEME_IDS);
