@@ -106,6 +106,10 @@ import {
 } from "./lib/libraryMru";
 import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
 import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
+// 库内链接悬停预览(plan-hover-preview):状态机在 lib,App 只做开关
+// 条件(触屏/浮层竞争)与「打开」回放。
+import { HoverPreviewCard } from "./components/HoverPreviewCard";
+import { useHoverPreview } from "./lib/useHoverPreview";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
@@ -1165,6 +1169,8 @@ function SidePanel({
   onClearAnnotations,
   linksState,
   onSelectLinkDocument,
+  onPreviewLinkTarget,
+  onPreviewLinkCancel,
   libraryStatus,
   libraryGroups,
   libraryError,
@@ -1211,6 +1217,13 @@ function SidePanel({
   /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
   linksState: LinksPanelState;
   onSelectLinkDocument: (relativePath: string) => void;
+  /** 链接行悬停预览(plan-hover-preview HP-D5),可选。 */
+  onPreviewLinkTarget?: (
+    relativePath: string,
+    anchor: HTMLElement,
+    trigger: "hover" | "focus",
+  ) => void;
+  onPreviewLinkCancel?: () => void;
   libraryStatus: AnnotationLibraryStatus;
   libraryGroups: AnnotationLibraryGroup[];
   libraryError: string | null;
@@ -1305,7 +1318,12 @@ function SidePanel({
           onClearAll={onClearAnnotations}
         />
       ) : tab === "links" ? (
-        <LinksPanel state={linksState} onSelectDocument={onSelectLinkDocument} />
+        <LinksPanel
+          state={linksState}
+          onSelectDocument={onSelectLinkDocument}
+          onPreviewTarget={onPreviewLinkTarget}
+          onPreviewCancel={onPreviewLinkCancel}
+        />
       ) : (
         <AnnotationLibraryPanel
           status={libraryStatus}
@@ -1954,6 +1972,35 @@ function App() {
       void selectDocument(result.relativePath, result.locator);
     },
     [closeRelatedPassages, recordNavDeparture, selectDocument],
+  );
+
+  // ---- 库内链接悬停预览(plan-hover-preview) ----
+  // 触屏无 hover 语义时不触发(HP-D8);任一会与卡片竞争的浮层打开时
+  // 挂起计时器并收起已开卡片。
+  const hoverCapable = useMediaQuery("(hover: hover)");
+  const hoverPreviewSuppressed = Boolean(
+    pendingSelection ||
+      markEditor ||
+      relatedPassages ||
+      quoteCardSource ||
+      commandPaletteOpen ||
+      noteDraft ||
+      relocatePreview ||
+      importReview,
+  );
+  const hoverPreview = useHoverPreview({
+    enabled: hoverCapable && !hoverPreviewSuppressed && activeView === "reader",
+    currentPath,
+    documents,
+    articleRef,
+  });
+  const { previewTarget: hoverPreviewTarget, cancelPreview: hoverPreviewCancel } = hoverPreview;
+  /** 侧栏链接行的悬停入口:目标已解析,fragment 数据未存,取文档开头。 */
+  const handlePreviewPanelTarget = useCallback(
+    (relativePath: string, anchor: HTMLElement, trigger: "hover" | "focus") => {
+      hoverPreviewTarget(relativePath, null, anchor, trigger);
+    },
+    [hoverPreviewTarget],
   );
 
   // ---- 分栏对照(plan-split-view) ----
@@ -4254,6 +4301,18 @@ function App() {
     [currentPath, documents, motionLevel, recordNavDeparture, replaceWebRoute, selectDocument, showNotice],
   );
 
+  /**
+   * AnnotatedMarkdown 是 memo 组件:onNavigate 必须保持稳定引用,否则
+   * App 的任何 state 变化都会击穿 memo 触发标注重绘(富文档上重绘
+   * 会分离 DOM 节点,悬停预览卡会被随之而来的滚动锚定事件立即关闭)。
+   */
+  const handleMarkdownNavigate = useCallback(
+    (href: string) => {
+      void handleNavigate(href);
+    },
+    [handleNavigate],
+  );
+
   const scrollToHeading = useCallback((id: string) => {
     const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
     // 目录跳转(MD 标题/PDF 页/EPUB 章节)前记出发点。
@@ -4740,7 +4799,9 @@ function App() {
                     annotations={annotations}
                     fuzzyAnchoring={fuzzyAnchoring}
                     resolveImageSrc={resolveImageSrc}
-                    onNavigate={(href) => void handleNavigate(href)}
+                    onNavigate={handleMarkdownNavigate}
+                    onLinkPreview={hoverPreview.previewLink}
+                    onLinkPreviewCancel={hoverPreviewCancel}
                     onBrokenIdsChange={setMarkdownBrokenIds}
                     onApproximateIdsChange={setMarkdownApproximateIds}
                   />
@@ -4845,6 +4906,8 @@ function App() {
                 onClearAnnotations={() => void handleClearAnnotations()}
                 linksState={documentLinksState}
                 onSelectLinkDocument={handleSelectLinkDocument}
+                onPreviewLinkTarget={handlePreviewPanelTarget}
+                onPreviewLinkCancel={hoverPreviewCancel}
                 libraryStatus={libraryAnnotations.status}
                 libraryGroups={libraryGroups}
                 libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
@@ -5012,6 +5075,8 @@ function App() {
             onClearAnnotations={() => void handleClearAnnotations()}
             linksState={documentLinksState}
             onSelectLinkDocument={handleSelectLinkDocument}
+            onPreviewLinkTarget={handlePreviewPanelTarget}
+            onPreviewLinkCancel={hoverPreviewCancel}
             libraryStatus={libraryAnnotations.status}
             libraryGroups={libraryGroups}
             libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
@@ -5058,6 +5123,18 @@ function App() {
             y={relatedPassages.y}
             onSelect={handleSelectRelated}
             onClose={closeRelatedPassages}
+          />
+        )}
+
+        {hoverPreview.preview && (
+          <HoverPreviewCard
+            preview={hoverPreview.preview}
+            onOpen={(href) => {
+              hoverPreview.closePreview();
+              void handleNavigate(href);
+            }}
+            onHold={hoverPreview.holdPreview}
+            onRelease={hoverPreviewCancel}
           />
         )}
 

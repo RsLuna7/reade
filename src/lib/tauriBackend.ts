@@ -14,6 +14,7 @@ import type {
   DocumentIndexEvent,
   DocumentInfo,
   DocumentLinks,
+  DocumentPreview,
   IndexProgress,
   MovedDocumentCandidate,
   PdfReadingMode,
@@ -51,6 +52,12 @@ export function searchDocuments(query: string, limit: number): Promise<SearchRes
 export function listDocumentExtents(): Promise<DocumentExtent[]> { return invoke("list_document_extents"); }
 export function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
   return invoke("list_document_links", { relativePath });
+}
+export function readDocumentPreview(
+  relativePath: string,
+  fragment: string | null,
+): Promise<DocumentPreview> {
+  return invoke("read_document_preview", { relativePath, fragment });
 }
 export function findRelatedPassages(
   text: string,

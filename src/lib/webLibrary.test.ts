@@ -135,6 +135,44 @@ describe("WebLibraryClient", () => {
   });
 });
 
+describe("WebLibraryClient.documentPreview", () => {
+  const searchIndex = {
+    schemaVersion: 2,
+    documents: [
+      {
+        relativePath: "指南/开始 阅读.md",
+        title: "开始阅读",
+        content: "# 开始阅读\n\n首段内容。\n\n## 细节\n\n细节段。",
+      },
+    ],
+  };
+
+  it("builds the excerpt through the shared contract and honors fragments", async () => {
+    const client = new WebLibraryClient({
+      fetcher: vi.fn(async () => response({ json: searchIndex })),
+    });
+    await expect(client.documentPreview("指南/开始 阅读.md", null)).resolves.toEqual({
+      title: "开始阅读",
+      format: "markdown",
+      excerpt: "开始阅读\n\n首段内容。\n\n细节\n\n细节段。",
+      pdfPages: null,
+      indexStatus: "ready",
+    });
+    await expect(
+      client.documentPreview("指南/开始 阅读.md", "细节"),
+    ).resolves.toMatchObject({ excerpt: "细节段。" });
+  });
+
+  it("rejects targets that are not part of the published library", async () => {
+    const client = new WebLibraryClient({
+      fetcher: vi.fn(async () => response({ json: searchIndex })),
+    });
+    await expect(client.documentPreview("missing.md", null)).rejects.toThrow(
+      "目标文档不在当前文档库中",
+    );
+  });
+});
+
 describe("searchWebDocuments", () => {
   const documents: WebSearchDocument[] = [
     { relativePath: "指南/阅读.md", title: "长文阅读", content: "中文长文需要舒适的行高与版心。" },

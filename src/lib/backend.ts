@@ -357,6 +357,27 @@ export async function listDocumentLinks(relativePath: string): Promise<DocumentL
 }
 
 /**
+ * 库内链接悬停预览（plan-hover-preview HP-D9）：目标标题 + 纯文本摘录。
+ * 桌面从缓存 search_segments 派生（只读、不触文件系统）；Web 用
+ * search.json 全文走同一 buildPreviewExcerpt 契约。
+ */
+export interface DocumentPreview {
+  title: string;
+  format: DocumentFormat;
+  excerpt: string;
+  pdfPages: number | null;
+  indexStatus: IndexStatus;
+}
+
+export async function readDocumentPreview(
+  relativePath: string,
+  fragment: string | null = null,
+): Promise<DocumentPreview> {
+  if (APP_RUNTIME === "web") return getWebLibrary().documentPreview(relativePath, fragment);
+  return (await getTauriBackend()).readDocumentPreview(relativePath, fragment);
+}
+
+/**
  * Selection-driven related passages (plan-related-passages §3.1). Both
  * runtimes share the fragment-extraction contract; the desktop ranks with
  * FTS5 bm25, the web build with substring counting (RP-D5) — a documented

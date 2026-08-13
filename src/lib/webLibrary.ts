@@ -3,6 +3,7 @@ import type {
   DocumentContent,
   DocumentExtent,
   DocumentInfo,
+  DocumentPreview,
   SearchResult,
 } from "./backend";
 import {
@@ -13,6 +14,7 @@ import {
   type DocumentLinks,
   type ExtractedLink,
 } from "./documentLinks";
+import { buildPreviewExcerpt } from "./previewExcerpt";
 import {
   extractRelatedFragments,
   RELATED_DEFAULT_LIMIT,
@@ -461,6 +463,33 @@ export class WebLibraryClient {
       this.linksIndex = { source: index, links };
     }
     return buildDocumentLinks(relativePath, this.linksIndex.links, index.documents);
+  }
+
+  /**
+   * Web twin of `read_document_preview`（plan-hover-preview §3.3）：
+   * search.json 全文喂给共享的 buildPreviewExcerpt 契约；Web 只有
+   * Markdown/MDX，无 PDF 页数语义。
+   */
+  async documentPreview(
+    relativePath: string,
+    fragment: string | null = null,
+  ): Promise<DocumentPreview> {
+    const index = await this.loadSearchIndex();
+    const document = index.documents.find(
+      (candidate) => candidate.relativePath === relativePath,
+    );
+    if (!document) {
+      throw new Error("目标文档不在当前文档库中");
+    }
+    return {
+      title: document.title,
+      format: document.relativePath.toLocaleLowerCase("en").endsWith(".mdx")
+        ? "mdx"
+        : "markdown",
+      excerpt: buildPreviewExcerpt(document.content, fragment).excerpt,
+      pdfPages: null,
+      indexStatus: "ready",
+    };
   }
 
   /** Web twin of `find_related_passages` over the search index. */

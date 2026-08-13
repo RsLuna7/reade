@@ -18,6 +18,7 @@ import {
   listCollectionItems,
   listCollections,
   listDocumentLinks,
+  readDocumentPreview,
   rebindDocumentAnnotations,
   removeCollectionItem,
   renameCollection,
@@ -69,6 +70,30 @@ describe("document link and related passage IPC wrappers", () => {
       text: "选中的文字",
       excludePath: "notes/self.md",
       limit: 12,
+    });
+  });
+
+  it("readDocumentPreview sends the camelCase path and fragment keys", async () => {
+    const preview = {
+      title: "目标文档",
+      format: "markdown",
+      excerpt: "首段",
+      pdfPages: null,
+      indexStatus: "ready",
+    };
+    invokeMock.mockResolvedValueOnce(preview);
+
+    await expect(readDocumentPreview("notes/a.md", "安装步骤")).resolves.toEqual(preview);
+    expect(invokeMock).toHaveBeenCalledWith("read_document_preview", {
+      relativePath: "notes/a.md",
+      fragment: "安装步骤",
+    });
+
+    invokeMock.mockResolvedValueOnce(preview);
+    await readDocumentPreview("notes/a.md", null);
+    expect(invokeMock).toHaveBeenLastCalledWith("read_document_preview", {
+      relativePath: "notes/a.md",
+      fragment: null,
     });
   });
 });

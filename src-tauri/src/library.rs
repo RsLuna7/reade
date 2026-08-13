@@ -699,6 +699,44 @@ pub fn list_document_links(
     )
 }
 
+/// Hover preview payload (docs/plan-hover-preview.md HP-D9): title plus a
+/// bounded plain-text excerpt; `pdf_pages` fills for PDF targets and
+/// `index_status` lets the card explain an empty excerpt.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentPreview {
+    pub title: String,
+    pub format: DocumentFormat,
+    pub excerpt: String,
+    pub pdf_pages: Option<u32>,
+    pub index_status: IndexStatus,
+}
+
+/// Read-only preview for the hover card (docs/plan-hover-preview.md
+/// §3.1): pure SELECTs over the cached `search_segments`, never file
+/// access. The target must be part of the current scan set; the path is
+/// validated like every other command input.
+#[tauri::command]
+pub fn read_document_preview(
+    relative_path: String,
+    fragment: Option<String>,
+    state: State<'_, AppState>,
+) -> CommandResult<DocumentPreview> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let root_key = normalize_root(root);
+    document_preview_for(
+        &current.cache,
+        &root_key,
+        &current.documents,
+        &relative_path,
+        fragment.as_deref(),
+    )
+}
+
 /// Selection-driven related-passage search over the existing FTS5 trigram
 /// index (`docs/plan-related-passages.md` §3). Returns plain
 /// `SearchResult`s so the jump chain is shared with library search.
@@ -2048,6 +2086,323 @@ fn document_links_for(
     })
 }
 
+// ---- Hover preview (docs/plan-hover-preview.md) ----
+
+/// Excerpt cap in Unicode code points (HP-D9); must stay identical to
+/// `PREVIEW_EXCERPT_MAX_CHARS` in `src/lib/previewExcerpt.ts`.
+pub(crate) const PREVIEW_EXCERPT_MAX_CHARS: usize = 600;
+
+fn document_preview_for(
+    connection: &Connection,
+    root: &str,
+    documents: &[DocumentInfo],
+    relative_path: &str,
+    fragment: Option<&str>,
+) -> CommandResult<DocumentPreview> {
+    validate_relative_library_path(relative_path)?;
+    let normalized = normalize_relative_path(Path::new(relative_path));
+    if normalized.is_empty() {
+        return Err("A non-empty relative path is required".to_owned());
+    }
+    let document = documents
+        .iter()
+        .find(|document| document.relative_path == normalized)
+        .ok_or_else(|| "Document is not in the current library".to_owned())?;
+
+    let (excerpt, pdf_pages) = match document.format {
+        DocumentFormat::Markdown | DocumentFormat::Mdx => {
+            let content = preview_segment_content(connection, root, &normalized, None)?;
+            (
+                content
+                    .map(|content| build_preview_excerpt(&content, fragment).0)
+                    .unwrap_or_default(),
+                None,
+            )
+        }
+        DocumentFormat::Pdf => {
+            let pages: i64 = connection
+                .query_row(
+                    "SELECT COUNT(*) FROM search_segments
+                     WHERE library_root = ?1 AND relative_path = ?2",
+                    params![root, normalized],
+                    |row| row.get(0),
+                )
+                .map_err(|error| format!("Cannot count PDF preview pages: {error}"))?;
+            let requested = fragment.and_then(|value| value.trim().parse::<u32>().ok());
+            let mut content = match requested {
+                Some(page) => preview_segment_content(
+                    connection,
+                    root,
+                    &normalized,
+                    Some(("pdfPage", page.to_string().as_str())),
+                )?,
+                None => None,
+            };
+            let has_text = content
+                .as_deref()
+                .is_some_and(|value| !value.trim().is_empty());
+            if !has_text {
+                content = first_textual_segment_content(connection, root, &normalized)?;
+            }
+            (
+                content
+                    .map(|content| build_preview_excerpt(&content, None).0)
+                    .unwrap_or_default(),
+                Some(pages.max(0) as u32),
+            )
+        }
+        DocumentFormat::Epub => {
+            let mut content = match fragment.map(str::trim) {
+                Some(chapter) if !chapter.is_empty() => preview_segment_content(
+                    connection,
+                    root,
+                    &normalized,
+                    Some(("epubChapter", chapter)),
+                )?,
+                _ => None,
+            };
+            if content.is_none() {
+                content = preview_segment_content(connection, root, &normalized, None)?;
+            }
+            (
+                content
+                    .map(|content| build_preview_excerpt(&content, None).0)
+                    .unwrap_or_default(),
+                None,
+            )
+        }
+    };
+
+    Ok(DocumentPreview {
+        title: document.title.clone(),
+        format: document.format,
+        excerpt,
+        pdf_pages,
+        index_status: document.index_status,
+    })
+}
+
+/// First segment of the document (ordinal order), optionally restricted to
+/// one locator (`pdfPage` page number / `epubChapter` chapter id).
+fn preview_segment_content(
+    connection: &Connection,
+    root: &str,
+    relative_path: &str,
+    locator: Option<(&str, &str)>,
+) -> CommandResult<Option<String>> {
+    let result = match locator {
+        Some((kind, value)) => connection
+            .query_row(
+                "SELECT content FROM search_segments
+                 WHERE library_root = ?1 AND relative_path = ?2
+                   AND locator_kind = ?3 AND locator_value = ?4
+                 ORDER BY ordinal ASC LIMIT 1",
+                params![root, relative_path, kind, value],
+                |row| row.get(0),
+            )
+            .optional(),
+        None => connection
+            .query_row(
+                "SELECT content FROM search_segments
+                 WHERE library_root = ?1 AND relative_path = ?2
+                 ORDER BY ordinal ASC LIMIT 1",
+                params![root, relative_path],
+                |row| row.get(0),
+            )
+            .optional(),
+    };
+    result.map_err(|error| format!("Cannot read preview segment: {error}"))
+}
+
+/// First segment that actually carries text (skips OCR-less PDF pages).
+fn first_textual_segment_content(
+    connection: &Connection,
+    root: &str,
+    relative_path: &str,
+) -> CommandResult<Option<String>> {
+    connection
+        .query_row(
+            "SELECT content FROM search_segments
+             WHERE library_root = ?1 AND relative_path = ?2 AND TRIM(content) != ''
+             ORDER BY ordinal ASC LIMIT 1",
+            params![root, relative_path],
+            |row| row.get(0),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read preview segment: {error}"))
+}
+
+fn preview_regex(
+    cell: &'static std::sync::OnceLock<regex::Regex>,
+    pattern: &str,
+) -> &'static regex::Regex {
+    cell.get_or_init(|| regex::Regex::new(pattern).expect("preview regex"))
+}
+
+fn atx_heading_rest(line: &str) -> Option<&str> {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    preview_regex(&RE, r"^ {0,3}#{1,6}[ \t]+(.*)$")
+        .captures(line)
+        .and_then(|capture| capture.get(1))
+        .map(|capture| capture.as_str())
+}
+
+/// Heading text with a trailing run of closing hashes removed
+/// (`## title ##` → `title`), mirroring the TS twin.
+fn heading_display_text(raw: &str) -> String {
+    static RE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    preview_regex(&RE, r"[ \t]+#+[ \t]*$")
+        .replace(raw, "")
+        .trim()
+        .to_owned()
+}
+
+/// Collapses inner whitespace runs and lowercases for direct comparison.
+fn normalize_heading_text(value: &str) -> String {
+    value
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_lowercase()
+}
+
+/// Slug approximation of the rehype-slug output (HP-D6); twin of
+/// `previewSlug` in `src/lib/previewExcerpt.ts`.
+fn preview_slug(value: &str) -> String {
+    let mut slug = String::new();
+    for ch in value.trim().to_lowercase().chars() {
+        if ch == ' ' || ch == '\t' {
+            slug.push('-');
+        } else if ch == '-' || ch == '_' || ch.is_alphanumeric() {
+            slug.push(ch);
+        }
+    }
+    slug
+}
+
+fn find_fragment_heading(lines: &[&str], fragment: &str) -> Option<usize> {
+    let target = normalize_heading_text(fragment);
+    let target_slug = preview_slug(fragment);
+    if target.is_empty() && target_slug.is_empty() {
+        return None;
+    }
+    for (index, line) in lines.iter().enumerate() {
+        let Some(rest) = atx_heading_rest(line) else {
+            continue;
+        };
+        let text = heading_display_text(rest);
+        if (!target.is_empty() && normalize_heading_text(&text) == target)
+            || (!target_slug.is_empty() && preview_slug(&text) == target_slug)
+        {
+            return Some(index);
+        }
+    }
+    None
+}
+
+/// One line of markdown reduced to plain text (block + inline markers);
+/// twin of `cleanPreviewLine` in `src/lib/previewExcerpt.ts`.
+fn clean_preview_line(line: &str) -> String {
+    static SETEXT: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static QUOTE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static LIST: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static TASK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static IMAGE: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static LINK: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static WIKI_ALIAS: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+    static WIKI: std::sync::OnceLock<regex::Regex> = std::sync::OnceLock::new();
+
+    let mut text = line.trim().to_owned();
+    if text.is_empty() {
+        return text;
+    }
+    if preview_regex(&SETEXT, r"^(?:=+|-+|\*{3,}|_{3,})$").is_match(&text) {
+        return String::new();
+    }
+    text = preview_regex(&QUOTE, r"^(?:> ?)+")
+        .replace(&text, "")
+        .into_owned();
+    if let Some(rest) = atx_heading_rest(&text) {
+        text = heading_display_text(rest);
+    }
+    text = preview_regex(&LIST, r"^(?:[-*+]|[0-9]{1,3}[.)])[ \t]+")
+        .replace(&text, "")
+        .into_owned();
+    text = preview_regex(&TASK, r"^\[[ xX]\][ \t]+")
+        .replace(&text, "")
+        .into_owned();
+    text = preview_regex(&IMAGE, r"!\[([^\]]*)\]\([^)]*\)")
+        .replace_all(&text, "${1}")
+        .into_owned();
+    text = preview_regex(&LINK, r"\[([^\]]*)\]\([^)]*\)")
+        .replace_all(&text, "${1}")
+        .into_owned();
+    text = preview_regex(&WIKI_ALIAS, r"\[\[([^\]|]*)\|([^\]]*)\]\]")
+        .replace_all(&text, "${2}")
+        .into_owned();
+    text = preview_regex(&WIKI, r"\[\[([^\]]*)\]\]")
+        .replace_all(&text, "${1}")
+        .into_owned();
+    text = text.replace("**", "").replace("__", "").replace('`', "");
+    text.trim().to_owned()
+}
+
+/// Bounded plain-text excerpt, optionally starting after the heading a
+/// fragment points at (HP-D6 best effort). Twin of `buildPreviewExcerpt`
+/// in `src/lib/previewExcerpt.ts`; the numbered cases PE01.. in its test
+/// file are mirrored by the tests below.
+pub(crate) fn build_preview_excerpt(content: &str, fragment: Option<&str>) -> (String, bool) {
+    let normalized = content.replace("\r\n", "\n");
+    let lines: Vec<&str> = normalized.split('\n').collect();
+    let mut start = 0usize;
+    let mut matched_fragment = false;
+    if let Some(fragment) = fragment {
+        if !fragment.trim().is_empty() {
+            if let Some(index) = find_fragment_heading(&lines, fragment) {
+                start = index + 1;
+                matched_fragment = true;
+            }
+        }
+    }
+
+    let mut collected: Vec<String> = Vec::new();
+    let mut char_count = 0usize;
+    for line in lines.iter().skip(start) {
+        let trimmed = line.trim();
+        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
+            continue;
+        }
+        let clean = clean_preview_line(line);
+        if clean.is_empty() {
+            if collected.is_empty() || collected.last().is_some_and(|last| last.is_empty()) {
+                continue;
+            }
+            collected.push(String::new());
+            char_count += 1;
+            continue;
+        }
+        char_count += clean.chars().count() + 1;
+        collected.push(clean);
+        if char_count > PREVIEW_EXCERPT_MAX_CHARS {
+            break;
+        }
+    }
+    while collected.last().is_some_and(|last| last.is_empty()) {
+        collected.pop();
+    }
+
+    let text = collected.join("\n");
+    let chars: Vec<char> = text.chars().collect();
+    let excerpt = if chars.len() > PREVIEW_EXCERPT_MAX_CHARS {
+        let mut capped: String = chars[..PREVIEW_EXCERPT_MAX_CHARS].iter().collect();
+        capped.push('…');
+        capped
+    } else {
+        text
+    };
+    (excerpt, matched_fragment)
+}
+
 // ---- Related passages (docs/plan-related-passages.md) ----
 
 fn is_related_delimiter(ch: char) -> bool {
@@ -2511,7 +2866,9 @@ mod tests {
         assert!(probe_path_is_directory(
             library.path().to_string_lossy().as_ref()
         ));
-        assert!(!probe_path_is_directory(file_path.to_string_lossy().as_ref()));
+        assert!(!probe_path_is_directory(
+            file_path.to_string_lossy().as_ref()
+        ));
         assert!(!probe_path_is_directory(
             library
                 .path()
@@ -2858,7 +3215,309 @@ mod tests {
                 },
             ],
         );
-        assert!(document_extents(&current.cache, "empty").expect("empty").is_empty());
+        assert!(document_extents(&current.cache, "empty")
+            .expect("empty")
+            .is_empty());
+    }
+
+    // ---- Hover preview (docs/plan-hover-preview.md) ----
+
+    /// Mirrors the numbered contract cases PE01.. in
+    /// `src/lib/previewExcerpt.test.ts` (HP-D7): identical inputs must
+    /// yield identical excerpts on both ends.
+    #[test]
+    fn preview_excerpt_contract_cases_match_the_ts_twin() {
+        // PE01
+        let pe01 = "# Guide Title\n\nSome **bold** text with a [link](./other.md) and `code`.\n\n- item one\n- [x] item two";
+        assert_eq!(
+            build_preview_excerpt(pe01, None),
+            (
+                "Guide Title\n\nSome bold text with a link and code.\n\nitem one\nitem two"
+                    .to_owned(),
+                false
+            )
+        );
+        // PE02
+        let pe02 = "# 文档\n\n开头段落。\n\n## 安装步骤\n\n第一步。\n\n## 使用";
+        assert_eq!(
+            build_preview_excerpt(pe02, Some("安装步骤")),
+            ("第一步。\n\n使用".to_owned(), true)
+        );
+        // PE03
+        assert_eq!(
+            build_preview_excerpt(
+                "## Getting Started\n\nWelcome aboard.",
+                Some("getting-started")
+            ),
+            ("Welcome aboard.".to_owned(), true)
+        );
+        // PE04
+        assert_eq!(
+            build_preview_excerpt("# Top\n\nBody text.", Some("missing-section")),
+            ("Top\n\nBody text.".to_owned(), false)
+        );
+        // PE05
+        let long = "字".repeat(700);
+        let (capped, _) = build_preview_excerpt(&long, None);
+        assert_eq!(
+            capped,
+            format!("{}…", "字".repeat(PREVIEW_EXCERPT_MAX_CHARS))
+        );
+        assert_eq!(capped.chars().count(), PREVIEW_EXCERPT_MAX_CHARS + 1);
+        let exact = "字".repeat(PREVIEW_EXCERPT_MAX_CHARS);
+        assert_eq!(build_preview_excerpt(&exact, None).0, exact);
+        // PE06
+        assert_eq!(build_preview_excerpt("", None), (String::new(), false));
+        assert_eq!(
+            build_preview_excerpt("  \n\n\t\n", None),
+            (String::new(), false)
+        );
+        // PE07
+        let pe07 = "Before fence.\n\n```js\nconst x = 1;\n```\n\nAfter fence.";
+        assert_eq!(
+            build_preview_excerpt(pe07, None).0,
+            "Before fence.\n\nconst x = 1;\n\nAfter fence."
+        );
+        // PE08
+        assert_eq!(
+            build_preview_excerpt("\n\n\nFirst para.\n\n\n\nSecond para.\n\n\n", None).0,
+            "First para.\n\nSecond para."
+        );
+        // PE09
+        assert_eq!(
+            build_preview_excerpt(
+                "看 [[notes/目标|别名]] 与 [[另一篇]]，配图 ![替代文本](./img.png)。",
+                None
+            )
+            .0,
+            "看 别名 与 另一篇，配图 替代文本。"
+        );
+        // PE10
+        assert_eq!(
+            build_preview_excerpt("标题甲\n===\n\n正文。", Some("标题甲")),
+            ("标题甲\n\n正文。".to_owned(), false)
+        );
+        // PE11
+        assert_eq!(
+            build_preview_excerpt("## 结尾", Some("结尾")),
+            (String::new(), true)
+        );
+    }
+
+    fn preview_document(path: &str, format: DocumentFormat, status: IndexStatus) -> DocumentInfo {
+        DocumentInfo {
+            relative_path: path.to_owned(),
+            title: format!("{path} 标题"),
+            size: 1,
+            modified: 1,
+            format,
+            index_status: status,
+            index_error: None,
+        }
+    }
+
+    fn insert_preview_segment(
+        connection: &Connection,
+        root: &str,
+        path: &str,
+        format: &str,
+        locator: Option<(&str, &str)>,
+        ordinal: u32,
+        content: &str,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO search_segments(
+                     library_root, relative_path, title, format, locator_kind, locator_value,
+                     ordinal, content, needs_ocr
+                 ) VALUES (?1, ?2, 't', ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    root,
+                    path,
+                    format,
+                    locator.map(|pair| pair.0),
+                    locator.map(|pair| pair.1),
+                    ordinal,
+                    content,
+                    i64::from(content.trim().is_empty())
+                ],
+            )
+            .expect("insert preview segment");
+    }
+
+    #[test]
+    fn document_preview_rejects_out_of_scope_paths() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let documents = vec![preview_document(
+            "notes/a.md",
+            DocumentFormat::Markdown,
+            IndexStatus::Ready,
+        )];
+
+        for path in ["../escape.md", "notes/../../escape.md", "/rooted.md", ""] {
+            assert!(
+                document_preview_for(&current.cache, "root", &documents, path, None).is_err(),
+                "path {path:?} must be rejected"
+            );
+        }
+        // In-library shape but absent from the current scan set.
+        assert!(
+            document_preview_for(&current.cache, "root", &documents, "missing.md", None)
+                .unwrap_err()
+                .contains("not in the current library")
+        );
+    }
+
+    #[test]
+    fn document_preview_reads_markdown_and_stays_inside_the_library_root() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let documents = vec![
+            preview_document("notes/a.md", DocumentFormat::Markdown, IndexStatus::Ready),
+            preview_document(
+                "pending.md",
+                DocumentFormat::Markdown,
+                IndexStatus::Indexing,
+            ),
+        ];
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "notes/a.md",
+            "markdown",
+            None,
+            0,
+            "# 标题\n\n首段内容。\n\n## 细节\n\n细节段。",
+        );
+        // 另一库同路径的段不得串库。
+        insert_preview_segment(
+            &current.cache,
+            "other",
+            "pending.md",
+            "markdown",
+            None,
+            0,
+            "泄漏内容",
+        );
+
+        let preview = document_preview_for(&current.cache, "root", &documents, "notes/a.md", None)
+            .expect("markdown preview");
+        assert_eq!(preview.title, "notes/a.md 标题");
+        assert_eq!(preview.format, DocumentFormat::Markdown);
+        assert_eq!(preview.excerpt, "标题\n\n首段内容。\n\n细节\n\n细节段。");
+        assert_eq!(preview.pdf_pages, None);
+        assert_eq!(preview.index_status, IndexStatus::Ready);
+
+        let fragment = document_preview_for(
+            &current.cache,
+            "root",
+            &documents,
+            "notes/a.md",
+            Some("细节"),
+        )
+        .expect("fragment preview");
+        assert_eq!(fragment.excerpt, "细节段。");
+
+        // Segments only exist under the other root: the excerpt must stay
+        // empty and the status comes from the scan set.
+        let isolated = document_preview_for(&current.cache, "root", &documents, "pending.md", None)
+            .expect("isolated preview");
+        assert_eq!(isolated.excerpt, "");
+        assert_eq!(isolated.index_status, IndexStatus::Indexing);
+    }
+
+    #[test]
+    fn document_preview_resolves_pdf_pages_and_epub_chapters() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let documents = vec![
+            preview_document("scan.pdf", DocumentFormat::Pdf, IndexStatus::Partial),
+            preview_document("book.epub", DocumentFormat::Epub, IndexStatus::Ready),
+        ];
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "scan.pdf",
+            "pdf",
+            Some(("pdfPage", "1")),
+            0,
+            "",
+        );
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "scan.pdf",
+            "pdf",
+            Some(("pdfPage", "2")),
+            1,
+            "第二页文本。",
+        );
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "scan.pdf",
+            "pdf",
+            Some(("pdfPage", "3")),
+            2,
+            "第三页文本。",
+        );
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "book.epub",
+            "epub",
+            Some(("epubChapter", "chapter-1")),
+            0,
+            "第一章正文。",
+        );
+        insert_preview_segment(
+            &current.cache,
+            "root",
+            "book.epub",
+            "epub",
+            Some(("epubChapter", "chapter-2")),
+            1,
+            "第二章正文。",
+        );
+
+        // No fragment: the empty page 1 is skipped for the first textual page.
+        let pdf = document_preview_for(&current.cache, "root", &documents, "scan.pdf", None)
+            .expect("pdf preview");
+        assert_eq!(pdf.excerpt, "第二页文本。");
+        assert_eq!(pdf.pdf_pages, Some(3));
+        assert_eq!(pdf.index_status, IndexStatus::Partial);
+
+        // Page fragment picks the exact page; unknown pages fall back.
+        let page3 = document_preview_for(&current.cache, "root", &documents, "scan.pdf", Some("3"))
+            .expect("pdf page preview");
+        assert_eq!(page3.excerpt, "第三页文本。");
+        let missing =
+            document_preview_for(&current.cache, "root", &documents, "scan.pdf", Some("99"))
+                .expect("pdf fallback preview");
+        assert_eq!(missing.excerpt, "第二页文本。");
+
+        let epub = document_preview_for(&current.cache, "root", &documents, "book.epub", None)
+            .expect("epub preview");
+        assert_eq!(epub.excerpt, "第一章正文。");
+        let chapter = document_preview_for(
+            &current.cache,
+            "root",
+            &documents,
+            "book.epub",
+            Some("chapter-2"),
+        )
+        .expect("epub chapter preview");
+        assert_eq!(chapter.excerpt, "第二章正文。");
+        let unknown_chapter = document_preview_for(
+            &current.cache,
+            "root",
+            &documents,
+            "book.epub",
+            Some("chapter-9"),
+        )
+        .expect("epub fallback preview");
+        assert_eq!(unknown_chapter.excerpt, "第一章正文。");
     }
 
     #[test]

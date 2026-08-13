@@ -21,10 +21,33 @@ export type LinksPanelState =
 export function LinksPanel({
   state,
   onSelectDocument,
+  onPreviewTarget,
+  onPreviewCancel,
 }: {
   state: LinksPanelState;
   onSelectDocument: (relativePath: string) => void;
+  /**
+   * 悬停/聚焦预览意图(plan-hover-preview HP-D5):wiki 链接在阅读面按
+   * 纯文本渲染,这里的出链/反链行是它们唯一的交互面。不挂时零变化。
+   */
+  onPreviewTarget?: (
+    relativePath: string,
+    anchor: HTMLElement,
+    trigger: "hover" | "focus",
+  ) => void;
+  onPreviewCancel?: () => void;
 }) {
+  const previewHandlers = (relativePath: string) =>
+    onPreviewTarget
+      ? {
+          onMouseEnter: (event: { currentTarget: HTMLElement }) =>
+            onPreviewTarget(relativePath, event.currentTarget, "hover" as const),
+          onMouseLeave: onPreviewCancel,
+          onFocus: (event: { currentTarget: HTMLElement }) =>
+            onPreviewTarget(relativePath, event.currentTarget, "focus" as const),
+          onBlur: onPreviewCancel,
+        }
+      : {};
   if (state.status === "idle" || state.status === "loading") {
     return <p className="toc-empty">正在读取链接…</p>;
   }
@@ -67,6 +90,7 @@ export function LinksPanel({
                   className="links-panel-entry"
                   title={entry.sourcePath}
                   onClick={() => onSelectDocument(entry.sourcePath)}
+                  {...previewHandlers(entry.sourcePath)}
                 >
                   <span className="links-panel-entry-head">
                     <span className="links-panel-entry-title">{entry.sourceTitle}</span>
@@ -107,6 +131,7 @@ export function LinksPanel({
                       className="links-panel-entry"
                       title={entry.targetPath ?? entry.rawTarget}
                       onClick={() => onSelectDocument(entry.targetPath as string)}
+                      {...previewHandlers(entry.targetPath as string)}
                     >
                       <span className="links-panel-entry-head">
                         <span className="links-panel-entry-title">{label}</span>

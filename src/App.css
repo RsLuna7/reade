@@ -3423,6 +3423,106 @@ button.links-panel-entry:focus-visible {
   -webkit-line-clamp: 3;
 }
 
+/* 链接悬停预览卡(plan-hover-preview §3.2):贴链接 rect 下方/上方的
+   纯文本卡;z 序低于相关段落浮层,滚动即消失所以无需跟随定位。 */
+.hover-preview-card {
+  position: fixed;
+  z-index: 40;
+  display: grid;
+  gap: 7px;
+  width: min(360px, calc(100vw - 24px));
+  max-height: 300px;
+  padding: 11px 13px;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  overflow: hidden;
+}
+
+.hover-preview-card[data-placement="above"] {
+  transform: translateY(-100%);
+}
+
+.hover-preview-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.hover-preview-kicker {
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+}
+
+.hover-preview-title {
+  overflow: hidden;
+  flex: 1;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hover-preview-meta {
+  flex-shrink: 0;
+  color: var(--accent-ink);
+  font-size: 11px;
+}
+
+.hover-preview-fragment {
+  overflow: hidden;
+  margin: 0;
+  color: var(--accent-ink);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.hover-preview-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-line;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 8;
+}
+
+.hover-preview-state {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.hover-preview-state--error {
+  color: var(--accent-ink);
+}
+
+.hover-preview-open {
+  justify-self: start;
+  padding: 3px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.hover-preview-open:hover,
+.hover-preview-open:focus-visible {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent-soft) 40%, transparent);
+}
+
 /* 金句卡片预览浮层(QC-D5):居中 dialog,预览图即导出物本身。 */
 .quote-card-dialog {
   position: fixed;

@@ -28,6 +28,16 @@ export interface MarkdownRendererProps {
   resolveImageSrc?: (source: string) => string | null;
   resolveLinkHref?: (href: string) => string | null;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
+  /**
+   * 悬停/聚焦意图上报(plan-hover-preview §3.2):分类与计时都在上层,
+   * 渲染器只转发事件;不挂时零行为变化。
+   */
+  onLinkPreview?: (
+    href: string,
+    anchor: HTMLElement,
+    trigger: "hover" | "focus",
+  ) => void;
+  onLinkPreviewCancel?: () => void;
 }
 
 type SourcePosition = {
@@ -359,6 +369,8 @@ export function MarkdownRenderer({
   resolveImageSrc,
   resolveLinkHref,
   onNavigate,
+  onLinkPreview,
+  onLinkPreviewCancel,
 }: MarkdownRendererProps) {
   const components: Components = {
     h1: heading(1),
@@ -393,6 +405,18 @@ export function MarkdownRenderer({
               onNavigate(resolved, event);
             }
           }}
+          onMouseEnter={
+            onLinkPreview
+              ? (event) => onLinkPreview(resolved, event.currentTarget, "hover")
+              : undefined
+          }
+          onMouseLeave={onLinkPreviewCancel}
+          onFocus={
+            onLinkPreview
+              ? (event) => onLinkPreview(resolved, event.currentTarget, "focus")
+              : undefined
+          }
+          onBlur={onLinkPreviewCancel}
         >
           {children}
         </a>

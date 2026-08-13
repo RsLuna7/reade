@@ -84,7 +84,7 @@ export function paintMarkdownAnnotations(
 
 interface AnnotatedMarkdownProps extends Pick<
   MarkdownRendererProps,
-  "content" | "resolveImageSrc" | "onNavigate"
+  "content" | "resolveImageSrc" | "onNavigate" | "onLinkPreview" | "onLinkPreviewCancel"
 > {
   annotations: Annotation[];
   /** Enables the fuzzy last-resort anchoring step (global preference). */
@@ -99,6 +99,8 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
   fuzzyAnchoring = false,
   resolveImageSrc,
   onNavigate,
+  onLinkPreview,
+  onLinkPreviewCancel,
   onBrokenIdsChange,
   onApproximateIdsChange,
 }: AnnotatedMarkdownProps) {
@@ -153,6 +155,8 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
         content={content}
         resolveImageSrc={resolveImageSrc}
         onNavigate={onNavigate}
+        onLinkPreview={onLinkPreview}
+        onLinkPreviewCancel={onLinkPreviewCancel}
       />
     </div>
   );

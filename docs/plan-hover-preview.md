@@ -1,7 +1,7 @@
-# 方案草案：库内链接悬停预览卡
+# 方案定稿：库内链接悬停预览卡
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核定稿）
+- 状态：**定稿（基线已复核，决策见 §6 与 §8）**
 - 定位：悬停 `[[wiki]]` / 相对路径库内链接 ≥400ms，浮出目标文档开头段落（或 fragment 对应章节摘录）的纯文本预览卡；脚注引用悬停就地预览脚注内容；PDF 目标显示标题+页数。降低"点过去又跳回来"的导航损耗。
 - 关联：链接解析语义完全复用只读双链（`docs/plan-backlinks.md`）的 `documentLinks.ts`；桌面预览文本读缓存 sqlite 的 `search_segments`（与相关段落同一数据源，`docs/plan-related-passages.md`）；Web 用 `search.json` 全文。
 
@@ -101,3 +101,16 @@
 - markdown 整篇一个 segment：fragment 定位靠文本检索标题行，同名标题或 setext 变体可能定位偏差——尽力而为语义写入 USER_GUIDE，不承诺精确。
 - 索引未就绪 / `indexStatus: failed` 的文档预览为空态：与库搜索同款限制，卡片显示状态文案即可。
 - 悬停预览与悬停即将出现的其他浮层（标注气泡）在链接落于 mark 内时可能竞争：预览计时器在任何浮层 open 时挂起，定稿时补交互矩阵。
+
+## 8. 定稿补记（2026-08-13 复核）
+
+基线复核结论：§1 的全部事实仍成立（`documentLinks.ts` 的 `resolveLibraryPath` L102-125、`MarkdownRenderer.tsx` 的 `<a>` 分支 L378-400、`search_segments` schema L1205-1219、`validate_relative_library_path` L1690、`ensure_document_in_open_library` L1724、`webLibrary.loadSearchIndex` L429-434；行号以当日 HEAD `5bc756b` 为准）。落定与修正如下：
+
+| # | 决策 | 结论 |
+|---|------|------|
+| HP-D1..D4 | 均按推荐执行 | 纯文本摘录 / `search_segments` / 标题行检索尽力而为 / hover 400ms + focus 600ms |
+| HP-D5（新） | `[[wiki]]` 的悬停面 | **草案假设 wiki 在正文渲染为 `<a>`，与事实不符**：阅读面对 `[[wiki]]` 按纯文本渲染（双链只在侧栏「链接」tab 物化为可点行）。定稿不为预览改变链接渲染语义；wiki 的悬停预览落在侧栏「链接」tab 的出链/反链行上（同一张卡、同一数据源），正文悬停只覆盖真实存在的相对路径 `<a>` 链接与脚注引用 |
+| HP-D6（新） | fragment→标题匹配规则 | 仅匹配 ATX 标题（`#{1,6} `），按「标题文本不区分大小写直等 ∨ slug 近似（小写、空格→`-`、去非字母数字标点）」双通道；setext 标题不匹配（尽力而为，落回文档开头） |
+| HP-D7（新） | 契约孪生 | `buildPreviewExcerpt(content, fragment?)` 的 TS 实现在 `src/lib/previewExcerpt.ts`，Rust 孪生 `build_preview_excerpt` 在 `library.rs`；两端共用编号用例表 PE01..（documentLinks L01.. 惯例） |
+| HP-D8（新） | 卡片挂载面 | 仅主栏（副栏是纯净参考面，不挂）；触屏 `(hover: hover)` 媒体查询守卫；其他浮层（选区工具条/标注气泡/相关段落/金句卡/命令面板/笔记编辑/重定位条）open 时预览挂起 |
+| HP-D9（新） | DTO | `read_document_preview(relative_path, fragment?) → { title, format, excerpt, pdfPages, indexStatus }`；`indexStatus` 直接取自当前扫描集的 `DocumentInfo`，excerpt 空 + pending/indexing 时前端显示「索引中…」 |
