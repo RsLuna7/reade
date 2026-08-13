@@ -5811,6 +5811,73 @@ button.links-panel-entry:focus-visible {
   overflow-wrap: anywhere;
 }
 
+/* 回顾挖空闪卡(plan-cloze-review §3.2):档位切换 + 胶囊 + 答案。 */
+.review-mode-switch {
+  display: flex;
+  width: min(560px, 100%);
+  gap: 4px;
+  justify-content: flex-end;
+}
+
+.review-mode-switch button {
+  padding: 3px 12px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.review-mode-switch button:hover {
+  color: var(--ink-soft);
+  background: var(--chrome);
+}
+
+.review-mode-switch button[aria-checked="true"] {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.review-cloze-blank {
+  display: inline-block;
+  margin: 0 2px;
+  padding: 0 14px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 999px;
+  color: var(--muted);
+  background: var(--chrome);
+  font: inherit;
+  font-size: 12.5px;
+  line-height: 2;
+  vertical-align: baseline;
+  cursor: pointer;
+}
+
+.review-cloze-blank:hover {
+  color: var(--ink-soft);
+  border-color: var(--accent);
+}
+
+.review-cloze-blank:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.review-cloze-answer {
+  padding: 0 3px;
+  border-radius: 4px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.review-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .review-note {
   margin: 0;
   padding: 8px 12px;

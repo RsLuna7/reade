@@ -11,6 +11,7 @@ import {
   type DocumentInfo,
   type ReviewQueueItem,
 } from "../lib/backend";
+import { clozeModeForCard } from "../lib/clozeCard";
 import { localDayKey } from "../lib/readingStats";
 import { useReaderStore } from "../store/useReaderStore";
 
@@ -102,6 +103,7 @@ beforeEach(() => {
   useReaderStore.setState({
     documents: [doc("guide.md", "指南"), doc("other.md", "其他文档")],
     motionLevel: "off",
+    reviewCardMode: "excerpt",
   });
 });
 
@@ -260,6 +262,152 @@ describe("ReviewView keyboard (R2)", () => {
     await waitFor(() => {
       expect(recordReviewOutcome).toHaveBeenCalledTimes(1);
     });
+  });
+});
+
+describe("ReviewView 挖空闪卡 (plan-cloze-review)", () => {
+  // top-1 片段 = 最长 run「左侧文档树负责建立位置感」(12 字)。
+  const CLOZE_TEXT = "左侧文档树负责建立位置感，中间只承担阅读，右侧目录负责长文导航";
+  const CLOZE_BLANK = "左侧文档树负责建立位置感";
+
+  function clozeItem(id: string, overrides: Partial<Annotation> = {}): ReviewQueueItem {
+    return queueItem(id, { selectedText: CLOZE_TEXT, title: CLOZE_TEXT, ...overrides });
+  }
+
+  it("masks the blank, locks grading until reveal, and resets per card", async () => {
+    useReaderStore.setState({ reviewCardMode: "cloze" });
+    vi.mocked(listReviewQueue).mockResolvedValue([
+      clozeItem("c-1"),
+      clozeItem("c-2", { relativePath: "other.md" }),
+    ]);
+
+    render(<Harness />);
+
+    // 遮蔽态:胶囊在,被挖空片段不在 DOM 中。
+    expect(await screen.findByRole("button", { name: "点击回想答案" })).toBeInTheDocument();
+    expect(screen.queryByText(new RegExp(CLOZE_BLANK))).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /记住了/ })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /再看一次/ })).toBeDisabled();
+
+    // 揭示前数字键静默忽略(CZ-D7)。
+    fireEvent.keyDown(window, { key: "1" });
+    fireEvent.keyDown(window, { key: "2" });
+    expect(recordReviewOutcome).not.toHaveBeenCalled();
+
+    // 空格 = 揭示;答案以 mark 呈现,评分解锁。
+    fireEvent.keyDown(window, { key: " " });
+    expect(await screen.findByText(CLOZE_BLANK)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "点击回想答案" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /记住了/ })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "1" });
+    await waitFor(() => {
+      expect(recordReviewOutcome).toHaveBeenCalledTimes(1);
+    });
+
+    // 第二张卡回到遮蔽态。
+    expect(await screen.findByRole("button", { name: "点击回想答案" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /记住了/ })).toBeDisabled();
+  });
+
+  it("reveals on capsule click and keeps 打开原文 available while masked", async () => {
+    useReaderStore.setState({ reviewCardMode: "cloze" });
+    const onOpenAnnotation = vi.fn();
+    vi.mocked(listReviewQueue).mockResolvedValue([clozeItem("c-1")]);
+
+    render(<Harness onOpenAnnotation={onOpenAnnotation} />);
+    const capsule = await screen.findByRole("button", { name: "点击回想答案" });
+
+    // 遮蔽态不锁「打开原文」(CZ-D7)。
+    fireEvent.keyDown(window, { key: "Enter" });
+    expect(onOpenAnnotation).toHaveBeenCalledWith(expect.objectContaining({ id: "c-1" }));
+
+    fireEvent.click(capsule);
+    expect(await screen.findByText(CLOZE_BLANK)).toBeInTheDocument();
+  });
+
+  it("falls back to the excerpt rendering when the excerpt cannot be blanked", async () => {
+    useReaderStore.setState({ reviewCardMode: "cloze" });
+    // 摘录过短(<12 字):按摘录档渲染,评分立即可用。
+    vi.mocked(listReviewQueue).mockResolvedValue([queueItem("short-1")]);
+
+    render(<Harness />);
+
+    expect(await screen.findByText("第一段摘录")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "点击回想答案" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /记住了/ })).toBeEnabled();
+
+    fireEvent.keyDown(window, { key: "1" });
+    await waitFor(() => {
+      expect(recordReviewOutcome).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  it("switches modes from the radiogroup and persists the preference", async () => {
+    vi.mocked(listReviewQueue).mockResolvedValue([clozeItem("c-1")]);
+
+    render(<Harness />);
+
+    // 默认摘录档:全文可见,与现状一致(CZ-D3)。
+    expect(await screen.findByText(CLOZE_TEXT)).toBeInTheDocument();
+    const excerptRadio = screen.getByRole("radio", { name: "摘录" });
+    expect(excerptRadio).toHaveAttribute("aria-checked", "true");
+
+    // 切到挖空档即时生效。
+    fireEvent.click(screen.getByRole("radio", { name: "挖空" }));
+    expect(await screen.findByRole("button", { name: "点击回想答案" })).toBeInTheDocument();
+    expect(screen.queryByText(CLOZE_TEXT)).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: "挖空" })).toHaveAttribute("aria-checked", "true");
+    expect(useReaderStore.getState().reviewCardMode).toBe("cloze");
+
+    // 切回摘录档恢复原渲染。
+    fireEvent.click(screen.getByRole("radio", { name: "摘录" }));
+    expect(await screen.findByText(CLOZE_TEXT)).toBeInTheDocument();
+
+    // 揭示过的卡在档位往返后回到遮蔽态(CZ-D10)。
+    fireEvent.click(screen.getByRole("radio", { name: "挖空" }));
+    fireEvent.click(await screen.findByRole("button", { name: "点击回想答案" }));
+    expect(await screen.findByText(CLOZE_BLANK)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("radio", { name: "摘录" }));
+    fireEvent.click(screen.getByRole("radio", { name: "挖空" }));
+    expect(await screen.findByRole("button", { name: "点击回想答案" })).toBeInTheDocument();
+  });
+
+  it("renders mixed mode per card according to the deterministic hash (CZ-D6)", async () => {
+    useReaderStore.setState({ reviewCardMode: "mixed" });
+    const pickId = (verdict: "cloze" | "excerpt"): string => {
+      for (let index = 0; index < 200; index += 1) {
+        const id = `mix-${index}`;
+        if (clozeModeForCard(id, "mixed") === verdict) return id;
+      }
+      throw new Error(`no ${verdict} id found`);
+    };
+
+    const { unmount } = render(
+      <Harness
+        initial={{
+          dayKey: localDayKey(NOW),
+          queue: [clozeItem(pickId("cloze"))],
+          cursor: 0,
+          reviewedCount: 0,
+        }}
+      />,
+    );
+    expect(await screen.findByRole("button", { name: "点击回想答案" })).toBeInTheDocument();
+    unmount();
+
+    render(
+      <Harness
+        initial={{
+          dayKey: localDayKey(NOW),
+          queue: [clozeItem(pickId("excerpt"))],
+          cursor: 0,
+          reviewedCount: 0,
+        }}
+      />,
+    );
+    expect(await screen.findByText(CLOZE_TEXT)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "点击回想答案" })).not.toBeInTheDocument();
   });
 });
 

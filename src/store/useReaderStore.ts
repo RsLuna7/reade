@@ -21,6 +21,7 @@ import {
   normalizeAnnotationColorName,
   normalizeAnnotationColorNames,
 } from "../lib/annotations";
+import { normalizeReviewCardMode, type ReviewCardMode } from "../lib/clozeCard";
 import type { ReaderMotionLevel } from "../lib/motion";
 import {
   EMPTY_NAV_HISTORY,
@@ -207,6 +208,7 @@ type PersistedReaderPreferences = Partial<
     | "showScrollMap"
     | "ttsRate"
     | "ttsVoiceName"
+    | "reviewCardMode"
   >
 >;
 
@@ -258,6 +260,10 @@ export function migrateReaderPreferences(
       : {}),
     ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
     ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
+    // 回顾卡片渲染档(plan-cloze-review CZ-D9):坏值回落默认摘录档。
+    ...(typeof state.reviewCardMode === "string"
+      ? { reviewCardMode: normalizeReviewCardMode(state.reviewCardMode) }
+      : {}),
   };
 }
 
@@ -306,6 +312,11 @@ interface ReaderState {
   /** Preferred read-aloud voice by name; null = auto pick. Persisted. */
   ttsVoiceName: string | null;
   /**
+   * 每日回顾卡片渲染档(plan-cloze-review §3.2):摘录/挖空/混合。
+   * 默认摘录保持现状零惊扰(CZ-D3);持久化、双端同构。
+   */
+  reviewCardMode: ReviewCardMode;
+  /**
    * 阅读回退栈(plan-nav-history):跳转历史的后退/前进双栈。
    * Session-only,不进 persisted preferences;切换书库时清空。
    */
@@ -339,6 +350,7 @@ interface ReaderState {
   setDailyGoalMinutes: (minutes: number) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string | null) => void;
+  setReviewCardMode: (mode: ReviewCardMode) => void;
   /** 跳转前记录出发点(捕获由 App 完成,见 plan-nav-history NH-D1)。 */
   recordNavLocation: (location: NavLocation) => void;
   /** 后退/前进:弹出目标并把当前位置压入对侧栈;返回 null 表示栈空。 */
@@ -420,6 +432,7 @@ export const useReaderStore = create<ReaderState>()(
         dailyGoalMinutes: 0,
         ttsRate: TTS_DEFAULT_RATE,
         ttsVoiceName: null,
+        reviewCardMode: "excerpt",
         navHistory: EMPTY_NAV_HISTORY,
         loading: false,
         error: null,
@@ -653,6 +666,12 @@ export const useReaderStore = create<ReaderState>()(
           set({ ttsVoiceName: typeof name === "string" && name ? name : null });
         },
 
+        setReviewCardMode: (mode) => {
+          set((state) => ({
+            reviewCardMode: normalizeReviewCardMode(mode, state.reviewCardMode),
+          }));
+        },
+
         recordNavLocation: (location) => {
           set((state) => ({ navHistory: pushNavLocation(state.navHistory, location) }));
         },
@@ -712,6 +731,7 @@ export const useReaderStore = create<ReaderState>()(
         showScrollMap: state.showScrollMap,
         ttsRate: state.ttsRate,
         ttsVoiceName: state.ttsVoiceName,
+        reviewCardMode: state.reviewCardMode,
       }),
       migrate: migrateReaderPreferences,
       merge: (persisted, current) => {
@@ -771,6 +791,10 @@ export const useReaderStore = create<ReaderState>()(
             typeof preferences.ttsVoiceName === "string" && preferences.ttsVoiceName
               ? preferences.ttsVoiceName
               : current.ttsVoiceName,
+          reviewCardMode: normalizeReviewCardMode(
+            preferences.reviewCardMode,
+            current.reviewCardMode,
+          ),
         };
       },
     },

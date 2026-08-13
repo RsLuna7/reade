@@ -558,6 +558,53 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().ttsVoiceName).toBeNull();
   });
 
+  it("persists the review card mode and defaults it to excerpt (plan-cloze-review CZ-D9)", async () => {
+    expect(useReaderStore.getState().reviewCardMode).toBe("excerpt");
+
+    useReaderStore.getState().setReviewCardMode("cloze");
+    expect(useReaderStore.getState().reviewCardMode).toBe("cloze");
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ reviewCardMode: "cloze" });
+
+    // 持久化的档位在下次启动 rehydrate 后保留。
+    useReaderStore.setState({ reviewCardMode: "excerpt" });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { reviewCardMode: "mixed" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().reviewCardMode).toBe("mixed");
+  });
+
+  it("collapses corrupt review card modes to the excerpt default", async () => {
+    useReaderStore.setState({ reviewCardMode: "excerpt" });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { reviewCardMode: "flashcard" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().reviewCardMode).toBe("excerpt");
+
+    // setter 对坏值保持原档不变。
+    useReaderStore.getState().setReviewCardMode("cloze");
+    useReaderStore.getState().setReviewCardMode("bogus" as "cloze");
+    expect(useReaderStore.getState().reviewCardMode).toBe("cloze");
+
+    // 旧持久化数据没有该键时不产出字段。
+    expect(
+      migrateReaderPreferences({ theme: "paper-light" }, READER_PREFERENCES_VERSION),
+    ).not.toHaveProperty("reviewCardMode");
+    useReaderStore.setState({ reviewCardMode: "excerpt" });
+  });
+
   it("switches the workspace view and normalizes unknown values", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
     useReaderStore.getState().setActiveView("stats");

@@ -9,6 +9,13 @@ import {
 import { annotationKindLabel } from "../lib/annotations";
 import { annotationPositionLabel } from "../lib/annotationExport";
 import {
+  buildClozeCard,
+  clozeBlankWidthEm,
+  clozeModeForCard,
+  type ReviewCardMode,
+} from "../lib/clozeCard";
+import { runMotion } from "../lib/motion";
+import {
   DAILY_REVIEW_LIMIT,
   applyReviewOutcome,
   buildReviewQueue,
@@ -57,6 +64,12 @@ function formatDueDate(ms: number): string {
   return new Intl.DateTimeFormat("zh-CN", { month: "long", day: "numeric" }).format(date);
 }
 
+const CARD_MODE_OPTIONS: ReadonlyArray<{ value: ReviewCardMode; label: string }> = [
+  { value: "excerpt", label: "摘录" },
+  { value: "cloze", label: "挖空" },
+  { value: "mixed", label: "混合" },
+];
+
 export function ReviewView({
   session,
   onSessionChange,
@@ -65,13 +78,23 @@ export function ReviewView({
   now = Date.now,
 }: ReviewViewProps) {
   const documents = useReaderStore((state) => state.documents);
+  const motionLevel = useReaderStore((state) => state.motionLevel);
+  const reviewCardMode = useReaderStore((state) => state.reviewCardMode);
+  const setReviewCardMode = useReaderStore((state) => state.setReviewCardMode);
   // 同日会话直接续接,否则(首次进入/跨日)在挂载时重建队列。
   const [loading, setLoading] = useState(
     () => !(session && session.dayKey === localDayKey(now())),
   );
   const [loadError, setLoadError] = useState<string | null>(null);
   const [nextDueAt, setNextDueAt] = useState<number | null>(null);
+  /**
+   * 挖空档的揭示态(plan-cloze-review §3.2):记录"已揭示的卡片键"而非
+   * 布尔值,换卡/切档时键不再匹配即自动回到遮蔽态——避免 effect 重置
+   * 造成新卡答案闪现一帧。
+   */
+  const [revealedKey, setRevealedKey] = useState<string | null>(null);
   const busyRef = useRef(false);
+  const answerRef = useRef<HTMLElement | null>(null);
 
   const documentTitles = useMemo(
     () => new Map(documents.map((document) => [document.relativePath, document.title])),
@@ -96,6 +119,8 @@ export function ReviewView({
         } else {
           setNextDueAt(null);
         }
+        // 新一批从遮蔽态开始:防写回失败的同卡在新批 cursor 0 上复用旧揭示键。
+        setRevealedKey(null);
         onSessionChange({
           dayKey: localDayKey(nowMs),
           queue,
@@ -120,6 +145,38 @@ export function ReviewView({
 
   const currentItem =
     session && session.cursor < session.queue.length ? session.queue[session.cursor] : null;
+
+  /**
+   * 当前卡的挖空构造(CZ-D4:每次确定性重算,零持久化):档位对该卡
+   * 不生效或摘录不可挖空(CZ-D5)时为 null,按摘录档渲染。
+   */
+  const clozeCard = useMemo(() => {
+    if (!currentItem) return null;
+    if (clozeModeForCard(currentItem.annotation.id, reviewCardMode) !== "cloze") return null;
+    return buildClozeCard(currentItem.annotation.selectedText ?? "");
+  }, [currentItem, reviewCardMode]);
+
+  const cardKey =
+    session && currentItem
+      ? `${session.cursor}:${currentItem.annotation.id}:${reviewCardMode}`
+      : null;
+  const revealed = cardKey !== null && revealedKey === cardKey;
+  // 揭示前评分锁(CZ-D2):保证"先想后看"。
+  const gradingLocked = clozeCard !== null && !revealed;
+
+  const reveal = useCallback(() => setRevealedKey(cardKey), [cardKey]);
+
+  // 揭示动效(subtle 档淡入;off 档由 runMotion 内部跳过)。
+  useEffect(() => {
+    if (!revealed || !answerRef.current) return;
+    runMotion(
+      answerRef.current,
+      "cloze-reveal",
+      [{ opacity: 0 }, { opacity: 1 }],
+      { duration: motionLevel === "subtle" ? 160 : 240, easing: "ease-out" },
+      motionLevel,
+    );
+  }, [motionLevel, revealed]);
 
   const grade = useCallback(
     async (outcome: ReviewOutcome) => {
@@ -174,9 +231,15 @@ export function ReviewView({
       const onButton = target?.tagName === "BUTTON";
       if (event.key === "1" || (event.key === " " && !onButton)) {
         event.preventDefault();
+        // 揭示前评分锁(CZ-D7):空格先揭示,数字键静默忽略。
+        if (gradingLocked) {
+          if (event.key === " ") reveal();
+          return;
+        }
         void grade("remembered");
       } else if (event.key === "2") {
         event.preventDefault();
+        if (gradingLocked) return;
         void grade("again");
       } else if (event.key === "Enter" && !onButton) {
         event.preventDefault();
@@ -185,7 +248,7 @@ export function ReviewView({
     };
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
-  }, [currentItem, grade, onExit, onOpenAnnotation]);
+  }, [currentItem, grade, gradingLocked, onExit, onOpenAnnotation, reveal]);
 
   const queueLength = session?.queue.length ?? 0;
   const reviewedCount = session?.reviewedCount ?? 0;
@@ -223,6 +286,23 @@ export function ReviewView({
       .join(" · ");
     body = (
       <>
+        <div className="review-mode-switch" role="radiogroup" aria-label="回顾卡片样式">
+          {CARD_MODE_OPTIONS.map((option) => (
+            <button
+              key={option.value}
+              type="button"
+              role="radio"
+              aria-checked={reviewCardMode === option.value}
+              onClick={() => {
+                // 切档重置揭示态(CZ-D10):切回挖空档也从遮蔽开始。
+                setRevealedKey(null);
+                setReviewCardMode(option.value);
+              }}
+            >
+              {option.label}
+            </button>
+          ))}
+        </div>
         <article className="review-card" aria-label="回顾卡片">
           <span
             className={`annotation-list-kind annotation-list-kind--${annotation.kind}${
@@ -231,7 +311,35 @@ export function ReviewView({
           >
             {annotationKindLabel(annotation.kind)}
           </span>
-          <blockquote className="review-excerpt">{annotation.selectedText}</blockquote>
+          <blockquote className="review-excerpt">
+            {clozeCard ? (
+              revealed ? (
+                <>
+                  {clozeCard.prefix}
+                  <mark ref={answerRef} className="review-cloze-answer">
+                    {clozeCard.blank}
+                  </mark>
+                  {clozeCard.suffix}
+                </>
+              ) : (
+                <>
+                  {clozeCard.prefix}
+                  <button
+                    type="button"
+                    className="review-cloze-blank"
+                    style={{ minWidth: `${clozeBlankWidthEm(clozeCard.blank)}em` }}
+                    title="揭示被挖空的片段（空格）"
+                    onClick={reveal}
+                  >
+                    点击回想答案
+                  </button>
+                  {clozeCard.suffix}
+                </>
+              )
+            ) : (
+              annotation.selectedText
+            )}
+          </blockquote>
           {annotation.note ? <p className="review-note">{annotation.note}</p> : null}
           <p className="review-source">{source}</p>
         </article>
@@ -240,11 +348,18 @@ export function ReviewView({
             type="button"
             className="review-primary"
             onClick={() => void grade("remembered")}
+            disabled={gradingLocked}
+            title={gradingLocked ? "先回想，揭示答案后再评分" : undefined}
           >
             记住了
             <kbd aria-hidden="true">1</kbd>
           </button>
-          <button type="button" onClick={() => void grade("again")}>
+          <button
+            type="button"
+            onClick={() => void grade("again")}
+            disabled={gradingLocked}
+            title={gradingLocked ? "先回想，揭示答案后再评分" : undefined}
+          >
             再看一次
             <kbd aria-hidden="true">2</kbd>
           </button>

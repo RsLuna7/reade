@@ -1,7 +1,7 @@
 # 方案草案：回顾挖空闪卡（cloze）
 
 - 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 状态：**定稿（基线已复核，决策见 §6 与 §8）**
 - 定位：每日回顾新增"主动回忆"档：把摘录中最显著的片段挖空显示，先回想再点开揭示，然后照常评分。**不改回顾调度算法与数据结构**——cloze 只是卡片的另一种渲染档。
 - 关联：挖空片段选择复用相关段落方案已落地的 `extractRelatedFragments` 显著性启发（`src/lib/relatedFragments.ts`）；回顾流程/调度/持久化沿 `reviewScheduler.ts` + `ReviewView.tsx` 现状。
 
@@ -93,3 +93,17 @@ export function clozeModeForCard(annotationId: string, mode: "excerpt" | "cloze"
 - top-1 片段是"最长 run 切片"而非语义关键词：挖掉的可能是长而平庸的短语——接受为词面启发的边界；混合档与摘录档提供逃生门，文案不承诺"考点提取"。
 - 空白归一后映射回原文区间的实现要小心 CJK/多空格边界：契约用例表必须含全角空格、换行、连续空白的映射用例。
 - 揭示门控对"只想快速过一遍"的用户增加点击成本：档位是 opt-in 的，默认档不变。
+
+## 8. 定稿补记（2026-08-13 复核）
+
+基线复核结论：§1 的全部事实仍成立（行号以当日 HEAD `81aaf81` 为准；ReviewView 卡片/键盘/评分结构未变）。一处实现简化：**`extractRelatedFragments` 的片段是摘录的字面子串**（切 run 只在分隔符处断开、不改写字符，去重保留首次出现的原始大小写，且标注摘录上限 2,000 = 片段抽取上限 2,000），因此草案 §3.1 的"大小写不敏感、空白归一后映射回原文区间"不需要——`excerpt.indexOf(top)` 即为首次出现区间，保留 `indexOf` 未命中 → 回落摘录档的防御分支。落定与修正如下：
+
+| # | 决策 | 结论 |
+|---|------|------|
+| CZ-D1..D4 | 均按推荐执行 | top-1 片段 / 揭示前禁用评分 / 默认摘录档 / 每次重算不落库 |
+| CZ-D5（新） | 回落判定的精确规则 | 摘录 trim 后 <12 code point、无可用片段、片段未命中（防御）、或挖空后前后文合并的**非空白** code point <6 → `buildClozeCard` 返回 null，按摘录档渲染 |
+| CZ-D6（新） | mixed 的确定性映射 | `FNV-1a(annotationId)`（reviewScheduler 的 seededRank 同族实现）为偶数 → 挖空，奇数 → 摘录；同卡永远同档 |
+| CZ-D7（新） | 键盘契约 | 揭示前：`空格` = 揭示（焦点在按钮上时交给原生激活，防双触发），`1`/`2` 静默忽略，`Enter` 打开原文、`Esc` 退出不变；揭示后完全恢复既有键位（`1`/`空格` = 记住了、`2` = 再看一次）。「不再回顾」不属评分，不受门控 |
+| CZ-D8（新） | 胶囊宽度近似 | 纯展示启发 `clozeBlankWidthEm`：CJK（code point >0x2E7F）计 1em、其余计 0.55em，钳制 2.5–16em；不承诺像素级等宽 |
+| CZ-D9（新） | persist 落点 | store 新增 `reviewCardMode`（"excerpt"/"cloze"/"mixed"，默认 "excerpt"），进 partialize/migrate/merge，坏值经 `normalizeReviewCardMode` 回落默认；不进 `resetReaderPreferences`（与 dailyGoalMinutes/ttsRate 同类：非排版偏好） |
+| CZ-D10（新） | 档位控件位置 | 卡片存在时才显示（完成页/空态/加载态不显示），置于卡片上方的 `radiogroup`，`aria-label="回顾卡片样式"`；切换即时对当前卡生效并重置揭示态 |
