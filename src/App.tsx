@@ -1732,6 +1732,17 @@ function App() {
   const readerRef = useRef<HTMLDivElement>(null);
   const articleRef = useRef<HTMLDivElement>(null);
   const progressBarRef = useRef<HTMLDivElement>(null);
+  const topbarRef = useRef<HTMLElement>(null);
+
+  // 滚动边缘浮起(scroll edge effect):顶栏静止时与纸面无缝,正文滚动后
+  // 浮起。与进度条同一模式——直写 DOM dataset,不进 React state,避免
+  // 滚动高频触发整树重渲染;值未变化时不碰 DOM。
+  const syncTopbarElevation = useCallback((scrollTop: number) => {
+    const topbar = topbarRef.current;
+    if (!topbar) return;
+    const next = scrollTop > 8 ? "true" : "false";
+    if (topbar.dataset.scrolled !== next) topbar.dataset.scrolled = next;
+  }, []);
   const searchRef = useRef<HTMLInputElement>(null);
   const statusDetailRef = useRef<HTMLSpanElement>(null);
   const retryButtonRef = useRef<HTMLButtonElement>(null);
@@ -4918,6 +4929,8 @@ function App() {
       reader.scrollLeft = 0;
       reader.scrollTop = 0;
       progressBarRef.current?.style.setProperty("--reading-progress", "0");
+      // 竖排横轴滚动不参与顶栏浮起,固定回无缝静止态。
+      syncTopbarElevation(0);
       mobileScrollAnchor.current = 0;
       mobileScrollSuppressUntil.current = performance.now() + 1200;
       setMobileToolbarHidden(false);
@@ -4952,12 +4965,15 @@ function App() {
       "--reading-progress",
       String(Math.min(1, Math.max(0, value / 100))),
     );
+    // 位置恢复后立即对齐顶栏浮起态,不等首个 scroll 事件,避免切换文档
+    // 时顶栏状态闪烁或残留。
+    syncTopbarElevation(reader.scrollTop);
     // 底部工具条以恢复后的位置重新锚定并回到可见态:位置恢复是程序化
     // 滚动(smooth 滚动会展开成一串下滑帧),窗口期内不做方向判定。
     mobileScrollAnchor.current = reader.scrollTop;
     mobileScrollSuppressUntil.current = performance.now() + 1200;
     setMobileToolbarHidden(false);
-  }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath, verticalActive]);
+  }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath, syncTopbarElevation, verticalActive]);
 
   useEffect(() => {
     if (!IS_WEB_RUNTIME || !currentPath) return;
@@ -5079,6 +5095,7 @@ function App() {
         return;
       }
       if (currentPath) scrollPositions.current.set(currentPath, reader.scrollTop);
+      syncTopbarElevation(reader.scrollTop);
 
       const range = reader.scrollHeight - reader.clientHeight;
       const value = range <= 0 ? 0 : Math.min(100, (reader.scrollTop / range) * 100);
@@ -5137,7 +5154,7 @@ function App() {
         return { path: currentPath, id: nextActive };
       });
     });
-  }, [currentContent?.kind, currentPath, flushPendingPosition, mobileReadingContext, verticalActive]);
+  }, [currentContent?.kind, currentPath, flushPendingPosition, mobileReadingContext, syncTopbarElevation, verticalActive]);
 
   useEffect(
     () => () => {
@@ -5145,6 +5162,12 @@ function App() {
     },
     [],
   );
+
+  useEffect(() => {
+    // 关闭文档(阅读容器随之卸载)后不会再有 scroll 事件,主动把顶栏
+    // 收回无缝静止态,避免残留浮起阴影。
+    if (!currentContent) syncTopbarElevation(0);
+  }, [currentContent, syncTopbarElevation]);
 
   const resolveImageSrc = useCallback(
     (source: string) => {
@@ -5506,7 +5529,7 @@ function App() {
       />
 
       <main className="workspace">
-        <header className="topbar">
+        <header className="topbar" ref={topbarRef}>
           <div
             className="breadcrumb"
             aria-label="当前文档路径"

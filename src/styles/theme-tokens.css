@@ -2,8 +2,9 @@
   Reade semantic color tokens.
   Structure: `:root` carries the paper-light defaults (defends against a
   missing data-theme attribute); every registered theme then has one full
-  `:root[data-theme="${series}-${mode}"]` block with all 17 theme tokens.
-  The 17 token names are the shared contract across every series — new series
+  `:root[data-theme="${series}-${mode}"]` block with all 19 theme tokens
+  (17 colors + the --shadow-color / --shadow-edge pair).
+  The 19 token names are the shared contract across every series — new series
   must not invent new token names.
   Radix Colors scale mapping (guide for adding themes):
     1–2 app / paper backgrounds     → --paper, --theme-color
@@ -36,6 +37,19 @@
   --teal-soft: #e2ebea;
   --selection: rgba(175, 76, 56, 0.2);
   --shadow: 0 18px 55px rgba(51, 43, 31, 0.11);
+  /*
+    滚动边缘浮起(顶栏 data-scrolled)专用的分层染色阴影,与弹层用的单层
+    --shadow 互不干扰。--shadow-color 是 hsl 三元组,色相沿用本主题
+    --shadow 的暖/冷倾向,免得贴边阴影糊成一片脏灰;--shadow-edge 按
+    1/2/4/8/16px 递增出五层,只向下投影,近处实、远处虚。
+  */
+  --shadow-color: 36deg 20% 34%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.05),
+    0 2px 2px hsl(var(--shadow-color) / 0.045),
+    0 4px 4px hsl(var(--shadow-color) / 0.04),
+    0 8px 8px hsl(var(--shadow-color) / 0.035),
+    0 16px 16px hsl(var(--shadow-color) / 0.03);
   /* Always-dark code chrome (PDF pages also stay white — not theme-driven). */
   --code-bg: #202626;
   --code-chrome: #1a1f1f;
@@ -74,6 +88,13 @@
   --teal-soft: #e2ebea;
   --selection: rgba(175, 76, 56, 0.2);
   --shadow: 0 18px 55px rgba(51, 43, 31, 0.11);
+  --shadow-color: 36deg 20% 34%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.05),
+    0 2px 2px hsl(var(--shadow-color) / 0.045),
+    0 4px 4px hsl(var(--shadow-color) / 0.04),
+    0 8px 8px hsl(var(--shadow-color) / 0.035),
+    0 16px 16px hsl(var(--shadow-color) / 0.03);
 }
 
 /*
@@ -99,6 +120,13 @@
   --teal-soft: #253536;
   --selection: rgba(224, 133, 108, 0.3);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.32);
+  --shadow-color: 0deg 0% 4%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.1),
+    0 2px 2px hsl(var(--shadow-color) / 0.09),
+    0 4px 4px hsl(var(--shadow-color) / 0.08),
+    0 8px 8px hsl(var(--shadow-color) / 0.07),
+    0 16px 16px hsl(var(--shadow-color) / 0.06);
 }
 
 /*
@@ -125,6 +153,13 @@
   --teal-soft: #def0ee;
   --selection: rgba(32, 94, 166, 0.18);
   --shadow: 0 18px 55px rgba(28, 27, 26, 0.12);
+  --shadow-color: 30deg 16% 30%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.05),
+    0 2px 2px hsl(var(--shadow-color) / 0.045),
+    0 4px 4px hsl(var(--shadow-color) / 0.04),
+    0 8px 8px hsl(var(--shadow-color) / 0.035),
+    0 16px 16px hsl(var(--shadow-color) / 0.03);
 }
 
 :root[data-theme="ink-dark"] {
@@ -146,6 +181,13 @@
   --teal-soft: #20302f;
   --selection: rgba(67, 133, 190, 0.3);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  --shadow-color: 30deg 8% 4%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.1),
+    0 2px 2px hsl(var(--shadow-color) / 0.09),
+    0 4px 4px hsl(var(--shadow-color) / 0.08),
+    0 8px 8px hsl(var(--shadow-color) / 0.07),
+    0 16px 16px hsl(var(--shadow-color) / 0.06);
 }
 
 /*
@@ -172,6 +214,13 @@
   --teal-soft: #e2edee;
   --selection: rgba(59, 111, 212, 0.16);
   --shadow: 0 14px 40px rgba(23, 28, 36, 0.08);
+  --shadow-color: 216deg 18% 32%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.05),
+    0 2px 2px hsl(var(--shadow-color) / 0.045),
+    0 4px 4px hsl(var(--shadow-color) / 0.04),
+    0 8px 8px hsl(var(--shadow-color) / 0.035),
+    0 16px 16px hsl(var(--shadow-color) / 0.03);
 }
 
 :root[data-theme="mist-dark"] {
@@ -193,6 +242,13 @@
   --teal-soft: #223336;
   --selection: rgba(110, 162, 245, 0.28);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+  --shadow-color: 220deg 10% 4%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.1),
+    0 2px 2px hsl(var(--shadow-color) / 0.09),
+    0 4px 4px hsl(var(--shadow-color) / 0.08),
+    0 8px 8px hsl(var(--shadow-color) / 0.07),
+    0 16px 16px hsl(var(--shadow-color) / 0.06);
 }
 
 /*
@@ -221,6 +277,13 @@
   --teal-soft: #d9eae2;
   --selection: rgba(138, 97, 56, 0.2);
   --shadow: 0 18px 55px rgba(35, 48, 40, 0.12);
+  --shadow-color: 143deg 16% 30%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.05),
+    0 2px 2px hsl(var(--shadow-color) / 0.045),
+    0 4px 4px hsl(var(--shadow-color) / 0.04),
+    0 8px 8px hsl(var(--shadow-color) / 0.035),
+    0 16px 16px hsl(var(--shadow-color) / 0.03);
 }
 
 :root[data-theme="celadon-dark"] {
@@ -242,4 +305,11 @@
   --teal-soft: #1e322d;
   --selection: rgba(198, 156, 102, 0.3);
   --shadow: 0 20px 60px rgba(0, 0, 0, 0.34);
+  --shadow-color: 160deg 10% 4%;
+  --shadow-edge:
+    0 1px 1px hsl(var(--shadow-color) / 0.1),
+    0 2px 2px hsl(var(--shadow-color) / 0.09),
+    0 4px 4px hsl(var(--shadow-color) / 0.08),
+    0 8px 8px hsl(var(--shadow-color) / 0.07),
+    0 16px 16px hsl(var(--shadow-color) / 0.06);
 }

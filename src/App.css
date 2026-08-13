@@ -1157,9 +1157,20 @@ a:focus-visible {
   gap: 16px;
   /* 右内边距 = 工具条到窗口右缘的间距(工具条在流内,不再自行绝对定位)。 */
   padding: 0 17px 0 var(--reader-gutter-inline);
-  border-bottom: 1px solid var(--line);
-  background: color-mix(in srgb, var(--paper) 93%, transparent);
+  /* 滚动边缘浮起:静止时与纸面完全无缝(无分割线、无影、不透明底),
+     正文滚动后由 data-scrolled 切换到磨砂浮起态;原 1px 边线的分界职责
+     移交给 --shadow-edge 分层染色阴影。backdrop-filter 不参与过渡,
+     模糊只在浮起态存在,静止态不占 GPU。 */
+  background: var(--paper);
+  transition:
+    background-color var(--motion-fast) var(--motion-ease),
+    box-shadow var(--motion-fast) var(--motion-ease);
+}
+
+.topbar[data-scrolled="true"] {
+  background: color-mix(in srgb, var(--paper) 88%, transparent);
   backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-edge);
 }
 
 .breadcrumb {
@@ -1256,7 +1267,8 @@ a:focus-visible {
 .reading-progress {
   position: absolute;
   right: 0;
-  bottom: -1px;
+  /* 顶栏无缝化后没有 1px 边线可压,进度条贴顶栏底缘即可。 */
+  bottom: 0;
   left: 0;
   height: 2px;
   overflow: hidden;

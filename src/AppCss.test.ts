@@ -26,6 +26,8 @@ const REQUIRED_TOKENS = [
   "--teal-soft",
   "--selection",
   "--shadow",
+  "--shadow-color",
+  "--shadow-edge",
   "--code-bg",
   "--code-chrome",
 ] as const;
@@ -49,6 +51,16 @@ describe("application CSS isolation", () => {
     expect(css).toContain(':root[data-motion="off"]');
     expect(css).toContain(':root[data-motion="subtle"]');
     expect(css).toContain(':root[data-motion="full"]');
+  });
+
+  it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
+    // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
+    // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。
+    expect(css).not.toMatch(/\.topbar\s*\{[^}]*border-bottom/s);
+    expect(css).toMatch(
+      /\.topbar\[data-scrolled="true"\]\s*\{[^}]*box-shadow:\s*var\(--shadow-edge\)/s,
+    );
+    expect(css).toMatch(/\.topbar\[data-scrolled="true"\]\s*\{[^}]*backdrop-filter/s);
   });
 
   it("keeps reading-frame overlays from painting over top bar popovers", () => {
@@ -96,8 +108,9 @@ describe("application CSS isolation", () => {
   });
 
   it("keeps semantic color tokens in theme-tokens.css for every registered theme", () => {
-    // 17 tokens vary per theme; --code-bg/--code-chrome stay dark everywhere
-    // (D3) and live once on :root, never inside a theme block.
+    // 19 tokens vary per theme (17 colors + the --shadow-color/--shadow-edge
+    // pair); --code-bg/--code-chrome stay dark everywhere (D3) and live once
+    // on :root, never inside a theme block.
     const perThemeTokens = REQUIRED_TOKENS.filter(
       (token) => token !== "--code-bg" && token !== "--code-chrome",
     );
