@@ -5688,6 +5688,45 @@ button.links-panel-entry:focus-visible {
   cursor: pointer;
 }
 
+/* 那年今日(plan-on-this-day):组内行复用 home-continue-row 的交互样式。 */
+.home-memory-groups {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.home-memory-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 4px;
+  padding: 0 10px;
+}
+
+.home-memory-label {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
+.home-memory-excerpt {
+  display: -webkit-box;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.6;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.home-memory-doc {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .home-view {
     padding: 14px 14px 40px;

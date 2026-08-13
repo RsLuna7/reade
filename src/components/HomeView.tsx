@@ -1,11 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BookOpen, Clock3, FilePlus2, Flame, Sparkles } from "lucide-react";
+import { BookOpen, CalendarClock, Clock3, FilePlus2, Flame, Sparkles } from "lucide-react";
 import {
   APP_RUNTIME,
+  listAnnotations,
   listReadingSessions,
+  type Annotation,
   type DocumentFormat,
   type ReadingSession,
 } from "../lib/backend";
+import { annotationKindLabel } from "../lib/annotations";
 import {
   buildContinueReading,
   buildFreshDocuments,
@@ -14,8 +17,9 @@ import {
   readHomeBaseline,
   type HomeProgress,
 } from "../lib/homeData";
+import { buildOnThisDay } from "../lib/onThisDay";
 import { listLibraryReadingPositions } from "../lib/readingPositions";
-import { buildSummary, formatDuration } from "../lib/readingStats";
+import { buildSummary, dayKeyToDate, formatDuration } from "../lib/readingStats";
 import { runMotion } from "../lib/motion";
 import { useReaderStore } from "../store/useReaderStore";
 
@@ -49,6 +53,13 @@ export interface HomeViewProps {
    * "剩余约 N 分钟"文案;返回 null(读完/无数据)不渲染。
    */
   remainingEstimate?: (relativePath: string, progress: HomeProgress | null) => string | null;
+  /** 「那年今日」的标注源(plan-on-this-day OD-D9);可注入供测试。 */
+  loadAnnotations?: () => Promise<Annotation[]>;
+  /**
+   * 「那年今日」标注行的跳转链(OD-D8):App 传全库标注同款
+   * `handleSelectLibraryAnnotation`;缺席时回落为仅打开文档。
+   */
+  onOpenAnnotation?: (annotation: Annotation) => void;
 }
 
 function fileName(path: string): string {
@@ -108,6 +119,8 @@ export function HomeView({
   reviewSummary = null,
   loadSessions = listReadingSessions,
   remainingEstimate,
+  loadAnnotations = listAnnotations,
+  onOpenAnnotation,
 }: HomeViewProps) {
   const snapshot = useReaderStore((state) => state.snapshot);
   const documents = useReaderStore((state) => state.documents);
@@ -146,6 +159,28 @@ export function HomeView({
     };
   }, [rootPath, loadSessions]);
 
+  // 「那年今日」的标注源:挂载时一次全库读取(标注中枢同量级,OD-D9),
+  // 失败静默降级为空——主页是行动入口而非诊断页。
+  const [memoryAnnotations, setMemoryAnnotations] = useState<Annotation[] | null>(null);
+  useEffect(() => {
+    if (!rootPath) {
+      setMemoryAnnotations([]);
+      return;
+    }
+    let cancelled = false;
+    setMemoryAnnotations(null);
+    loadAnnotations()
+      .then((data) => {
+        if (!cancelled) setMemoryAnnotations(data);
+      })
+      .catch(() => {
+        if (!cancelled) setMemoryAnnotations([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath, loadAnnotations]);
+
   useEffect(() => {
     if (!rootRef.current) return;
     runMotion(
@@ -181,6 +216,20 @@ export function HomeView({
   const fresh = useMemo(() => buildFreshDocuments(documents, baseline), [baseline, documents]);
   const summary = useMemo(() => buildSummary(loaded, now), [loaded, now]);
 
+  // 那年今日:标注与会话都就绪后才计算;空数组 = 整卡不渲染(OD-D3)。
+  const memoryGroups = useMemo(
+    () =>
+      memoryAnnotations === null || sessions === null
+        ? []
+        : buildOnThisDay({
+            annotations: memoryAnnotations,
+            sessions: loaded,
+            documents,
+            nowMs: now,
+          }),
+    [documents, loaded, memoryAnnotations, now, sessions],
+  );
+
   const goalSeconds = dailyGoalMinutes * 60;
   const goalProgress = goalSeconds > 0 ? summary.todaySeconds / goalSeconds : 0;
   const dateLabel = new Intl.DateTimeFormat("zh-CN", {
@@ -193,6 +242,18 @@ export function HomeView({
     // selectDocument 自动切回阅读面(store 契约)。
     void selectDocument(relativePath);
   };
+
+  const openAnnotation = (annotation: Annotation) => {
+    if (onOpenAnnotation) onOpenAnnotation(annotation);
+    else openDocument(annotation.relativePath);
+  };
+
+  const memoryDateLabel = (dayKey: string) =>
+    new Intl.DateTimeFormat("zh-CN", {
+      year: "numeric",
+      month: "long",
+      day: "numeric",
+    }).format(dayKeyToDate(dayKey));
 
   let cardIndex = 0;
 
@@ -338,6 +399,76 @@ export function HomeView({
             </p>
           )}
         </section>
+
+        {memoryGroups.length > 0 && (
+          <section
+            className="home-card stats-enter"
+            style={staggerStyle(cardIndex++)}
+            aria-label="那年今日"
+          >
+            <div className="home-card-head">
+              <h2>
+                <CalendarClock size={15} aria-hidden="true" />
+                那年今日
+              </h2>
+            </div>
+            <div className="home-memory-groups">
+              {memoryGroups.map((group) => (
+                <div key={group.key} className="home-memory-group">
+                  <div className="home-memory-head">
+                    <span className="home-memory-label">{group.label}的今天</span>
+                    <span className="home-card-hint">{memoryDateLabel(group.dayKey)}</span>
+                  </div>
+                  <ol className="home-continue-list">
+                    {group.entries.map((entry) =>
+                      entry.kind === "annotation" ? (
+                        <li key={`annotation-${entry.annotation.id}`}>
+                          <button
+                            type="button"
+                            className="home-continue-row"
+                            title={`跳回 ${entry.docTitle} 中的这条标注`}
+                            onClick={() => openAnnotation(entry.annotation)}
+                          >
+                            <span className="home-memory-excerpt">{entry.excerpt}</span>
+                            <span className="home-continue-meta">
+                              <span
+                                className={`annotation-list-kind annotation-list-kind--${entry.annotation.kind}${
+                                  entry.annotation.color
+                                    ? ` annotation-list-kind--${entry.annotation.color}`
+                                    : ""
+                                }`}
+                              >
+                                {annotationKindLabel(entry.annotation.kind)}
+                              </span>
+                              <span className="home-memory-doc">{entry.docTitle}</span>
+                            </span>
+                          </button>
+                        </li>
+                      ) : (
+                        <li key={`document-${entry.relativePath}`}>
+                          <button
+                            type="button"
+                            className="home-continue-row"
+                            title={`打开 ${entry.relativePath}`}
+                            onClick={() => openDocument(entry.relativePath)}
+                          >
+                            <span className="home-continue-title">{entry.title}</span>
+                            <span className="home-continue-meta">
+                              <span className="home-format-badge">
+                                {FORMAT_LABELS[entry.format]}
+                              </span>
+                              <span>当天读了 {formatDuration(entry.activeSeconds)}</span>
+                            </span>
+                          </button>
+                        </li>
+                      ),
+                    )}
+                  </ol>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
 
         {reviewSummary && (
           <section

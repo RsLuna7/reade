@@ -4,12 +4,15 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { HomeView, formatRelativeTime } from "./HomeView";
 import {
+  listAnnotations,
   listReadingSessions,
   readDocument,
+  type Annotation,
   type DocumentInfo,
   type ReadingSession,
 } from "../lib/backend";
 import { writeHomeBaseline } from "../lib/homeData";
+import { shiftMonthsClamped } from "../lib/onThisDay";
 import { writeReadingPosition } from "../lib/readingPositions";
 import { DEFAULT_READING_SETTINGS, useReaderStore } from "../store/useReaderStore";
 
@@ -17,6 +20,7 @@ vi.mock("../lib/backend", async () => {
   const actual = await vi.importActual<typeof import("../lib/backend")>("../lib/backend");
   return {
     ...actual,
+    listAnnotations: vi.fn(async () => []),
     listReadingSessions: vi.fn(async () => []),
     readDocument: vi.fn(async (relativePath: string) => ({
       kind: "markdown" as const,
@@ -77,8 +81,45 @@ function setHomeState(documents: DocumentInfo[]): void {
   });
 }
 
+/** 目标日中午的时间戳:一年前 / 一个月前的「今天」。 */
+function onThisDayStamp(deltaMonths: number): number {
+  const target = shiftMonthsClamped(Date.now(), deltaMonths);
+  target.setHours(12, 0, 0, 0);
+  return target.getTime();
+}
+
+function memoryAnnotation(
+  id: string,
+  relativePath: string,
+  createdAt: number,
+  overrides: Partial<Annotation> = {},
+): Annotation {
+  return {
+    id,
+    relativePath,
+    kind: "highlight",
+    color: "yellow",
+    note: null,
+    selectedText: `一年前划下的句子 ${id}`,
+    title: null,
+    locator: {
+      kind: "markdown",
+      quote: `一年前划下的句子 ${id}`,
+      prefix: "",
+      suffix: "",
+      headingId: null,
+    },
+    sortIndex: "M|00000|00000000",
+    createdAt,
+    updatedAt: createdAt,
+    deletedAt: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   localStorage.clear();
+  vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(listReadingSessions).mockReset().mockImplementation(async () => []);
   vi.mocked(readDocument).mockClear();
 });
@@ -233,6 +274,94 @@ describe("HomeView (desktop)", () => {
     expect(
       await screen.findByText("还没有阅读记录，从左侧选择一篇文档开始。"),
     ).toBeInTheDocument();
+  });
+});
+
+describe("HomeView 那年今日 (plan-on-this-day)", () => {
+  it("keeps the card out of the tree when no target day has traces", async () => {
+    setHomeState([doc("guide.md")]);
+    vi.mocked(listAnnotations).mockResolvedValue([
+      // 昨天的标注不属于任何目标日。
+      memoryAnnotation("recent", "guide.md", Date.now() - 24 * HOUR_MS),
+    ]);
+
+    render(<HomeView />);
+
+    await screen.findByRole("region", { name: "继续阅读" });
+    await waitFor(() => {
+      expect(listAnnotations).toHaveBeenCalled();
+    });
+    expect(screen.queryByRole("region", { name: "那年今日" })).not.toBeInTheDocument();
+  });
+
+  it("renders year-ago annotations and hands clicks to the annotation jump chain", async () => {
+    const documents = [doc("guide.md", { title: "入门指南" })];
+    setHomeState(documents);
+    const yearAgo = onThisDayStamp(-12);
+    const target = memoryAnnotation("y-1", "guide.md", yearAgo);
+    vi.mocked(listAnnotations).mockResolvedValue([target]);
+    const onOpenAnnotation = vi.fn();
+
+    render(<HomeView onOpenAnnotation={onOpenAnnotation} />);
+
+    const card = await screen.findByRole("region", { name: "那年今日" });
+    expect(within(card).getByText("一年前的今天")).toBeInTheDocument();
+    expect(within(card).getByText("高亮")).toBeInTheDocument();
+    expect(within(card).getByText("入门指南")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByText("一年前划下的句子 y-1").closest("button")!);
+    expect(onOpenAnnotation).toHaveBeenCalledWith(expect.objectContaining({ id: "y-1" }));
+    // 跳转链由 App 负责,这里不应产生兜底的文档切换。
+    expect(readDocument).not.toHaveBeenCalled();
+  });
+
+  it("falls back to opening the document when no jump chain is provided", async () => {
+    setHomeState([doc("guide.md", { title: "入门指南" })]);
+    vi.mocked(listAnnotations).mockResolvedValue([
+      memoryAnnotation("y-1", "guide.md", onThisDayStamp(-12)),
+    ]);
+
+    render(<HomeView />);
+
+    const card = await screen.findByRole("region", { name: "那年今日" });
+    fireEvent.click(within(card).getByText("一年前划下的句子 y-1").closest("button")!);
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("guide.md");
+    });
+  });
+
+  it("fills the month-ago group with ≥5min documents and opens them on click", async () => {
+    const documents = [doc("guide.md", { title: "入门指南" }), doc("novel.md", { title: "长篇" })];
+    setHomeState(documents);
+    const monthAgoNoon = onThisDayStamp(-1);
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("novel.md", monthAgoNoon, {
+        startedAt: monthAgoNoon - 900 * 1000,
+        endedAt: monthAgoNoon,
+        activeSeconds: 900,
+      }),
+    ]);
+
+    render(<HomeView />);
+
+    const card = await screen.findByRole("region", { name: "那年今日" });
+    expect(within(card).getByText("一个月前的今天")).toBeInTheDocument();
+    expect(within(card).getByText("当天读了 15 分钟")).toBeInTheDocument();
+
+    fireEvent.click(within(card).getByText("长篇").closest("button")!);
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("novel.md");
+    });
+  });
+
+  it("hides the card when the annotation store fails", async () => {
+    setHomeState([doc("guide.md")]);
+    vi.mocked(listAnnotations).mockRejectedValue(new Error("store unavailable"));
+
+    render(<HomeView />);
+
+    await screen.findByRole("region", { name: "继续阅读" });
+    expect(screen.queryByRole("region", { name: "那年今日" })).not.toBeInTheDocument();
   });
 });
 

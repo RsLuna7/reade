@@ -5124,6 +5124,7 @@ function App() {
             <HomeView
               reviewSummary={homeReviewSummary}
               remainingEstimate={remainingEstimateForItem}
+              onOpenAnnotation={handleSelectLibraryAnnotation}
             />
           </Suspense>
         )}
