@@ -5761,6 +5761,70 @@ button.links-panel-entry:focus-visible {
   font-size: 11px;
 }
 
+/* --- Footprint facts (数量型总览:读过/读完/阅读天数/笔记) ----------------- */
+
+.stats-facts {
+  grid-column: 1 / -1;
+}
+
+.stats-facts-grid {
+  display: grid;
+  gap: 4px 10px;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+}
+
+.stats-fact {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 10px;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.stats-fact-label {
+  color: var(--ink-soft);
+  font-size: 13px;
+}
+
+.stats-fact strong {
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 650;
+  line-height: 1.15;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-fact-unit {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.stats-fact-chevron {
+  margin-left: auto;
+  align-self: center;
+  color: var(--muted);
+}
+
+button.stats-fact {
+  cursor: pointer;
+}
+
+button.stats-fact:hover:not(:disabled) {
+  background: var(--chrome);
+}
+
+button.stats-fact:disabled {
+  cursor: default;
+  opacity: 0.62;
+}
+
 .stats-section h2 {
   margin: 0 0 12px;
   color: var(--ink-soft);

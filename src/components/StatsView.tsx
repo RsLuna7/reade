@@ -14,6 +14,7 @@ import {
   BookOpen,
   CalendarDays,
   ChevronDown,
+  ChevronRight,
   Clock3,
   Download,
   Flame,
@@ -40,12 +41,14 @@ import {
   YAxis,
 } from "recharts";
 import {
+  listAnnotations,
   listDocumentExtents,
   listReadingSessions,
   type DocumentExtent,
   type DocumentFormat,
   type ReadingSession,
 } from "../lib/backend";
+import { highWaterCoverage } from "../lib/readingTimeEstimate";
 // 库覆盖率知识地图(plan-coverage-treemap):布局与聚合纯函数在 lib/treemap。
 import { CoverageTreemap } from "./CoverageTreemap";
 import { listLibraryReadingPositions } from "../lib/readingPositions";
@@ -80,6 +83,8 @@ const ReportDialog = lazy(() => import("./ReportDialog").then((module) => ({ def
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEATMAP_DAYS = 365;
 const RANKING_LIMIT = 10;
+/** 高水位覆盖率达到该值视为"读完"（与 read-next 的 0.98 触发语义一致）。 */
+const FINISHED_COVERAGE = 0.98;
 const TREND_RANGES = [7, 30, 90] as const;
 type TrendRange = (typeof TREND_RANGES)[number];
 
@@ -251,6 +256,100 @@ function OverviewCards({ summary, todayKey, goalMinutes, motionLevel }: Overview
         </span>
         <span className="stats-metric-hint">最长 {summary.longestStreakDays} 天</span>
       </article>
+    </section>
+  );
+}
+
+/* ------------------------------ Footprint -------------------------------- */
+
+/** 一篇达到"读完"覆盖率的文档（清单抽屉的数据行）。 */
+interface FinishedDocument {
+  relativePath: string;
+  title: string;
+  format: DocumentFormat;
+  coverage: number;
+  /** 阅读位置最后更新时间，清单按它倒序。 */
+  updatedAt: number;
+}
+
+interface FootprintCardProps {
+  readCount: number;
+  finishedCount: number;
+  activeDays: number;
+  noteCount: number | null;
+  firstDayKey: string | null;
+  companionDays: number;
+  motionLevel: ReaderMotionLevel;
+  onShowFinished: () => void;
+  onShowNotes: () => void;
+}
+
+/** 数量型总览（读过/读完/阅读天数/笔记），对应微信读书式的"阅读足迹"。 */
+function FootprintCard({
+  readCount,
+  finishedCount,
+  activeDays,
+  noteCount,
+  firstDayKey,
+  companionDays,
+  motionLevel,
+  onShowFinished,
+  onShowNotes,
+}: FootprintCardProps) {
+  const read = useCountUp(readCount, motionLevel);
+  const finished = useCountUp(finishedCount, motionLevel);
+  const days = useCountUp(activeDays, motionLevel);
+  const notes = useCountUp(noteCount ?? 0, motionLevel);
+  return (
+    <section
+      className="stats-card stats-section stats-facts stats-enter"
+      aria-label="阅读足迹"
+      style={staggerStyle(4)}
+    >
+      <div className="stats-section-head">
+        <h2>阅读足迹</h2>
+        {firstDayKey && (
+          <span className="stats-section-hint">
+            {firstDayKey} 至今 · 与 Reade 相伴 {companionDays} 天
+          </span>
+        )}
+      </div>
+      <div className="stats-facts-grid">
+        <div className="stats-fact">
+          <span className="stats-fact-label">读过</span>
+          <strong>{Math.round(read)}</strong>
+          <span className="stats-fact-unit">篇</span>
+        </div>
+        <button
+          type="button"
+          className="stats-fact"
+          title="查看读完的文档"
+          disabled={finishedCount === 0}
+          onClick={onShowFinished}
+        >
+          <span className="stats-fact-label">读完</span>
+          <strong>{Math.round(finished)}</strong>
+          <span className="stats-fact-unit">篇</span>
+          <ChevronRight size={14} className="stats-fact-chevron" aria-hidden="true" />
+        </button>
+        <div className="stats-fact">
+          <span className="stats-fact-label">阅读</span>
+          <strong>{Math.round(days)}</strong>
+          <span className="stats-fact-unit">天</span>
+        </div>
+        <button
+          type="button"
+          className="stats-fact"
+          title="打开批注中心"
+          disabled={noteCount === null}
+          onClick={onShowNotes}
+        >
+          <span className="stats-fact-label">笔记</span>
+          <strong>{noteCount === null ? "—" : Math.round(notes)}</strong>
+          <span className="stats-fact-unit">条</span>
+          <ChevronRight size={14} className="stats-fact-chevron" aria-hidden="true" />
+        </button>
+      </div>
     </section>
   );
 }
@@ -577,6 +676,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const [rankExpanded, setRankExpanded] = useState(false);
   const [drillDay, setDrillDay] = useState<string | null>(null);
   const [docDetailPath, setDocDetailPath] = useState<string | null>(null);
+  const [finishedOpen, setFinishedOpen] = useState(false);
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -610,6 +710,26 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     // reloadToken:刷新按钮同时刷新位置快照。
     [rootPath, reloadToken],
   );
+
+  // 阅读足迹的笔记数:批注总量(高亮/划线/书签),读取失败显示为占位。
+  const [annotationCount, setAnnotationCount] = useState<number | null>(null);
+  useEffect(() => {
+    if (!rootPath) {
+      setAnnotationCount(null);
+      return;
+    }
+    let cancelled = false;
+    void listAnnotations()
+      .then((entries) => {
+        if (!cancelled) setAnnotationCount(entries.length);
+      })
+      .catch(() => {
+        if (!cancelled) setAnnotationCount(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath, reloadToken]);
 
   useEffect(() => {
     if (!rootPath) {
@@ -652,8 +772,8 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const overlayState = useRef({ report: false, goal: false, exportMenu: false, doc: null as string | null, day: null as string | null });
-  overlayState.current = { report: reportOpen, goal: goalEditorOpen, exportMenu: exportOpen, doc: docDetailPath, day: drillDay };
+  const overlayState = useRef({ report: false, goal: false, exportMenu: false, finished: false, doc: null as string | null, day: null as string | null });
+  overlayState.current = { report: reportOpen, goal: goalEditorOpen, exportMenu: exportOpen, finished: finishedOpen, doc: docDetailPath, day: drillDay };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -661,6 +781,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
       if (overlays.report) setReportOpen(false);
       else if (overlays.goal) setGoalEditorOpen(false);
       else if (overlays.exportMenu) setExportOpen(false);
+      else if (overlays.finished) setFinishedOpen(false);
       else if (overlays.doc) setDocDetailPath(null);
       else if (overlays.day) setDrillDay(null);
       else setActiveView("reader");
@@ -734,10 +855,43 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     [documents],
   );
 
+  // 读完清单:库内文档 × 阅读位置高水位,覆盖率达标者按最近读完倒序。
+  const finishedDocuments = useMemo<FinishedDocument[]>(() => {
+    const result: FinishedDocument[] = [];
+    for (const document of documents) {
+      const position = readingPositions[document.relativePath];
+      if (!position) continue;
+      const coverage = highWaterCoverage(
+        position,
+        extents?.get(document.relativePath)?.segmentCount,
+      );
+      if (coverage === null || coverage < FINISHED_COVERAGE) continue;
+      result.push({
+        relativePath: document.relativePath,
+        title: document.title,
+        format: document.format,
+        coverage,
+        updatedAt: position.updatedAt,
+      });
+    }
+    return result.sort((a, b) => b.updatedAt - a.updatedAt);
+  }, [documents, extents, readingPositions]);
+
   const loading = sessions === null;
   const empty = !loading && loaded.length === 0;
   const todayKey = localDayKey(now);
   const goalMinutes = dailyGoalMinutes;
+
+  // 阅读足迹的陪伴天数:首个阅读日至今(含两端)。
+  const firstDayKey = daily.length > 0 ? daily[0].date : null;
+  const companionDays = firstDayKey
+    ? Math.max(
+        1,
+        Math.round(
+          (dayKeyToDate(todayKey).getTime() - dayKeyToDate(firstDayKey).getTime()) / DAY_MS,
+        ) + 1,
+      )
+    : 0;
 
   const openDocument = (relativePath: string) => {
     if (!existingPaths.has(relativePath)) return;
@@ -945,6 +1099,18 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
             todayKey={todayKey}
             goalMinutes={goalMinutes}
             motionLevel={motionLevel}
+          />
+
+          <FootprintCard
+            readCount={summary.documentCount}
+            finishedCount={finishedDocuments.length}
+            activeDays={summary.activeDays}
+            noteCount={annotationCount}
+            firstDayKey={firstDayKey}
+            companionDays={companionDays}
+            motionLevel={motionLevel}
+            onShowFinished={() => setFinishedOpen(true)}
+            onShowNotes={() => setActiveView("annotations")}
           />
 
           <section className="stats-card stats-section stats-heatmap" aria-label="过去一年的阅读热力图">
@@ -1296,6 +1462,38 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
         </div>
       )}
 
+      {finishedOpen && (
+        <StatsDrawer
+          title="读完的文档"
+          subtitle={`阅读进度达 ${Math.round(FINISHED_COVERAGE * 100)}% 以上 · ${finishedDocuments.length} 篇`}
+          motionLevel={motionLevel}
+          onClose={() => setFinishedOpen(false)}
+        >
+          <ul className="stats-drawer-docs">
+            {finishedDocuments.map((entry) => (
+              <li key={entry.relativePath}>
+                <button
+                  type="button"
+                  className="stats-ranking-row"
+                  title={`打开 ${entry.relativePath}`}
+                  onClick={() => {
+                    setFinishedOpen(false);
+                    openDocument(entry.relativePath);
+                  }}
+                >
+                  <span className="stats-ranking-main">
+                    <span className="stats-ranking-title">{entry.title}</span>
+                  </span>
+                  <span className="stats-ranking-meta">
+                    <strong>{Math.min(100, Math.round(entry.coverage * 100))}%</strong>
+                    <span>{FORMAT_LABELS[entry.format]}</span>
+                  </span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        </StatsDrawer>
+      )}
       {drillDay && !docDetailPath && (
         <DayDrawer
           dayKey={drillDay}
