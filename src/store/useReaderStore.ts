@@ -82,6 +82,20 @@ export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
  */
 export type ReaderView = "home" | "reader" | "stats" | "review" | "annotations";
 
+/** 库 tab 的浏览形态（plan-bookshelf-covers BC-D4）：文档树或书架网格。 */
+export type LibraryViewMode = "tree" | "shelf";
+
+const LIBRARY_VIEW_MODES = new Set<LibraryViewMode>(["tree", "shelf"]);
+
+export function normalizeLibraryViewMode(
+  value: unknown,
+  fallback: LibraryViewMode = "tree",
+): LibraryViewMode {
+  return typeof value === "string" && LIBRARY_VIEW_MODES.has(value as LibraryViewMode)
+    ? (value as LibraryViewMode)
+    : fallback;
+}
+
 const READER_VIEWS = new Set<ReaderView>([
   "home",
   "reader",
@@ -210,6 +224,7 @@ type PersistedReaderPreferences = Partial<
     | "typewriterScroll"
     | "readingRuler"
     | "readNextEnabled"
+    | "libraryViewMode"
     | "ttsRate"
     | "ttsVoiceName"
     | "reviewCardMode"
@@ -276,6 +291,10 @@ export function migrateReaderPreferences(
     ...(typeof state.readNextEnabled === "boolean"
       ? { readNextEnabled: state.readNextEnabled }
       : {}),
+    // 书架视图(plan-bookshelf-covers BC-D4):缺键/坏值回默认树形。
+    ...(typeof state.libraryViewMode === "string"
+      ? { libraryViewMode: normalizeLibraryViewMode(state.libraryViewMode) }
+      : {}),
     ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
     ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
     // 回顾卡片渲染档(plan-cloze-review CZ-D9):坏值回落默认摘录档。
@@ -332,6 +351,11 @@ interface ReaderState {
    * 默认开;持久化、双端同构。
    */
   readNextEnabled: boolean;
+  /**
+   * 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架浏览形态。
+   * 持久化、双端同构。
+   */
+  libraryViewMode: LibraryViewMode;
   expandedPaths: string[];
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
@@ -380,6 +404,7 @@ interface ReaderState {
   setTypewriterScroll: (enabled: boolean) => void;
   setReadingRuler: (enabled: boolean) => void;
   setReadNextEnabled: (enabled: boolean) => void;
+  setLibraryViewMode: (mode: LibraryViewMode) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
   setTtsRate: (rate: number) => void;
@@ -465,6 +490,7 @@ export const useReaderStore = create<ReaderState>()(
         typewriterScroll: false,
         readingRuler: false,
         readNextEnabled: true,
+        libraryViewMode: "tree",
         expandedPaths: [],
         activeView: "reader",
         dailyGoalMinutes: 0,
@@ -702,6 +728,12 @@ export const useReaderStore = create<ReaderState>()(
           set({ readNextEnabled: typeof enabled === "boolean" ? enabled : true });
         },
 
+        setLibraryViewMode: (mode) => {
+          set((state) => ({
+            libraryViewMode: normalizeLibraryViewMode(mode, state.libraryViewMode),
+          }));
+        },
+
         setActiveView: (view) => {
           set({ activeView: READER_VIEWS.has(view) ? view : "reader" });
         },
@@ -791,6 +823,7 @@ export const useReaderStore = create<ReaderState>()(
         typewriterScroll: state.typewriterScroll,
         readingRuler: state.readingRuler,
         readNextEnabled: state.readNextEnabled,
+        libraryViewMode: state.libraryViewMode,
         ttsRate: state.ttsRate,
         ttsVoiceName: state.ttsVoiceName,
         reviewCardMode: state.reviewCardMode,
@@ -861,6 +894,10 @@ export const useReaderStore = create<ReaderState>()(
             typeof preferences.readNextEnabled === "boolean"
               ? preferences.readNextEnabled
               : current.readNextEnabled,
+          libraryViewMode: normalizeLibraryViewMode(
+            preferences.libraryViewMode,
+            current.libraryViewMode,
+          ),
           ttsRate:
             typeof preferences.ttsRate === "number"
               ? clampTtsRate(preferences.ttsRate)

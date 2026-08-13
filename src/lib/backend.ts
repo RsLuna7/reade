@@ -346,6 +346,34 @@ export async function listDocumentExtents(): Promise<DocumentExtent[]> {
 }
 
 /**
+ * 书架封面缩略图（plan-bookshelf-covers §3.2）：png 为 base64（read_asset
+ * 线格式先例）。桌面存取缓存 sqlite 的 document_thumbnails 表；Web 无
+ * 缓存后端，恒未命中/丢弃写入（书架全用生成式封面）。
+ */
+export interface DocumentThumbnail {
+  png: string;
+  width: number;
+  height: number;
+}
+
+export async function readDocumentThumbnail(
+  relativePath: string,
+): Promise<DocumentThumbnail | null> {
+  if (APP_RUNTIME === "web") return null;
+  return (await getTauriBackend()).readDocumentThumbnail(relativePath);
+}
+
+export async function storeDocumentThumbnail(
+  relativePath: string,
+  png: string,
+  width: number,
+  height: number,
+): Promise<void> {
+  if (APP_RUNTIME === "web") return;
+  return (await getTauriBackend()).storeDocumentThumbnail(relativePath, png, width, height);
+}
+
+/**
  * Read-only backlink/outgoing view for one document (plan-backlinks
  * §3.3). Desktop reads the derived `document_links` cache table; the web
  * build extracts links from `search.json` at runtime and throws the

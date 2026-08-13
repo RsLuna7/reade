@@ -25,6 +25,12 @@ pub(crate) const MAX_MARKDOWN_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_ASSET_BYTES: u64 = 25 * 1024 * 1024;
 const MAX_RANGE_BYTES: u64 = 4 * 1024 * 1024;
 const CACHE_SCHEMA_VERSION: i64 = 1;
+/// Bookshelf cover thumbnails (docs/plan-bookshelf-covers.md §3.2): the
+/// frontend renders the PNG (pdf.js page 1 / EPUB cover downscale), the
+/// backend only validates and stores the bytes — no image decoding here.
+const THUMBNAIL_MAX_PNG_BYTES: usize = 512 * 1024;
+const THUMBNAIL_MAX_DIMENSION: u32 = 640;
+const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const CACHE_SOFT_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 const CACHE_LOW_WATER_BYTES: u64 = CACHE_SOFT_LIMIT_BYTES * 9 / 10;
 const DEFAULT_SEARCH_LIMIT: u32 = 30;
@@ -676,6 +682,193 @@ fn document_extents(connection: &Connection, root_key: &str) -> CommandResult<Ve
         .map_err(|error| format!("Cannot read document extents: {error}"))
 }
 
+/// Cached bookshelf cover thumbnail (docs/plan-bookshelf-covers.md §3.2).
+/// `png` is base64, mirroring the `read_asset` wire precedent.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentThumbnail {
+    pub png: String,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// Returns the cached cover thumbnail for a scanned document, or `None`
+/// when absent or stale. A stale fingerprint (source size/modified moved
+/// on) deletes the row so the shelf regenerates it. Never touches files.
+#[tauri::command]
+pub fn read_document_thumbnail(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<DocumentThumbnail>> {
+    validate_relative_library_path(&relative_path)?;
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let document = current
+        .documents
+        .iter()
+        .find(|document| document.relative_path == relative_path)
+        .ok_or_else(|| "Document is not in the current library".to_owned())?;
+    read_thumbnail_record(
+        &current.cache,
+        &normalize_root(root),
+        &relative_path,
+        document.size,
+        document.modified,
+    )
+}
+
+/// Stores a frontend-rendered cover thumbnail. The payload is untrusted:
+/// base64 must decode to a PNG (magic bytes) within 512 KiB and 640 px per
+/// side, and the path must belong to the current scan set. The bytes are
+/// never parsed by any backend pipeline — only handed back verbatim.
+#[tauri::command]
+pub fn store_document_thumbnail(
+    relative_path: String,
+    png: String,
+    width: u32,
+    height: u32,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    validate_relative_library_path(&relative_path)?;
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let document = current
+        .documents
+        .iter()
+        .find(|document| document.relative_path == relative_path)
+        .ok_or_else(|| "Document is not in the current library".to_owned())?;
+    store_thumbnail_record(
+        &current.cache,
+        &normalize_root(root),
+        &relative_path,
+        document.size,
+        document.modified,
+        &png,
+        width,
+        height,
+    )
+}
+
+fn read_thumbnail_record(
+    connection: &Connection,
+    root_key: &str,
+    relative_path: &str,
+    source_size: u64,
+    source_modified: u64,
+) -> CommandResult<Option<DocumentThumbnail>> {
+    let row = connection
+        .query_row(
+            "SELECT source_size, source_modified, width, height, png
+             FROM document_thumbnails
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                    row.get::<_, Vec<u8>>(4)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read document thumbnail: {error}"))?;
+    let Some((size, modified, width, height, png)) = row else {
+        return Ok(None);
+    };
+    if size != source_size as i64 || modified != source_modified as i64 {
+        connection
+            .execute(
+                "DELETE FROM document_thumbnails
+                 WHERE library_root = ?1 AND relative_path = ?2",
+                params![root_key, relative_path],
+            )
+            .map_err(|error| format!("Cannot drop stale document thumbnail: {error}"))?;
+        return Ok(None);
+    }
+    connection
+        .execute(
+            "UPDATE document_thumbnails SET last_accessed = ?3
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path, now_millis()],
+        )
+        .map_err(|error| format!("Cannot touch document thumbnail: {error}"))?;
+    Ok(Some(DocumentThumbnail {
+        png: BASE64.encode(png),
+        width: width.max(0) as u32,
+        height: height.max(0) as u32,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn store_thumbnail_record(
+    connection: &Connection,
+    root_key: &str,
+    relative_path: &str,
+    source_size: u64,
+    source_modified: u64,
+    png_base64: &str,
+    width: u32,
+    height: u32,
+) -> CommandResult<()> {
+    if width == 0
+        || height == 0
+        || width > THUMBNAIL_MAX_DIMENSION
+        || height > THUMBNAIL_MAX_DIMENSION
+    {
+        return Err(format!(
+            "Thumbnail dimensions must be 1–{THUMBNAIL_MAX_DIMENSION} pixels"
+        ));
+    }
+    // Reject oversized payloads before decoding (base64 inflates by 4/3).
+    if png_base64.len() > THUMBNAIL_MAX_PNG_BYTES / 3 * 4 + 4 {
+        return Err("Thumbnail exceeds the 512 KiB limit".to_owned());
+    }
+    let bytes = BASE64
+        .decode(png_base64)
+        .map_err(|error| format!("Thumbnail is not valid base64: {error}"))?;
+    if bytes.len() > THUMBNAIL_MAX_PNG_BYTES {
+        return Err("Thumbnail exceeds the 512 KiB limit".to_owned());
+    }
+    if bytes.len() < PNG_MAGIC.len() || bytes[..PNG_MAGIC.len()] != PNG_MAGIC {
+        return Err("Thumbnail must be a PNG image".to_owned());
+    }
+    connection
+        .execute(
+            "INSERT INTO document_thumbnails(
+                 library_root, relative_path, source_size, source_modified,
+                 width, height, png, created_at, last_accessed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?8)
+             ON CONFLICT(library_root, relative_path) DO UPDATE SET
+                 source_size = excluded.source_size,
+                 source_modified = excluded.source_modified,
+                 width = excluded.width,
+                 height = excluded.height,
+                 png = excluded.png,
+                 created_at = excluded.created_at,
+                 last_accessed = excluded.last_accessed",
+            params![
+                root_key,
+                relative_path,
+                source_size,
+                source_modified,
+                width,
+                height,
+                bytes,
+                now_millis(),
+            ],
+        )
+        .map_err(|error| format!("Cannot store document thumbnail: {error}"))?;
+    Ok(())
+}
+
 /// Read-only backlink/outgoing view for one document
 /// (`docs/plan-backlinks.md` §3.3). Pure SELECTs over the derived
 /// `document_links` table plus the in-memory scan snapshot; the link table
@@ -1298,6 +1491,25 @@ fn initialize_cache(connection: &Connection) -> CommandResult<()> {
                  ON document_links(library_root, target_path);
              CREATE INDEX IF NOT EXISTS document_links_by_stem
                  ON document_links(library_root, wiki_stem);
+             -- Bookshelf cover thumbnails, rendered by the frontend and
+             -- stored as validated PNG bytes (docs/plan-bookshelf-covers.md
+             -- §3.1). Pure derived data that regenerates on demand, so it
+             -- rides the same IF NOT EXISTS attachment precedent as
+             -- document_links without bumping CACHE_SCHEMA_VERSION; older
+             -- cache files grow the table on the next start. Bump the
+             -- version if the columns ever change.
+             CREATE TABLE IF NOT EXISTS document_thumbnails(
+                 library_root TEXT NOT NULL,
+                 relative_path TEXT NOT NULL,
+                 source_size INTEGER NOT NULL,
+                 source_modified INTEGER NOT NULL,
+                 width INTEGER NOT NULL,
+                 height INTEGER NOT NULL,
+                 png BLOB NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 last_accessed INTEGER NOT NULL,
+                 PRIMARY KEY(library_root, relative_path)
+             );
              -- Legacy annotation storage, frozen since annotations moved to
              -- reade-user.sqlite3 (user_store.rs). Kept for one release cycle
              -- as the rescue-migration source and fallback; nothing reads or
@@ -1410,6 +1622,29 @@ fn scan_documents(root: &Path, connection: &mut Connection) -> CommandResult<Vec
     for path in cached_paths {
         if !seen.contains(&path) {
             clear_cached_document(connection, root, &path)?;
+        }
+    }
+    // Thumbnails can exist for documents that never produced a
+    // document_cache row (e.g. pending indexing), so sweep them separately.
+    let thumbnail_paths = {
+        let mut statement = connection
+            .prepare("SELECT relative_path FROM document_thumbnails WHERE library_root = ?1")
+            .map_err(|error| format!("Cannot inspect cached thumbnails: {error}"))?;
+        let rows = statement
+            .query_map(params![root_key], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Cannot list cached thumbnails: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Cannot decode cached thumbnail paths: {error}"))?
+    };
+    for path in thumbnail_paths {
+        if !seen.contains(&path) {
+            connection
+                .execute(
+                    "DELETE FROM document_thumbnails
+                     WHERE library_root = ?1 AND relative_path = ?2",
+                    params![root_key, path],
+                )
+                .map_err(|error| format!("Cannot sweep stale document thumbnail: {error}"))?;
         }
     }
     documents.sort_by_cached_key(|document| document.relative_path.to_lowercase());
@@ -1599,6 +1834,12 @@ fn clear_cached_document(
         .map_err(|error| format!("Cannot delete document links: {error}"))?;
     transaction
         .execute(
+            "DELETE FROM document_thumbnails WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path],
+        )
+        .map_err(|error| format!("Cannot delete document thumbnail: {error}"))?;
+    transaction
+        .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
             params![root_key, relative_path],
         )
@@ -1682,6 +1923,12 @@ fn clear_cached_document_by_key(
         .map_err(|error| format!("Cannot evict document links: {error}"))?;
     transaction
         .execute(
+            "DELETE FROM document_thumbnails WHERE library_root = ?1 AND relative_path = ?2",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot evict document thumbnail: {error}"))?;
+    transaction
+        .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
             params![root, relative_path],
         )
@@ -1713,6 +1960,9 @@ fn clear_cache_storage(connection: &mut Connection) -> CommandResult<()> {
     transaction
         .execute("DELETE FROM document_links", [])
         .map_err(|error| format!("Cannot clear cached document links: {error}"))?;
+    transaction
+        .execute("DELETE FROM document_thumbnails", [])
+        .map_err(|error| format!("Cannot clear cached document thumbnails: {error}"))?;
     transaction
         .execute("DELETE FROM document_cache", [])
         .map_err(|error| format!("Cannot clear cached documents: {error}"))?;
@@ -2855,6 +3105,121 @@ mod tests {
         document.trailer.set("Root", catalog_id);
         document.compress();
         document.save(path).expect("save PDF fixture");
+    }
+
+    fn png_base64(payload_len: usize) -> String {
+        let mut bytes = PNG_MAGIC.to_vec();
+        bytes.extend(std::iter::repeat_n(0u8, payload_len));
+        BASE64.encode(bytes)
+    }
+
+    fn thumbnail_count(connection: &Connection, root: &str, path: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT count(*) FROM document_thumbnails
+                 WHERE library_root = ?1 AND relative_path = ?2",
+                params![root, path],
+                |row| row.get(0),
+            )
+            .expect("count thumbnails")
+    }
+
+    #[test]
+    fn thumbnail_store_read_roundtrip_is_isolated_per_library() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let png = png_base64(16);
+        store_thumbnail_record(&current.cache, "lib-a", "book.pdf", 10, 20, &png, 240, 320)
+            .expect("store thumbnail");
+
+        let hit = read_thumbnail_record(&current.cache, "lib-a", "book.pdf", 10, 20)
+            .expect("read thumbnail")
+            .expect("thumbnail present");
+        assert_eq!(hit.png, png);
+        assert_eq!((hit.width, hit.height), (240, 320));
+        // Same path under another library root stays a miss.
+        assert_eq!(
+            read_thumbnail_record(&current.cache, "lib-b", "book.pdf", 10, 20)
+                .expect("read other library"),
+            None
+        );
+        // Re-storing replaces the row instead of erroring.
+        store_thumbnail_record(&current.cache, "lib-a", "book.pdf", 10, 20, &png, 120, 160)
+            .expect("replace thumbnail");
+        let replaced = read_thumbnail_record(&current.cache, "lib-a", "book.pdf", 10, 20)
+            .expect("read replaced")
+            .expect("replaced present");
+        assert_eq!((replaced.width, replaced.height), (120, 160));
+    }
+
+    #[test]
+    fn thumbnail_store_rejects_bad_magic_oversize_and_bad_dimensions() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let jpeg = BASE64.encode([0xFFu8, 0xD8, 0xFF, 0xE0, 0, 0, 0, 0, 0, 0]);
+        assert!(
+            store_thumbnail_record(&current.cache, "lib", "a.pdf", 1, 1, &jpeg, 240, 320).is_err(),
+            "non-PNG magic must be rejected"
+        );
+        let oversize = png_base64(THUMBNAIL_MAX_PNG_BYTES + 1);
+        assert!(
+            store_thumbnail_record(&current.cache, "lib", "a.pdf", 1, 1, &oversize, 240, 320)
+                .is_err(),
+            "payloads over 512 KiB must be rejected"
+        );
+        let png = png_base64(16);
+        for (width, height) in [(0, 320), (240, 0), (THUMBNAIL_MAX_DIMENSION + 1, 320)] {
+            assert!(
+                store_thumbnail_record(&current.cache, "lib", "a.pdf", 1, 1, &png, width, height)
+                    .is_err(),
+                "dimensions {width}×{height} must be rejected"
+            );
+        }
+        let not_base64 = "not-base64!!";
+        assert!(
+            store_thumbnail_record(&current.cache, "lib", "a.pdf", 1, 1, not_base64, 240, 320)
+                .is_err()
+        );
+        assert_eq!(thumbnail_count(&current.cache, "lib", "a.pdf"), 0);
+    }
+
+    #[test]
+    fn thumbnail_read_drops_stale_fingerprints() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let png = png_base64(16);
+        store_thumbnail_record(&current.cache, "lib", "a.pdf", 10, 20, &png, 240, 320)
+            .expect("store thumbnail");
+
+        // The source file changed (new size/modified): miss + row deleted.
+        assert_eq!(
+            read_thumbnail_record(&current.cache, "lib", "a.pdf", 11, 21).expect("stale read"),
+            None
+        );
+        assert_eq!(thumbnail_count(&current.cache, "lib", "a.pdf"), 0);
+    }
+
+    #[test]
+    fn cache_cleanup_paths_remove_thumbnails() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let png = png_base64(16);
+        let root = Path::new("lib");
+        let root_key = normalize_root(root);
+        for path in ["a.pdf", "b.pdf", "c.pdf"] {
+            store_thumbnail_record(&current.cache, &root_key, path, 1, 1, &png, 240, 320)
+                .expect("store thumbnail");
+        }
+
+        clear_cached_document(&mut current.cache, root, "a.pdf").expect("clear one document");
+        assert_eq!(thumbnail_count(&current.cache, &root_key, "a.pdf"), 0);
+
+        clear_cached_document_by_key(&mut current.cache, &root_key, "b.pdf")
+            .expect("evict one document");
+        assert_eq!(thumbnail_count(&current.cache, &root_key, "b.pdf"), 0);
+
+        clear_cache_storage(&mut current.cache).expect("clear whole cache");
+        assert_eq!(thumbnail_count(&current.cache, &root_key, "c.pdf"), 0);
     }
 
     #[test]

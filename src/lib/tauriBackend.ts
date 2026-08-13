@@ -15,6 +15,7 @@ import type {
   DocumentInfo,
   DocumentLinks,
   DocumentPreview,
+  DocumentThumbnail,
   IndexProgress,
   MovedDocumentCandidate,
   PdfReadingMode,
@@ -50,6 +51,17 @@ export function retryDocumentIndex(relativePath: string): Promise<void> { return
 export function clearConversionCache(): Promise<void> { return invoke("clear_conversion_cache"); }
 export function searchDocuments(query: string, limit: number): Promise<SearchResult[]> { return invoke("search_documents", { query, limit }); }
 export function listDocumentExtents(): Promise<DocumentExtent[]> { return invoke("list_document_extents"); }
+export function readDocumentThumbnail(relativePath: string): Promise<DocumentThumbnail | null> {
+  return invoke("read_document_thumbnail", { relativePath });
+}
+export function storeDocumentThumbnail(
+  relativePath: string,
+  png: string,
+  width: number,
+  height: number,
+): Promise<void> {
+  return invoke("store_document_thumbnail", { relativePath, png, width, height });
+}
 export function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
   return invoke("list_document_links", { relativePath });
 }

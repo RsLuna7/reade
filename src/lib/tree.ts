@@ -112,6 +112,22 @@ export function buildDocumentTree(documents: DocumentInfo[]): DocumentTreeNode[]
   return root;
 }
 
+/**
+ * 树序展平的文档列表（plan-bookshelf-covers §3.3）：书架网格沿用文档树的
+ * 目录优先 + Collator 排序，避免两种浏览形态各排各的。
+ */
+export function flattenDocumentsInTreeOrder(nodes: DocumentTreeNode[]): DocumentInfo[] {
+  const documents: DocumentInfo[] = [];
+  const visit = (items: DocumentTreeNode[]) => {
+    for (const item of items) {
+      if (item.kind === "document") documents.push(item.document);
+      else visit(item.children);
+    }
+  };
+  visit(nodes);
+  return documents;
+}
+
 export function collectDirectoryPaths(nodes: DocumentTreeNode[]): Set<string> {
   const paths = new Set<string>();
 

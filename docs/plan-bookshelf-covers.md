@@ -1,13 +1,38 @@
 # 方案草案：书架视图 + 自动封面
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（批次 7 实施）**
 - 定位：文档树之外的第二种库浏览形态——"书架"网格：PDF 用首页缩略图、EPUB 提取封面图、Markdown 用标题哈希驱动的主题色渐变生成确定性封面；角标显示阅读进度。回答"我的库里都有什么书"这种视觉化浏览需求。
 - 关联：PDF 缩略走 pdf.js 已有渲染管线（`docs/plan-pdf-*` 同源）；EPUB 封面走既有 `read_epub_asset` 安全栅格图片管线；进度角标数据 = `readingPositions` 高水位（与主页继续阅读、覆盖率地图同源）。
 
 > 一句话：侧栏库 tab 增加"书架"切换；封面三来源——PDF 首页由前端 pdf.js 渲染小图并经新 command `store_document_thumbnail` 存缓存 sqlite 新表（派生数据，纳入既有 1 GiB 治理），EPUB 用清单中首个合法 raster 图片，Markdown 由 `hash(title) → 主题 token 渐变` 纯函数即时生成（不落盘）；网格 + 进度角标 + 懒加载。
 
 ---
+
+## 0. 定稿补记（实施前复核结论，2026-08-13）
+
+复核基线后对草案的修订，全部已落实到下文设计：
+
+1. **缓存 schema 走"纯附加"路径，不 bump 版本**（修订 §3.1 / BC-D2）：新表
+   `document_thumbnails` 不改动任何既有表结构，完全符合 `document_links`
+   当年的先例——`CREATE TABLE IF NOT EXISTS` 附加、`CACHE_SCHEMA_VERSION`
+   保持 1。版本不匹配会整库删除重建（万篇库全量重索引），纯附加避免了这一
+   代价。跨批次协调结论：因为不 bump，批次九"增量重读"的文本快照表也无需
+   本批预建；若批次九确需 bump，届时再一次建齐。
+2. **EPUB 封面提取时机改为"打开文档时"**（修订 BC-D3 与懒加载语义）：基线
+   复核发现 `read_epub_asset` 只对**当前打开的 EPUB**（`open_epub` 状态、
+   校验 size+modified）提供资产；书架懒加载若为任意 EPUB 调 `open_document`
+   会清掉正在阅读文档的资产状态。故 EPUB 封面在用户打开该书时捕获（挑选
+   assets 中优先名含 cover 的合法 raster → canvas 缩放 → 存缓存），书架端
+   已缓存直读；未打开过的 EPUB 回落生成式封面。PDF 懒渲染不受影响
+   （`read_document_range` 无状态）。
+3. **IPC 线格式用 base64 字符串**（修订 §3.2 的 `png: Vec<u8>`）：与
+   `read_asset` 返回 base64 的先例一致，前端 `canvas.toDataURL` 产物即
+   base64，免去二进制参数编解码。
+4. 上限写死并双端测试：PNG 解码后 ≤ 512 KiB、宽高各 ≤ 640 像素、PNG 魔数
+   校验；路径过 `validate_relative_library_path` 且必须在当前扫描集内。
+5. 视图切换偏好 `libraryViewMode`（tree/shelf）入 zustand persist
+   （`READER_PREFERENCES_STORAGE_KEY` v4 内新增键，缺键回落 tree，无需升版本）。
 
 ## 1. 现状基线（已核实于 2026-08-13，行号允许漂移）
 

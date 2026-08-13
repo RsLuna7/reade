@@ -3,6 +3,7 @@ import type { DocumentInfo } from "./backend";
 import {
   buildDocumentTree,
   collectDirectoryPaths,
+  flattenDocumentsInTreeOrder,
   reconcileExpandedPaths,
 } from "./tree";
 
@@ -40,6 +41,29 @@ describe("buildDocumentTree", () => {
       name: "开始",
       path: "指南\\开始.md",
     });
+  });
+});
+
+describe("flattenDocumentsInTreeOrder (plan-bookshelf-covers §3.3)", () => {
+  it("walks the sorted tree depth-first so the shelf mirrors the tree order", () => {
+    const tree = buildDocumentTree([
+      document("第10章.md", "第10章"),
+      document("附录/说明.md", "说明"),
+      document("第2章.md", "第2章"),
+      document("正文/第二节.md", "第二节"),
+      document("正文/第一节.md", "第一节"),
+    ]);
+    expect(flattenDocumentsInTreeOrder(tree).map((entry) => entry.relativePath)).toEqual([
+      "附录/说明.md",
+      "正文/第二节.md",
+      "正文/第一节.md",
+      "第2章.md",
+      "第10章.md",
+    ]);
+  });
+
+  it("returns an empty list for an empty tree", () => {
+    expect(flattenDocumentsInTreeOrder([])).toEqual([]);
   });
 });
 

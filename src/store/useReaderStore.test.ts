@@ -577,6 +577,45 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().readNextEnabled).toBe(true);
   });
 
+  it("persists the library view mode and defaults it to tree (plan-bookshelf-covers)", async () => {
+    useReaderStore.setState({ libraryViewMode: "tree" });
+
+    useReaderStore.getState().setLibraryViewMode("shelf");
+    expect(useReaderStore.getState().libraryViewMode).toBe("shelf");
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ libraryViewMode: "shelf" });
+
+    // 书架偏好在下次启动 rehydrate 后保留;坏值回默认树形。
+    useReaderStore.setState({ libraryViewMode: "tree" });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { libraryViewMode: "shelf" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().libraryViewMode).toBe("shelf");
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { libraryViewMode: "carousel" },
+      }),
+    );
+    useReaderStore.setState({ libraryViewMode: "tree" });
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().libraryViewMode).toBe("tree");
+
+    // setter 收到坏值时保持现状。
+    useReaderStore.getState().setLibraryViewMode("shelf");
+    useReaderStore.getState().setLibraryViewMode("grid" as never);
+    expect(useReaderStore.getState().libraryViewMode).toBe("shelf");
+  });
+
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "金句",

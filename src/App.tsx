@@ -50,6 +50,7 @@ import {
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
 import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
+import { BookshelfView } from "./components/BookshelfView";
 import { DocumentTree } from "./components/DocumentTree";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
@@ -1514,6 +1515,9 @@ function App() {
   const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
+  // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
+  const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
+  const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -4045,6 +4049,19 @@ function App() {
     };
   }, [snapshot?.rootPath, documentExtents]);
 
+  // 书架封面(plan-bookshelf-covers 定稿补记 §0.2):EPUB 封面在文档打开时
+  // 捕获——read_epub_asset 只服务当前打开的 EPUB,书架端无法为任意 EPUB
+  // 取图。已缓存跳过;失败静默,书架回落生成式封面。
+  useEffect(() => {
+    if (IS_WEB_RUNTIME || currentContent?.kind !== "epub") return;
+    const { relativePath, document } = currentContent;
+    void import("./lib/coverCapture")
+      .then(({ captureEpubCoverThumbnail }) =>
+        captureEpubCoverThumbnail(relativePath, document),
+      )
+      .catch(() => undefined);
+  }, [currentContent]);
+
   /** 树条目徽标:全文预估;扫描版/无字符不显示(TE-D5)。 */
   const estimateForPath = useCallback(
     (path: string): string | null => {
@@ -4949,11 +4966,37 @@ function App() {
               }}
             />
           )}
-          <DocumentTree
-            onOpenSecondary={handleOpenSecondary}
-            onBeforeSelect={recordNavDeparture}
-            estimateForPath={estimateForPath}
-          />
+          {snapshot && !searchQuery.trim() && (
+            <div className="library-view-toggle" role="group" aria-label="库浏览形态">
+              <button
+                type="button"
+                aria-pressed={libraryViewMode === "tree"}
+                onClick={() => setLibraryViewMode("tree")}
+              >
+                树形
+              </button>
+              <button
+                type="button"
+                aria-pressed={libraryViewMode === "shelf"}
+                onClick={() => setLibraryViewMode("shelf")}
+              >
+                书架
+              </button>
+            </div>
+          )}
+          {libraryViewMode === "shelf" && snapshot && !searchQuery.trim() ? (
+            <BookshelfView
+              onOpenSecondary={handleOpenSecondary}
+              onBeforeSelect={recordNavDeparture}
+              extents={documentExtents}
+            />
+          ) : (
+            <DocumentTree
+              onOpenSecondary={handleOpenSecondary}
+              onBeforeSelect={recordNavDeparture}
+              estimateForPath={estimateForPath}
+            />
+          )}
         </div>
 
         <footer className="sidebar-footer">

@@ -633,6 +633,157 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* ---- 书架视图（plan-bookshelf-covers §3.3） ---- */
+
+.library-view-toggle {
+  display: flex;
+  gap: 4px;
+  margin: 0 20px 10px;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--chrome);
+}
+
+.library-view-toggle button {
+  flex: 1;
+  padding: 4px 8px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.library-view-toggle button[aria-pressed="true"] {
+  background: var(--paper-raised);
+  color: var(--ink);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+.bookshelf {
+  padding: 0 10px 20px;
+}
+
+.bookshelf__grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
+  gap: 14px 10px;
+  padding: 0 10px;
+}
+
+.bookshelf__card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+  border-radius: 8px;
+}
+
+.bookshelf__card:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
+.bookshelf__cover {
+  position: relative;
+  display: block;
+  aspect-ratio: 3 / 4;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  background: var(--chrome);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transition: transform 140ms ease, box-shadow 140ms ease;
+}
+
+.bookshelf__card:hover .bookshelf__cover,
+.bookshelf__card:focus-visible .bookshelf__cover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.14);
+}
+
+.bookshelf__card--current .bookshelf__cover {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px var(--selection);
+}
+
+.bookshelf__cover-image,
+.bookshelf__cover-art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.bookshelf__cover-image {
+  object-fit: cover;
+  background: #fff;
+}
+
+.bookshelf__cover-art {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.bookshelf__cover-initial {
+  color: var(--paper);
+  font-family: "Iowan Old Style", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun",
+    serif;
+  font-size: 34px;
+  font-weight: 700;
+  opacity: 0.9;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.18);
+}
+
+.bookshelf__format {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: color-mix(in srgb, var(--ink) 72%, transparent);
+  color: var(--paper);
+  font-size: 9px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+}
+
+.bookshelf__progress {
+  position: absolute;
+  right: 6px;
+  bottom: 6px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--ink) 78%, transparent);
+  color: var(--paper);
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.bookshelf__title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.35;
+}
+
+.bookshelf__card--current .bookshelf__title {
+  color: var(--ink);
+  font-weight: 600;
+}
+
 .document-tree {
   padding: 0 10px 20px;
 }
