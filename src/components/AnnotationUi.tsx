@@ -330,6 +330,8 @@ interface AnnotationListProps {
   onRelocate?: (annotation: Annotation) => void;
   /** 金句卡片入口(QC-D3 M2):仅对有摘录的高亮/下划线显示。 */
   onGenerateCard?: (annotation: Annotation) => void;
+  /** 全书回顾编纂入口(plan-book-digest):列表非空时显示。 */
+  onCompileDigest?: () => void;
   onClearAll?: () => void;
 }
 
@@ -347,6 +349,7 @@ export function AnnotationList({
   onChangeColor,
   onRelocate,
   onGenerateCard,
+  onCompileDigest,
   onClearAll,
 }: AnnotationListProps) {
   const colorNames = useAnnotationColorNames();
@@ -463,6 +466,15 @@ export function AnnotationList({
             </div>
           ) : null}
           <div className="annotation-list-toolbar-actions">
+            {onCompileDigest ? (
+              <button
+                type="button"
+                title="把本文档全部摘录按章节编纂成读书报告"
+                onClick={onCompileDigest}
+              >
+                读书报告
+              </button>
+            ) : null}
             {onExport ? (
               <button type="button" onClick={onExport}>
                 导出本文档
@@ -619,11 +631,17 @@ export function AnnotationLibraryGroupList({
   currentPath = null,
   onSelect,
   onExportGroup,
+  onCompileCurrentGroup,
 }: {
   groups: AnnotationLibraryGroup[];
   currentPath?: string | null;
   onSelect: (annotation: Annotation) => void;
   onExportGroup?: (group: AnnotationLibraryGroup) => void;
+  /**
+   * 编纂读书报告(plan-book-digest 定稿):编纂依赖当前文档已加载的
+   * TOC,因此仅当前文档分组渲染该动作;不传则不渲染。
+   */
+  onCompileCurrentGroup?: (group: AnnotationLibraryGroup) => void;
 }) {
   const [collapsedPaths, setCollapsedPaths] = useState<ReadonlySet<string>>(new Set());
   const [expandedPaths, setExpandedPaths] = useState<ReadonlySet<string>>(new Set());
@@ -671,6 +689,17 @@ export function AnnotationLibraryGroupList({
                 <span className="annotation-library-current">当前</span>
               ) : null}
               <span className="side-panel-count">{group.annotations.length}</span>
+              {onCompileCurrentGroup && group.path === currentPath ? (
+                <button
+                  type="button"
+                  className="annotation-library-export"
+                  aria-label={`编纂 ${group.title} 的读书报告`}
+                  title="把该文档全部摘录按章节编纂成读书报告"
+                  onClick={() => onCompileCurrentGroup(group)}
+                >
+                  编纂读书报告
+                </button>
+              ) : null}
               {onExportGroup ? (
                 <button
                   type="button"

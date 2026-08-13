@@ -28,6 +28,8 @@ interface AnnotationHubViewProps {
   onRefresh: () => void;
   onExport: () => void;
   onExportGroup: (group: AnnotationLibraryGroup) => void;
+  /** 编纂读书报告(plan-book-digest):仅当前文档分组渲染。 */
+  onCompileCurrentGroup?: (group: AnnotationLibraryGroup) => void;
   onSelect: (annotation: Annotation) => void;
   onExit: () => void;
 }
@@ -43,6 +45,7 @@ export function AnnotationHubView({
   onRefresh,
   onExport,
   onExportGroup,
+  onCompileCurrentGroup,
   onSelect,
   onExit,
 }: AnnotationHubViewProps) {
@@ -111,6 +114,7 @@ export function AnnotationHubView({
         currentPath={currentPath}
         onSelect={onSelect}
         onExportGroup={onExportGroup}
+        onCompileCurrentGroup={onCompileCurrentGroup}
       />
     );
   }

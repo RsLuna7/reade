@@ -1,7 +1,7 @@
-# 方案草案：全书回顾编纂视图（读书报告）
+# 方案定稿：全书回顾编纂视图（读书报告）
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（实施中）**
 - 定位：把当前文档的全部标注按章节结构穿插编纂为一页只读"读书报告"：章节标题 + 该章摘录（blockquote）+ 笔记，读完一本书后一眼回看全部收获；整页可导出 Markdown。
 - 关联：标注→章节归属完全复用目录热力的 locator 归因逻辑（`tocHeat.ts` 的 buildTocHeat 输入契约）；导出复用 `annotationExport.ts` 通道；入口在标注 tab 与全库标注中枢。
 
@@ -69,21 +69,29 @@ export function buildBookDigest(input: {
 | 4 | `src/App.tsx` | 两处入口 + overlay 状态 + 跳转接线 | M |
 | 5 | `src/App.css`、`docs/USER_GUIDE.md` | 样式（明暗）+ 文档 | S |
 
-## 5. 验收标准（草案级）
+## 5. 验收标准（实施回填）
 
-- [ ] 纯函数测试：三格式归因（含边界：首标题前的标注、无 TOC 文档全入未分组）、章节内排序、书签过滤、markdown 输出快照。
-- [ ] tocHeat 重构零回归（既有测试全绿）。
-- [ ] 运行时双端：真实标注文档编纂——章节顺序与原文一致、点击跳回正确标注；导出 .md 在外部编辑器打开结构正确。
-- [ ] 明/暗 × 宽/窄截图；`pnpm test`、`tsc --noEmit`、`cargo test`（若动 transfer）回归。
+- [x] 纯函数测试：三格式归因（首标题前/改名标题入未归属、PDF Outline 区间、EPUB 章节映射、无 TOC 平铺退化）、章节内 sortIndex 排序与决胜、书签/墓碑/空摘录过滤计数、markdown 输出全文断言（含层级钳制与多行摘录）、文件名清洗——`bookDigest.test.ts` 12 例。
+- [x] tocHeat 抽取 `buildTocAttributor` 后既有 24 例测试零改动全绿（"PDF 无 Outline 整层缺席"语义保留在 buildTocHeat）。
+- [x] 组件测试：分组渲染/空态/跳转回调/导出内容/Esc 捕获关闭/平铺退化——`BookDigestView.test.tsx` 6 例。
+- [x] 运行时（Web dev + IndexedDB fixture，真实 heading id 注入）：章节顺序与原文一致、未归属置尾、点击条目跳回原文命中下划线、中枢入口仅当前文档组、中枢内 Esc 只关编纂不退中枢。截图 `output/playwright/roadmap-batch5/book-digest-*.png`（明/暗 × 宽/窄 + 跳转 + 中枢入口）。
+- [x] `pnpm test`（含新 18 例）、`tsc --noEmit` 全绿；零 Rust 改动（BD-D3 走前端下载，未动 transfer.rs）。
+- [ ] 桌面真机：SQLite 标注源 + PDF/EPUB 文档的编纂与导出落盘（待桌面环境人工走查；归因逻辑与 tocHeat 同源已被单测锚定）。
 
 ## 6. 决策点
 
-| # | 决策 | 推荐 | 备选 |
+| # | 决策 | 定稿 | 备选 |
 |---|------|------|------|
-| BD-D1 | 呈现载体 | **reader 之上的全屏 overlay**（不动 ReaderView 枚举与视图互斥矩阵） | 新 activeView（路由语义更"正"，但互斥/返回逻辑改动面大；定稿时若 overlay 与既有浮层冲突再升级） |
-| BD-D2 | 归因实现 | **从 tocHeat 抽共享函数**（单一真相源） | digest 独立实现（两套归因必然漂移，否） |
+| BD-D1 | 呈现载体 | **reader 之上的全屏 overlay**（不动 ReaderView 枚举与视图互斥矩阵）；Esc 走 App 全局链（朗读激活时 Esc 先停朗读，RA-D6 全局优先级不变） | 新 activeView（路由语义更"正"，但互斥/返回逻辑改动面大） |
+| BD-D2 | 归因实现 | **从 tocHeat 抽共享函数 `buildTocAttributor`**（locator → tocId 单一真相源；tocHeat 的"PDF 无 Outline 整层缺席"语义保留在 buildTocHeat 内，digest 侧同输入退化为平铺） | digest 独立实现（两套归因必然漂移，否） |
 | BD-D3 | 导出通道 | **前端 `downloadBlobFile` 下载 .md**（双端同构、不动 Rust EXPORT_FILE_KINDS 白名单） | 扩展 `export_annotations_file` 支持 md（要动 transfer.rs 白名单，收益仅是原生保存对话框） |
-| BD-D4 | 书签处理 | **跳过并计数注明** | 以"位置书签"行呈现（无文本的行在报告里是噪音） |
+| BD-D4 | 书签处理 | **跳过并计数注明**（统计行"已略过 N 条书签"） | 以"位置书签"行呈现（无文本的行在报告里是噪音） |
+
+**定稿补充决策**
+
+- 中枢入口收窄为**当前文档分组**（组头"编纂读书报告"仅当前文档显示）：编纂需要该文档已加载的 TOC，跨文档触发会在 TOC 异步就绪前生成伪"未分组"报告；单文档定位下这是最诚实的边界，跨文档场景先点开文档再编纂。
+- 章节标题层级映射：TocItem.level 1..6 → Markdown `##`…`######`（钳制）；视图内按 level 缩进。
+- 分屏/朗读交互矩阵：overlay 盖在阅读面上，分屏副栏保持背后不动；朗读不强制停止（与 stats/中枢一致，仅 ReadAloudBar 被 overlay 遮住，Esc 先停朗读再关 overlay）。
 
 ## 7. 风险
 

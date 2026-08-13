@@ -106,6 +106,46 @@ function floorIndex(pages: number[], page: number): number {
   return found;
 }
 
+/** buildTocAttributor 的输入：与 TocHeatInput 相同,只是不需要标注本身。 */
+export type TocAttributorInput = Omit<TocHeatInput, "annotations">;
+
+/**
+ * 标注 locator → TOC 条目 id 的共享归因函数（plan-book-digest BD-D2）：
+ * tocHeat 的密度计数与 bookDigest 的分组编纂共用同一真相源，防两处漂移。
+ * markdown 按 headingId 直配、pdf 按 Outline 页区间 floor 查找、epub 经
+ * chapterId → TOC id 映射；无法归属返回 null（调用方各自决定退化语义，
+ * 例如 tocHeat 对"PDF 无 Outline"整层缺席，digest 则退化为平铺列表）。
+ */
+export function buildTocAttributor(
+  input: TocAttributorInput,
+): (locator: AnnotationLocator) => string | null {
+  const { items, format, epubChapterTocIds } = input;
+  if (format === "pdf") {
+    const { pages, ids } = buildPdfIntervals(items);
+    if (pages.length === 0) return () => null;
+    return (locator) => {
+      const page = pdfPage(locator);
+      if (page === null || !Number.isFinite(page)) return null;
+      const index = floorIndex(pages, page);
+      return index === -1 ? null : ids[index];
+    };
+  }
+  if (format === "epub") {
+    const tocIds = new Set(items.map((item) => item.id));
+    return (locator) => {
+      const chapterId = epubChapterId(locator);
+      if (chapterId === null) return null;
+      const tocId = epubChapterTocIds?.get(chapterId);
+      return tocId !== undefined && tocIds.has(tocId) ? tocId : null;
+    };
+  }
+  const tocIds = new Set(items.map((item) => item.id));
+  return (locator) => {
+    const headingId = markdownHeadingId(locator);
+    return headingId !== null && tocIds.has(headingId) ? headingId : null;
+  };
+}
+
 /**
  * Buckets live annotations onto TOC entries and grades each bucket 0..4 with
  * `calendarLevel` (relative to the busiest section). Effectively O(A + T):
@@ -113,35 +153,14 @@ function floorIndex(pages: number[], page: number): number {
  * per annotation over at most a few hundred outline intervals.
  */
 export function buildTocHeat(input: TocHeatInput): TocHeatResult {
-  const { items, annotations, format, epubChapterTocIds } = input;
+  const { items, annotations, format } = input;
 
-  let resolve: (locator: AnnotationLocator) => string | null;
-  if (format === "pdf") {
-    const { pages, ids } = buildPdfIntervals(items);
-    // No outline → the document has no sections to attribute to; the heat
-    // layer is absent entirely (plan §3.1), including the unassigned note.
-    if (pages.length === 0) return { byId: new Map(), unassignedCount: 0 };
-    resolve = (locator) => {
-      const page = pdfPage(locator);
-      if (page === null || !Number.isFinite(page)) return null;
-      const index = floorIndex(pages, page);
-      return index === -1 ? null : ids[index];
-    };
-  } else if (format === "epub") {
-    const tocIds = new Set(items.map((item) => item.id));
-    resolve = (locator) => {
-      const chapterId = epubChapterId(locator);
-      if (chapterId === null) return null;
-      const tocId = epubChapterTocIds?.get(chapterId);
-      return tocId !== undefined && tocIds.has(tocId) ? tocId : null;
-    };
-  } else {
-    const tocIds = new Set(items.map((item) => item.id));
-    resolve = (locator) => {
-      const headingId = markdownHeadingId(locator);
-      return headingId !== null && tocIds.has(headingId) ? headingId : null;
-    };
+  // No outline → the document has no sections to attribute to; the heat
+  // layer is absent entirely (plan §3.1), including the unassigned note.
+  if (format === "pdf" && buildPdfIntervals(items).pages.length === 0) {
+    return { byId: new Map(), unassignedCount: 0 };
   }
+  const resolve = buildTocAttributor(input);
 
   const counts = new Map<string, number>();
   let unassignedCount = 0;

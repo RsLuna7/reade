@@ -263,6 +263,7 @@ const StatsView = lazy(() => import("./components/StatsView").then((module) => (
 const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ default: module.HomeView })));
 const ReviewView = lazy(() => import("./components/ReviewView").then((module) => ({ default: module.ReviewView })));
 const AnnotationHubView = lazy(() => import("./components/AnnotationHubView").then((module) => ({ default: module.AnnotationHubView })));
+const BookDigestView = lazy(() => import("./components/BookDigestView").then((module) => ({ default: module.BookDigestView })));
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = useState(() =>
@@ -1200,6 +1201,7 @@ function SidePanel({
   onChangeAnnotationColor,
   onRelocateAnnotation,
   onGenerateAnnotationCard,
+  onCompileAnnotationsDigest,
   onClearAnnotations,
   linksState,
   onSelectLinkDocument,
@@ -1247,6 +1249,8 @@ function SidePanel({
   onChangeAnnotationColor: (annotation: Annotation, color: AnnotationColor) => void;
   onRelocateAnnotation: (annotation: Annotation) => void;
   onGenerateAnnotationCard?: (annotation: Annotation) => void;
+  /** 全书回顾编纂(plan-book-digest):标注 tab 工具条入口。 */
+  onCompileAnnotationsDigest?: () => void;
   onClearAnnotations: () => void;
   /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
   linksState: LinksPanelState;
@@ -1349,6 +1353,7 @@ function SidePanel({
           onChangeColor={onChangeAnnotationColor}
           onRelocate={onRelocateAnnotation}
           onGenerateCard={onGenerateAnnotationCard}
+          onCompileDigest={onCompileAnnotationsDigest}
           onClearAll={onClearAnnotations}
         />
       ) : tab === "links" ? (
@@ -1466,6 +1471,9 @@ function App() {
   const [pendingSelection, setPendingSelection] = useState<PendingSelection | null>(null);
   // 金句卡片浮层(QC-D5):引文与出处捕获进 state,选区随后即可释放。
   const [quoteCardSource, setQuoteCardSource] = useState<QuoteCardSource | null>(null);
+  // 全书回顾编纂(plan-book-digest BD-D1):reader 之上的全屏 overlay,
+  // 不进 ReaderView 枚举;数据全部来自当前文档已有 state(toc/标注)。
+  const [bookDigestOpen, setBookDigestOpen] = useState(false);
   // 相关段落浮层(RP-D4):挂在工具条位置旁;请求带序号守卫防过期结果。
   const [relatedPassages, setRelatedPassages] = useState<
     | (RelatedPassagesStatus & { x: number; y: number })
@@ -3211,6 +3219,14 @@ function App() {
     [documentTitles],
   );
 
+  // 全书回顾编纂入口(plan-book-digest):数据全在前端 state(toc/标注),
+  // 开即算;编纂依赖当前文档的 TOC,因此入口都作用于当前文档。
+  const handleOpenBookDigest = useCallback(() => {
+    setCompactTocOpen(false);
+    setMobileLibraryOpen(false);
+    setBookDigestOpen(true);
+  }, []);
+
   const libraryFilterActive =
     librarySearch !== null ||
     libraryFilters.kinds.length > 0 ||
@@ -3263,6 +3279,15 @@ function App() {
       void selectDocument(annotation.relativePath);
     },
     [currentPath, jumpToAnnotation, recordNavDeparture, selectDocument, setActiveView],
+  );
+
+  /** 编纂条目点击:关 overlay 再走标注跳转链(视图切换与重试都在链内)。 */
+  const handleDigestJump = useCallback(
+    (annotation: Annotation) => {
+      setBookDigestOpen(false);
+      handleSelectLibraryAnnotation(annotation);
+    },
+    [handleSelectLibraryAnnotation],
   );
 
   /** 全屏中枢入口(方案四 A2):来自全库 tab 顶部链接,footer 不加第四图标。 */
@@ -3455,6 +3480,8 @@ function App() {
     setCollectionsPopoverOpen(false);
     setSidePanelTab((current) => (current === "library" ? current : "toc"));
     setAnnotationPanelOpen(false);
+    // 编纂视图是单文档的:换文档即关闭,防 overlay 展示上一篇的报告。
+    setBookDigestOpen(false);
     setMarkdownBrokenIds([]);
     setReaderBrokenIds([]);
     setMarkdownApproximateIds([]);
@@ -4171,6 +4198,7 @@ function App() {
           setNoteDraft(null);
           setMarkEditor(null);
           setQuoteCardSource(null);
+          setBookDigestOpen(false);
           closeRelatedPassages();
           clearRelocatePreview();
         }
@@ -5055,6 +5083,7 @@ function App() {
                 onChangeAnnotationColor={(annotation, color) => void handleChangeAnnotationColor(annotation, color)}
                 onRelocateAnnotation={handleRelocateAnnotation}
                 onGenerateAnnotationCard={handleGenerateCardFromAnnotation}
+                onCompileAnnotationsDigest={handleOpenBookDigest}
                 onClearAnnotations={() => void handleClearAnnotations()}
                 linksState={documentLinksState}
                 onSelectLinkDocument={handleSelectLinkDocument}
@@ -5167,6 +5196,7 @@ function App() {
               onRefresh={() => void loadLibraryAnnotations()}
               onExport={() => void handleExportLibraryAnnotations()}
               onExportGroup={(group) => void handleExportLibraryGroup(group)}
+              onCompileCurrentGroup={handleOpenBookDigest}
               onSelect={handleSelectLibraryAnnotation}
               onExit={() => setActiveView("reader")}
             />
@@ -5225,6 +5255,7 @@ function App() {
               setCompactTocOpen(false);
               handleGenerateCardFromAnnotation(annotation);
             }}
+            onCompileAnnotationsDigest={handleOpenBookDigest}
             onClearAnnotations={() => void handleClearAnnotations()}
             linksState={documentLinksState}
             onSelectLinkDocument={handleSelectLinkDocument}
@@ -5315,6 +5346,21 @@ function App() {
             <QuoteCardDialog
               source={quoteCardSource}
               onClose={() => setQuoteCardSource(null)}
+              onNotice={showNotice}
+            />
+          </Suspense>
+        )}
+
+        {bookDigestOpen && currentDocument && currentContent && (
+          <Suspense fallback={null}>
+            <BookDigestView
+              docTitle={currentDocument.title}
+              format={currentContent.kind}
+              toc={toc}
+              annotations={annotations}
+              epubChapterTocIds={epubChapterTocIds}
+              onClose={() => setBookDigestOpen(false)}
+              onJump={handleDigestJump}
               onNotice={showNotice}
             />
           </Suspense>
