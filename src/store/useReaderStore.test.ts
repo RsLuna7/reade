@@ -465,6 +465,79 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().showScrollMap).toBe(true);
   });
 
+  it("persists the three focus-mode switches and defaults them off (plan-focus-mode FM-D3)", async () => {
+    expect(useReaderStore.getState().focusSpotlight).toBe(false);
+    expect(useReaderStore.getState().typewriterScroll).toBe(false);
+    expect(useReaderStore.getState().readingRuler).toBe(false);
+
+    useReaderStore.getState().setFocusSpotlight(true);
+    useReaderStore.getState().setTypewriterScroll(true);
+    useReaderStore.getState().setReadingRuler(true);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({
+      focusSpotlight: true,
+      typewriterScroll: true,
+      readingRuler: true,
+    });
+
+    // 显式开启的偏好在下次启动 rehydrate 后保留。
+    useReaderStore.setState({
+      focusSpotlight: false,
+      typewriterScroll: false,
+      readingRuler: false,
+    });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { focusSpotlight: true, typewriterScroll: true, readingRuler: true },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().focusSpotlight).toBe(true);
+    expect(useReaderStore.getState().typewriterScroll).toBe(true);
+    expect(useReaderStore.getState().readingRuler).toBe(true);
+  });
+
+  it("collapses corrupt focus-mode values to the default-off state", async () => {
+    useReaderStore.setState({
+      focusSpotlight: false,
+      typewriterScroll: false,
+      readingRuler: false,
+    });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { focusSpotlight: "yes", typewriterScroll: 1, readingRuler: null },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().focusSpotlight).toBe(false);
+    expect(useReaderStore.getState().typewriterScroll).toBe(false);
+    expect(useReaderStore.getState().readingRuler).toBe(false);
+
+    // 旧持久化数据没有这些键时不注入。
+    const migrated = migrateReaderPreferences(
+      { theme: "paper-light" },
+      READER_PREFERENCES_VERSION,
+    );
+    expect(migrated).not.toHaveProperty("focusSpotlight");
+    expect(migrated).not.toHaveProperty("typewriterScroll");
+    expect(migrated).not.toHaveProperty("readingRuler");
+
+    // 恢复默认把三开关拨回默认关。
+    useReaderStore.getState().setFocusSpotlight(true);
+    useReaderStore.getState().setTypewriterScroll(true);
+    useReaderStore.getState().setReadingRuler(true);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().focusSpotlight).toBe(false);
+    expect(useReaderStore.getState().typewriterScroll).toBe(false);
+    expect(useReaderStore.getState().readingRuler).toBe(false);
+  });
+
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "金句",

@@ -184,6 +184,10 @@ import {
 } from "./lib/annotationCapture";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { useReadAloud } from "./lib/useReadAloud";
+// 聚焦模式(plan-focus-mode):spotlight/打字机共享驱动在 lib,
+// 标尺是纯视觉组件;PDF 原版式无段落 DOM,三者一律不接线。
+import { useFocusMode, type FocusContentKind } from "./lib/useFocusMode";
+import { ReadingRuler } from "./components/ReadingRuler";
 import { ReadAloudBar } from "./components/ReadAloudBar";
 import {
   AnnotationEditBubble,
@@ -716,10 +720,13 @@ export function ReadingSettingsPanel({
   open,
   onClose,
   onNotice,
+  focusUnavailableReason = null,
 }: {
   open: boolean;
   onClose: () => void;
   onNotice: (message: string) => void;
+  /** 聚焦模式在当前内容不适用的原因(如 PDF 原版式);null = 可用。 */
+  focusUnavailableReason?: string | null;
 }) {
   const settings = useReaderStore((state) => state.readingSettings);
   const update = useReaderStore((state) => state.updateReadingSettings);
@@ -731,6 +738,12 @@ export function ReadingSettingsPanel({
   );
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const setShowScrollMap = useReaderStore((state) => state.setShowScrollMap);
+  const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
+  const setFocusSpotlight = useReaderStore((state) => state.setFocusSpotlight);
+  const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
+  const setTypewriterScroll = useReaderStore((state) => state.setTypewriterScroll);
+  const readingRuler = useReaderStore((state) => state.readingRuler);
+  const setReadingRuler = useReaderStore((state) => state.setReadingRuler);
   const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
   const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
   const resetAnnotationColorNames = useReaderStore(
@@ -910,6 +923,44 @@ export function ReadingSettingsPanel({
         </div>
         <p className="setting-hint">
           正文右缘的刻度层：标出标注四色、书签、搜索命中与朗读位置，点击可跳转。
+        </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting focus-mode-setting">
+        <legend className="setting-label">聚焦模式</legend>
+        {([
+          ["段落聚焦", focusSpotlight, setFocusSpotlight, "focus-spotlight"],
+          ["打字机滚动", typewriterScroll, setTypewriterScroll, "typewriter-scroll"],
+          ["阅读标尺", readingRuler, setReadingRuler, "reading-ruler"],
+        ] as const).map(([label, value, setValue, key]) => (
+          <div className="focus-mode-row" key={key}>
+            <span className="focus-mode-row-label">{label}</span>
+            <div
+              className="motion-level-control"
+              role="group"
+              aria-label={`${label}开关`}
+            >
+              {([
+                [false, "关闭"],
+                [true, "开启"],
+              ] as const).map(([enabled, optionLabel]) => (
+                <button
+                  type="button"
+                  key={optionLabel}
+                  aria-pressed={value === enabled}
+                  className={value === enabled ? "active" : undefined}
+                  disabled={focusUnavailableReason !== null}
+                  onClick={() => setValue(enabled)}
+                >
+                  {optionLabel}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
+        <p className="setting-hint">
+          {focusUnavailableReason ??
+            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带。"}
         </p>
       </fieldset>
 
@@ -1407,6 +1458,9 @@ function App() {
   const underlineColor = useReaderStore((state) => state.underlineColor);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
+  const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
+  const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
+  const readingRuler = useReaderStore((state) => state.readingRuler);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -2049,6 +2103,35 @@ function App() {
   // ---- 富滚动条刻度层(plan-rich-scrollbar) ----
   const [scrollMapMarks, setScrollMapMarks] = useState<ScrollMapMark[]>([]);
   const [ttsMapRatio, setTtsMapRatio] = useState<number | null>(null);
+
+  // ---- 聚焦模式(plan-focus-mode) ----
+  // PDF 视图模式经 onModeChange 外报:原版式没有段落 DOM,三开关置灰
+  // 且效果整体不接线(FM-D4);阅读模式恢复可用。
+  const [pdfViewMode, setPdfViewMode] = useState<"original" | "reading">("original");
+  const focusContentKind: FocusContentKind | null = !currentContent
+    ? null
+    : currentContent.kind === "markdown"
+      ? "markdown"
+      : currentContent.kind === "epub"
+        ? "epub"
+        : pdfViewMode === "reading"
+          ? "pdf-reading"
+          : null;
+  const focusUnavailableReason =
+    currentContent?.kind === "pdf" && pdfViewMode === "original"
+      ? "PDF 原版式没有段落结构，聚焦模式不适用；切换到阅读模式后可用。"
+      : null;
+  useFocusMode({
+    readerRef,
+    articleRef,
+    enabledKind: activeView === "reader" ? focusContentKind : null,
+    contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
+    spotlight: focusSpotlight,
+    typewriter: typewriterScroll,
+    // TTS 的滚动跟随优先(§3.4):控制条打开期间打字机让位。
+    typewriterSuspended: readAloudBarOpen,
+    motionLevel,
+  });
 
   // ---- 分栏对照(plan-split-view) ----
   // 副栏的会话记忆由 App 持有:窄窗退化会卸载副栏组件,恢复分栏后仍能回位。
@@ -3486,6 +3569,9 @@ function App() {
     setReaderBrokenIds([]);
     setMarkdownApproximateIds([]);
     setReaderApproximateIds([]);
+    // PdfReader 换文档会自回原版式;这里同步归位,避免聚焦模式在
+    // 新 PDF 上短暂沿用上一篇的"阅读模式可用"判定。
+    setPdfViewMode("original");
     // Preview marks die with the swapped-out content; only the state remains.
     setRelocatePreview(null);
     if (jumpRetryTimer.current !== null) {
@@ -4910,7 +4996,12 @@ function App() {
             >
               <Settings2 size={16} aria-hidden="true" />
             </button>
-            <ReadingSettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} onNotice={showNotice} />
+            <ReadingSettingsPanel
+              open={settingsOpen}
+              onClose={() => setSettingsOpen(false)}
+              onNotice={showNotice}
+              focusUnavailableReason={focusUnavailableReason}
+            />
           </div>
           <div className="reading-progress" aria-hidden="true">
             <div
@@ -4997,6 +5088,7 @@ function App() {
                       page,
                     })
                   }
+                  onModeChange={setPdfViewMode}
                   onBrokenAnnotationsChange={setReaderBrokenIds}
                   onApproximateAnnotationsChange={setReaderApproximateIds}
                   onTocChange={handleTocChange}
@@ -5023,6 +5115,13 @@ function App() {
                 ttsRatio={ttsMapRatio}
                 onSelect={handleScrollMapSelect}
                 onSelectTts={handleScrollMapSelectTts}
+              />
+            )}
+            {readingRuler && hoverCapable && focusContentKind && (
+              <ReadingRuler
+                readerRef={readerRef}
+                fontSize={readingSettings.fontSize}
+                lineHeight={readingSettings.lineHeight}
               />
             )}
             </div>

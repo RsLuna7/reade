@@ -1,7 +1,7 @@
-# 方案草案：聚焦模式
+# 方案定稿：聚焦模式
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；定稿：2026-08-13（基线 `ed130f2` 复核）
+- 状态：**定稿**
 - 定位：三个相互独立的阅读专注开关——①当前段落外降不透明度（spotlight）、②打字机滚动（当前行保持视口中部）、③阅读标尺（跟随指针的横向色带）。各自可单开，全部接入既有三档动效体系。
 - 关联：与朗读句级高亮（CSS Custom Highlight，`docs/plan-read-aloud.md`）不争 DOM；动效档语义沿 `motion.ts`；设置面板与持久化沿 `useReaderStore` 阅读偏好模式。
 
@@ -87,6 +87,16 @@
 | FM-D2 | 参考线位置 | **45% 视口高**（与 EPUB 18% 章节参考线用途不同，聚焦要居中偏上） | 50%（长段落底部提前失焦感更强） |
 | FM-D3 | 三开关归属 | **阅读设置面板 + persist** | 顶栏独立按钮（顶栏已挤）；每文档记忆（状态爆炸，否） |
 | FM-D4 | PDF 原版式 | **禁用并提示** | canvas 上叠段落遮罩（无段落 DOM，无从谈起，否） |
+
+## 6.1 定稿落点（基线 `ed130f2` 复核后）
+
+- FM-D1～FM-D4 全部按推荐执行；参考线 45%、三开关入阅读设置面板并 persist、PDF 原版式禁用（置灰 + 提示行）。
+- 块容器按格式选定：Markdown `.annotated-markdown > .markdown-body`、EPUB `.epub-chapter`（章头与 `.epub-block` 同为候选块）、PDF 阅读模式 `.pdf-reading-page > .markdown-body`；容器标 `data-focus-container`，当前块标 `data-focus-current`，CSS 只淡化 `:not([data-focus-current])`。
+- spotlight 与打字机合并为单 hook `useFocusMode`（共享块收集、IntersectionObserver 可见集与最近块判定），避免双 IO 重复成本；内容异步变化（Shiki/Mermaid/PDF 阅读页加载）用 childList MutationObserver 去抖重收集。
+- 打字机武装窗口：wheel/导航键刷新武装时间戳，滚动事件距最近武装 ≤500ms 才参与 160ms 静止判定；吸附一次消费武装（自身滚动不再触发）；滚动条区域 pointerdown 豁免；TTS 控制条打开时挂起。
+- `prefers-reduced-motion` 沿既有档位语义（系统 reduce → 默认档 off），不新增媒体查询；off 档吸附用 `behavior: "auto"`、过渡时长 0。
+- PDF 原版式判定：PdfReader 新增可选 `onModeChange` 回调（现状无模式外报能力，这是本功能唯一的组件契约新增），App 据此置灰设置行并停用三效果。
+- 标尺渲染于 `.reading-frame` 内 absolute 层，高度 = 字号 × 行高，触屏（`hover: none`）不渲染。
 
 ## 7. 风险
 

@@ -21,6 +21,8 @@
   --motion-slow: 0ms;
   --motion-distance: 0px;
   --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* 段落聚焦淡入淡出时长(plan-focus-mode §2):off 档瞬时。 */
+  --focus-fade: 0ms;
 }
 
 :root[data-motion="subtle"] {
@@ -28,6 +30,7 @@
   --motion-standard: 180ms;
   --motion-slow: 220ms;
   --motion-distance: 4px;
+  --focus-fade: 120ms;
 }
 
 :root[data-motion="full"] {
@@ -35,6 +38,7 @@
   --motion-standard: 220ms;
   --motion-slow: 280ms;
   --motion-distance: 6px;
+  --focus-fade: 240ms;
 }
 
 * {
@@ -1281,6 +1285,37 @@ a:focus-visible {
   border: none;
   border-radius: 2px;
   background: var(--ink);
+}
+
+/* ---- 聚焦模式(plan-focus-mode) ---- */
+/* 段落聚焦:容器由 hook 标记,当前块以外整体降不透明度;过渡只挂
+   opacity,GPU 合成承担,off 档 --focus-fade 为 0 即瞬时。 */
+.focus-spotlight [data-focus-container] > * {
+  transition: opacity var(--focus-fade) var(--motion-ease);
+}
+
+.focus-spotlight [data-focus-container] > :not([data-focus-current]) {
+  opacity: 0.35;
+}
+
+/* 阅读标尺:跟随指针的横向色带,纯视觉层不拦截任何指针事件。 */
+.reading-ruler {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  left: 0;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  will-change: transform;
+}
+
+@media (hover: none) {
+  .reading-ruler {
+    display: none;
+  }
 }
 
 .article-shell {
@@ -4403,6 +4438,37 @@ button.links-panel-entry:focus-visible {
   border-color: var(--line-strong);
   color: var(--accent-ink);
   background: var(--paper-raised);
+}
+
+.motion-level-control button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+/* 聚焦模式三开关行(plan-focus-mode FM-D3):标签 + 双态按钮组。 */
+.focus-mode-setting .focus-mode-row {
+  display: grid;
+  align-items: center;
+  margin-top: 6px;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) 118px;
+}
+
+.focus-mode-setting .focus-mode-row:first-of-type {
+  margin-top: 2px;
+}
+
+.focus-mode-setting .focus-mode-row-label {
+  color: var(--ink-soft);
+  font-size: 11.5px;
+}
+
+.focus-mode-setting .focus-mode-row .motion-level-control {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.focus-mode-setting .focus-mode-row .motion-level-control button {
+  min-height: 26px;
 }
 
 /* 标注颜色命名输入组(plan-annotation-color-names §3.2)。 */

@@ -226,6 +226,8 @@ interface PdfReaderProps {
   readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
   /** 区域引用出卡回调(plan-pdf-region-card):不传则不渲染"截取引用"钮。 */
   onRegionCard?: (capture: PdfRegionCapture) => void;
+  /** 视图模式外报(plan-focus-mode FM-D4):原版式禁用聚焦模式。 */
+  onModeChange?: (mode: "original" | "reading") => void;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
   onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
@@ -689,6 +691,7 @@ export function PdfReader({
   fuzzyAnchoring = false,
   readerRef,
   onRegionCard,
+  onModeChange,
   onBrokenAnnotationsChange,
   onApproximateAnnotationsChange,
   onTocChange,
@@ -789,6 +792,10 @@ export function PdfReader({
   useEffect(() => {
     if (mode !== "original") setRegionSelect(false);
   }, [mode]);
+
+  useEffect(() => {
+    onModeChange?.(mode);
+  }, [mode, onModeChange]);
 
   useEffect(() => {
     if (!regionSelect) return;
