@@ -1,7 +1,14 @@
-# 方案草案：Web PWA 离线化
+# 方案定稿：Web PWA 离线化
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；2026-08-13 复核基线并升级定稿（随实现落地）
+- 状态：**已实施（真实 GitHub Pages 部署验证待完成，见下）**
+- 定稿决策：PW-D1 `public/` 静态文件；PW-D2 运行时收集（导航 network-first + assets cache-first，无构建期清单注入）；PW-D3 SWR + 内容 LRU 200；PW-D4 编译时常量分支（`main.tsx` 以字面量 `__READE_RUNTIME__ === "web"` 包住注册调用，桌面 bundle 经 `rg serviceWorker dist/assets` 验证零残留）。
+- 实施落点：`public/sw.js`（策略 + 版本迁移 + LRU）、`public/reade.webmanifest` + `public/reade-icon-{192,512}.png`（图标由 `scripts/generate-pwa-icons.mjs` 确定性生成，零依赖手写 PNG 编码）、`vite.config.ts`（webManifestPlugin 仅 web 模式注入 link）、`src/lib/swRegistration.ts`（注册守卫）、`src/main.tsx`（条件注册）、`src/lib/webLibrary.ts`（离线未缓存文案）。
+- 与草案的偏离：
+  1. **版本更新不是"直接删旧壳缓存"而是"迁移后删"**：验收走查发现直接删除会产生"新 SW 激活后、下一次在线导航前"的窗口——此时新壳缓存只有 `./` + webmanifest，离线刷新得到白屏（比草案承诺的"离线时旧版"更糟）。定稿改为 activate 时把旧壳缓存条目整体迁入新缓存再删除，窗口内离线拿到自洽的旧版壳；迁移遗留的陈旧 hashed 资源由壳缓存条目上限（300）兜底淘汰。
+  2. 缓存版本号取自注册 URL 的 `?v=<version>`（`__READE_VERSION__` 在注册侧注入），`sw.js` 自身保持字节稳定、不经构建注入。
+  3. SW 策略纯函数的测试不维护第二份拷贝：`src/lib/swPolicy.test.ts` 以 stub `self` 执行 `public/sw.js`，通过文件尾的 `__readeSwTestHooks` 直接测同一份实现。
+- 未自动化/未验证项：install/activate/fetch 的缓存编排在 jsdom 无法自动化，已以本地子路径（`/reade/`）静态服务器 + Playwright CDP offline 人工验收（离线读已访问文档、未缓存文档提示、版本迁移与旧缓存清理均通过）；**真实 GitHub Pages 部署验证待完成**——部署后按 `docs/WEB_DEPLOY.md`「PWA 与离线阅读」清单检查 scope、安装项与断网刷新；Safari/iOS 的安装与离线行为未验证。
 - 定位：让 GitHub Pages 上的 Web 版可安装、可离线：service worker 缓存应用壳资源与 manifest/search/文档内容，版本化缓存更新。桌面运行时不注册 SW。零依赖（手写 SW，不引入 workbox/vite-plugin-pwa）。
 - 关联：必须与相对 Vite `base: "./"` 与 Pages 子路径共存（`vite.config.ts`/AGENTS 红线）；缓存版本挂 `__READE_VERSION__` 既有注入；内容清单来自 `manifest.json`（生成器产物）。
 

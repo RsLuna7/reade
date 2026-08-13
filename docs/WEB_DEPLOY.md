@@ -85,6 +85,22 @@ run: pnpm build:web
 
 GitHub 官方配置说明：[Configuring a publishing source for your GitHub Pages site](https://docs.github.com/en/pages/getting-started-with-github-pages/configuring-a-publishing-source-for-your-github-pages-site)。
 
+## PWA 与离线阅读
+
+Web 版是可安装的 PWA：构建产物自带 `sw.js`（手写 service worker，零运行时依赖）、`reade.webmanifest` 与两枚图标，全部为静态文件，随 `dist` 一并部署，无需额外配置。行为要点：
+
+- service worker 只在生产构建注册（`sw.js?v=<应用版本>`，相对路径注册，scope 即 Pages 子路径）；桌面版不注册。
+- 缓存策略：页面导航 network-first（离线回落缓存的应用壳）；带内容哈希的构建资源 cache-first；`reade-web/**`（manifest/search/文档/图片）stale-while-revalidate，访问过的文档离线可读，内容缓存条目上限 200。
+- 版本更新：`package.json` 的 `version` 变化会改变注册 URL，新 worker 激活时把旧版应用壳缓存迁移到新缓存后清理；更新后的首次在线访问自动换到新版。
+- 离线时打开未缓存过的文档会提示「联网打开一次后即可离线阅读」，不会静默失败。
+
+部署 PWA 变更后的验证（本地也可先验证：`pnpm build:web` 后用静态服务器把 `dist` 挂在子路径上模拟 Pages）：
+
+1. 打开站点，DevTools → Application → Service Workers 确认 worker 已激活、scope 为站点子路径；
+2. Application → Cache Storage 应出现 `reade-shell-v<版本>` 与 `reade-content-v1`；
+3. 浏览一两篇文档后断网（DevTools Network → Offline）刷新：应用壳与读过的文档仍可打开，未读过的文档给出离线提示；
+4. 需要强制所有访问者刷新应用壳时，提升 `package.json` 的 `version` 并重新部署（回滚场景同理：revert 后如缓存行为异常，bump 版本即可强制换壳）。
+
 ## 部署验证
 
 每次部署至少检查：

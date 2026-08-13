@@ -78,9 +78,35 @@ function themeBootPlugin(): Plugin {
   };
 }
 
+/**
+ * Web 构建注入 PWA 安装元数据（docs/plan-web-pwa.md）：`<link rel="manifest">`
+ * 只进 web 模式的 index.html，桌面构建的页面保持不变（sw.js/webmanifest
+ * 作为 public 静态文件会被两种构建拷贝，但桌面 bundle 不含注册代码，
+ * 也没有引用它们的标签）。相对 href 与 Vite 相对 base 一致，兼容 Pages
+ * 子路径部署。
+ */
+function webManifestPlugin(mode: string): Plugin {
+  return {
+    name: "reade:web-manifest",
+    transformIndexHtml: {
+      order: "post",
+      handler() {
+        if (mode !== "web") return [];
+        return [
+          {
+            tag: "link",
+            attrs: { rel: "manifest", href: "reade.webmanifest" },
+            injectTo: "head",
+          },
+        ];
+      },
+    },
+  };
+}
+
 // https://vite.dev/config/
 export default defineConfig(async ({ mode }) => ({
-  plugins: [react(), themeBootPlugin()],
+  plugins: [react(), themeBootPlugin(), webManifestPlugin(mode)],
   // Relative asset URLs work for both user sites and project sites such as /reade/.
   base: mode === "web" ? "./" : undefined,
   define: {

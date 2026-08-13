@@ -191,6 +191,15 @@ function parseSearchIndex(value: unknown, url: string): WebSearchIndex {
   return value as unknown as WebSearchIndex;
 }
 
+/** 离线且请求未被 SW 缓存命中时的细化文案（plan-web-pwa §2.2）。 */
+export const WEB_LIBRARY_OFFLINE_MESSAGE =
+  "当前处于离线状态，这篇内容还没有离线缓存；联网打开一次后即可离线阅读。";
+
+function connectionFailureMessage(): string {
+  const offline = typeof navigator !== "undefined" && navigator.onLine === false;
+  return offline ? WEB_LIBRARY_OFFLINE_MESSAGE : "无法连接 Web 文档库";
+}
+
 async function checkedResponse(
   fetcher: typeof fetch,
   url: string,
@@ -200,7 +209,7 @@ async function checkedResponse(
   try {
     response = await fetcher(url, { headers: { Accept: accept } });
   } catch {
-    throw new WebLibraryRequestError("无法连接 Web 文档库", url);
+    throw new WebLibraryRequestError(connectionFailureMessage(), url);
   }
   if (!response.ok) {
     throw new WebLibraryRequestError(
