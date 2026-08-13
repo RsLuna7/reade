@@ -1,6 +1,13 @@
+import { DEEPLINK_PARSE_MAX_CHARS } from "./textLocate";
+
 export interface WebRoute {
   documentPath: string;
   heading: string | null;
+  /**
+   * 段落分享深链的目标文本（`#text=<encoded>`，plan-web-text-deeplink
+   * DL-D1）。与 heading 互斥：hash 以 `text=` 开头时只解析 textFragment。
+   */
+  textFragment: string | null;
 }
 
 export interface WebLocationLike {
@@ -82,6 +89,27 @@ function parseHeading(hash: string): { valid: boolean; value: string | null } {
   return { valid: true, value: heading };
 }
 
+const TEXT_FRAGMENT_PREFIX = "#text=";
+
+/**
+ * 解析 `#text=<encoded>` 段。前缀 `text=` 是字面量（heading 编码时 `=`
+ * 会被转义为 `%3D`，两者不会撞车）。解码失败、空值、控制字符或超过
+ * 200 字符时按无深链处理（不让整条路由失效）。
+ */
+function parseTextFragment(hash: string): string | null {
+  if (!hash.startsWith(TEXT_FRAGMENT_PREFIX)) return null;
+  const decoded = safeDecode(hash.slice(TEXT_FRAGMENT_PREFIX.length), false);
+  if (
+    decoded === null ||
+    !decoded.trim() ||
+    decoded.length > DEEPLINK_PARSE_MAX_CHARS ||
+    CONTROL_CHARACTERS.test(decoded)
+  ) {
+    return null;
+  }
+  return decoded;
+}
+
 /** Parses `?doc=relative/path.md#heading` from a URL or `window.location`. */
 export function parseWebRoute(location: WebLocationLike): WebRoute | null {
   const rawDocumentPath = queryValue(location.search, "doc");
@@ -90,34 +118,60 @@ export function parseWebRoute(location: WebLocationLike): WebRoute | null {
   }
 
   const documentPath = normalizeWebDocumentPath(rawDocumentPath);
-  const heading = parseHeading(location.hash);
-  if (documentPath === null || !heading.valid) {
+  if (documentPath === null) {
     return null;
   }
 
-  return { documentPath, heading: heading.value };
+  // `#text=` 与 heading hash 互斥:text 形态的 hash 永不当 heading 解析。
+  if (location.hash.startsWith(TEXT_FRAGMENT_PREFIX)) {
+    return { documentPath, heading: null, textFragment: parseTextFragment(location.hash) };
+  }
+
+  const heading = parseHeading(location.hash);
+  if (!heading.valid) {
+    return null;
+  }
+
+  return { documentPath, heading: heading.value, textFragment: null };
+}
+
+export interface WebRouteTarget {
+  heading?: string | null;
+  /** 段落深链文本;与 heading 同时给出时 text 优先（DL-D1 互斥规则）。 */
+  text?: string | null;
 }
 
 /**
  * Builds a shareable URL while preserving unrelated query parameters.
- * An empty or omitted heading intentionally clears the existing hash.
+ * The third argument accepts a plain heading string (legacy form) or a
+ * `{ heading?, text? }` target. An empty or omitted target intentionally
+ * clears the existing hash.
  */
 export function buildWebRouteUrl(
   currentUrl: string | URL,
   documentPath: string,
-  heading?: string | null,
+  target?: string | WebRouteTarget | null,
 ): string {
   const normalizedPath = normalizeWebDocumentPath(documentPath);
   if (normalizedPath === null) {
     throw new TypeError("Invalid relative document path");
   }
 
+  const heading = typeof target === "string" ? target : target?.heading ?? null;
+  const text = typeof target === "string" ? null : target?.text ?? null;
   if (heading && CONTROL_CHARACTERS.test(heading)) {
     throw new TypeError("Invalid heading");
+  }
+  if (text && CONTROL_CHARACTERS.test(text)) {
+    throw new TypeError("Invalid text fragment");
   }
 
   const url = new URL(currentUrl.toString());
   url.searchParams.set("doc", normalizedPath);
-  url.hash = heading ? encodeURIComponent(heading) : "";
+  url.hash = text
+    ? `text=${encodeURIComponent(text)}`
+    : heading
+      ? encodeURIComponent(heading)
+      : "";
   return url.toString();
 }

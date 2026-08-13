@@ -47,6 +47,11 @@ interface SelectionToolbarProps {
   onFindRelated?: () => void;
   /** 选区 ≥ RELATED_MIN_SELECTION_CHARS 时可用,不足禁用并提示。 */
   canFindRelated?: boolean;
+  /**
+   * 段落分享深链入口(plan-web-text-deeplink):复制 `?doc=…#text=…` 链接。
+   * 仅 Web 运行时由 App 传入;桌面无可分享 URL 语义,不渲染按钮。
+   */
+  onCopyDeepLink?: () => void;
   onClose: () => void;
   canHighlight: boolean;
 }
@@ -64,6 +69,7 @@ export function SelectionToolbar({
   onMakeCard,
   onFindRelated,
   canFindRelated = false,
+  onCopyDeepLink,
   onClose,
   canHighlight,
 }: SelectionToolbarProps) {
@@ -116,6 +122,16 @@ export function SelectionToolbar({
       {onMakeCard ? (
         <button type="button" disabled={!canHighlight} onClick={onMakeCard}>
           卡片
+        </button>
+      ) : null}
+      {onCopyDeepLink ? (
+        <button
+          type="button"
+          disabled={!canHighlight}
+          title="复制指向这段文字的分享链接"
+          onClick={onCopyDeepLink}
+        >
+          链接
         </button>
       ) : null}
       <button type="button" className="annotation-toolbar-close" aria-label="关闭标注工具条" onClick={onClose}>

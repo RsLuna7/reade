@@ -1,7 +1,10 @@
-# 方案草案：Web 段落级分享深链
+# 方案定稿：Web 段落级分享深链
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；2026-08-13 复核基线并升级定稿（随实现落地）
+- 状态：**已实施**
+- 定稿决策：DL-D1 取 `#text=<encoded>` hash 段；DL-D2 复制截 120 code point、解析钳 200；DL-D3 取 CSS Custom Highlight 第二注册名 `reade-deeplink`（渐隐从简：2.4s 后直接移除注册，不做两段交替）；DL-D4 未命中提示 + 不滚动、URL 保留。
+- 实施落点：`src/lib/textLocate.ts`（归一定位纯函数，新建）、`src/lib/webRouting.ts`（textFragment 解析/构造，`buildWebRouteUrl` 第三参演进为 `string | { heading?, text? }` 兼容旧调用）、`src/App.tsx`（定位重试 2×600ms、复制入口、`replaceWebRoute` 保留 `#text=`）、`src/components/AnnotationUi.tsx`（Web-only「链接」按钮）、`src/App.css`（`::highlight(reade-deeplink)`）。
+- 与草案的偏离：截断按 Unicode code point（而非 UTF-16 码元）计数，避免劈开 emoji 代理对；其余按草案。
 - 定位：Web 版自实现 `#text=<encoded>` 参数：打开链接时定位到含该文本的段落并短暂高亮。选区工具条新增"复制段落链接"（仅 Web 运行时）。Reade 自己控制渲染与滚动，不依赖浏览器原生 Text Fragments（`#:~:text=`）。
 - 关联：与既有 `?doc=` 路由组合（`webRouting.ts`）；文本定位复用标注体系的 `buildTextIndex`/文本检索原语（`annotations.ts`）；短暂高亮沿 `runMotion` 动效档纪律。
 

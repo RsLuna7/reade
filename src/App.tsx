@@ -148,11 +148,13 @@ import {
   ANNOTATION_COLORS,
   ANNOTATION_COLOR_NAME_MAX_CHARS,
   ANNOTATION_COLOR_WORDS,
+  buildTextIndex,
   clearAnnotationMarks,
   collectElementText,
   findTextQuote,
   isAnnotationMarkKind,
   rangeFromOffsets,
+  rangeFromTextIndex,
   rangeOffsetsWithinRoot,
   wrapRangeWithMark,
 } from "./lib/annotations";
@@ -254,6 +256,13 @@ import {
   measureHeadingRatios,
 } from "./lib/tocCoverage";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
+// Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
+// 高亮复用朗读同款 CSS Custom Highlight(第二注册名,零 DOM 侵入)。
+import { locateNormalizedText, normalizeShareText } from "./lib/textLocate";
+import {
+  applySentenceHighlight,
+  clearSentenceHighlight,
+} from "./lib/sentenceHighlight";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
 import {
   CONTENT_WIDTH_MAX,
@@ -277,6 +286,10 @@ const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
 /** PDF 阅读模式的大小上限,与 PdfReader 工具栏的禁用判定保持一致(RA-D5)。 */
 const PDF_READING_MODE_MAX_BYTES = 128 * 1024 * 1024;
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
+/** 深链高亮的 CSS Custom Highlight 注册名(与 TTS 同 API 不同名,DL-D3)。 */
+const DEEPLINK_HIGHLIGHT_NAME = "reade-deeplink";
+/** 深链高亮驻留时长;到时移除注册即消失(一次性强调,不持久化)。 */
+const DEEPLINK_HIGHLIGHT_MS = 2400;
 const PdfReader = lazy(() => import("./components/PdfReader").then((module) => ({ default: module.PdfReader })));
 const QuoteCardDialog = lazy(() => import("./components/QuoteCardDialog").then((module) => ({ default: module.QuoteCardDialog })));
 const ReadNextCard = lazy(() => import("./components/ReadNextCard").then((module) => ({ default: module.ReadNextCard })));
@@ -1686,6 +1699,20 @@ function App() {
   const pendingHash = useRef<string | null>(
     initialWebRoute.current?.heading ?? null,
   );
+  // 深链定位消费一次;shareTextFragment 供 replaceWebRoute 在停留于
+  // 深链文档期间保留 `#text=`(未命中时 URL 仍可再分享,DL-D4)。
+  const pendingTextFragment = useRef<string | null>(
+    initialWebRoute.current?.textFragment ?? null,
+  );
+  const shareTextFragment = useRef<{ path: string; text: string } | null>(
+    initialWebRoute.current?.textFragment
+      ? {
+          path: initialWebRoute.current.documentPath,
+          text: initialWebRoute.current.textFragment,
+        }
+      : null,
+  );
+  const deeplinkHighlightTimer = useRef<number | null>(null);
   const restoredLibrary = useRef(false);
   // H-D1 方案 A:桌面冷启动落点只判定一次;之后库刷新/切换维持
   // "自动打开第一篇"的现状行为。
@@ -3472,6 +3499,25 @@ function App() {
     }
   }, []);
 
+  // 复制段落链接(plan-web-text-deeplink §3.3):选区文本归一截断为
+  // 120 字符后构造 `?doc=…#text=…`,仅 Web 运行时接线。
+  const handleCopySelectionLink = useCallback(async () => {
+    if (!pendingSelection || !currentPath) return;
+    const text = normalizeShareText(pendingSelection.text);
+    closeToolbar();
+    if (!text) {
+      showNotice("选区没有可分享的文本。");
+      return;
+    }
+    try {
+      const url = buildWebRouteUrl(window.location.href, currentPath, { text });
+      const copied = await copyTextToClipboard(url);
+      showNotice(copied ? "已复制段落链接" : "复制失败，请重试。");
+    } catch {
+      showNotice("无法生成安全的分享链接。");
+    }
+  }, [closeToolbar, copyTextToClipboard, currentPath, pendingSelection, showNotice]);
+
   const handleExportAnnotations = useCallback(async () => {
     if (!currentPath || !annotations.length) return;
     const titles = new Map([[currentPath, currentDocument?.title ?? fileName(currentPath)]]);
@@ -3858,8 +3904,16 @@ function App() {
   const replaceWebRoute = useCallback(
     (relativePath: string, heading?: string | null) => {
       if (!IS_WEB_RUNTIME) return;
+      // 停留在深链目标文档且未跳章节时保留 `#text=`;一旦切文档或
+      // 跳 heading,深链片段随之退役。
+      const keep = shareTextFragment.current;
+      const text = !heading && keep && keep.path === relativePath ? keep.text : null;
+      if (!text) shareTextFragment.current = null;
       try {
-        const nextUrl = buildWebRouteUrl(window.location.href, relativePath, heading);
+        const nextUrl = buildWebRouteUrl(window.location.href, relativePath, {
+          heading: heading ?? null,
+          text,
+        });
         window.history.replaceState(null, "", nextUrl);
       } catch {
         showNotice("无法生成安全的分享链接，已保留当前页面。");
@@ -4610,7 +4664,8 @@ function App() {
       sessionTop === undefined &&
       !currentLocator &&
       !pendingAnnotationJump.current &&
-      !pendingHash.current
+      !pendingHash.current &&
+      !pendingTextFragment.current
     ) {
       const rootPath = snapshot?.rootPath;
       const persisted = rootPath ? readReadingPosition(rootPath, currentPath) : null;
@@ -4653,6 +4708,81 @@ function App() {
       );
     });
   }, [currentContent, motionLevel]);
+
+  // Web 段落分享深链定位:文档渲染完成后在正文文本索引中检索目标文本,
+  // 命中则滚动至视口上 1/3 并短暂高亮;Shiki/图片异步落地会改动文本节点,
+  // 沿标注跳转的重试语义(2 次 × 600ms)后仍未命中才给降级提示,不静默。
+  useEffect(() => {
+    if (
+      !IS_WEB_RUNTIME ||
+      currentContent?.kind !== "markdown" ||
+      !pendingTextFragment.current
+    ) {
+      return;
+    }
+    const fragment = pendingTextFragment.current;
+    pendingTextFragment.current = null;
+    let cancelled = false;
+    let timer: number | null = null;
+    const attempt = (round: number) => {
+      timer = null;
+      if (cancelled) return;
+      const article = articleRef.current;
+      const reader = readerRef.current;
+      const root = article?.querySelector<HTMLElement>(".markdown-body") ?? article;
+      if (root && reader) {
+        const index = buildTextIndex(root);
+        const match = locateNormalizedText(index.text, fragment);
+        const range = match ? rangeFromTextIndex(index, match.start, match.end) : null;
+        if (range) {
+          const rangeRect = range.getBoundingClientRect();
+          const readerRect = reader.getBoundingClientRect();
+          const top = Math.max(
+            0,
+            reader.scrollTop + rangeRect.top - readerRect.top - reader.clientHeight / 3,
+          );
+          if (motionLevel === "off" || typeof reader.scrollTo !== "function") {
+            reader.scrollTop = top;
+          } else {
+            reader.scrollTo({ top, behavior: "smooth" });
+          }
+          // 不支持 CSS Custom Highlight 的环境只失去视觉强调,定位不受影响。
+          if (applySentenceHighlight(DEEPLINK_HIGHLIGHT_NAME, range)) {
+            if (deeplinkHighlightTimer.current !== null) {
+              window.clearTimeout(deeplinkHighlightTimer.current);
+            }
+            deeplinkHighlightTimer.current = window.setTimeout(() => {
+              deeplinkHighlightTimer.current = null;
+              clearSentenceHighlight(DEEPLINK_HIGHLIGHT_NAME);
+            }, DEEPLINK_HIGHLIGHT_MS);
+          }
+          return;
+        }
+      }
+      if (round >= 2) {
+        showNotice("链接指向的段落未找到，文档可能已更新。");
+        return;
+      }
+      timer = window.setTimeout(() => attempt(round + 1), 600);
+    };
+    window.requestAnimationFrame(() => attempt(0));
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [currentContent, motionLevel, showNotice]);
+
+  // 离开文档即清掉一次性深链高亮,防止残留注册跟到下一篇。
+  useEffect(
+    () => () => {
+      if (deeplinkHighlightTimer.current !== null) {
+        window.clearTimeout(deeplinkHighlightTimer.current);
+        deeplinkHighlightTimer.current = null;
+      }
+      clearSentenceHighlight(DEEPLINK_HIGHLIGHT_NAME);
+    },
+    [currentPath],
+  );
 
   useEffect(() => {
     setCompactTocOpen(false);
@@ -5661,6 +5791,9 @@ function App() {
           onMakeCard={handleMakeCardFromSelection}
           onFindRelated={handleFindRelated}
           canFindRelated={canFindRelated}
+          onCopyDeepLink={
+            IS_WEB_RUNTIME ? () => void handleCopySelectionLink() : undefined
+          }
           onClose={closeToolbar}
           canHighlight={Boolean(pendingSelection)}
         />

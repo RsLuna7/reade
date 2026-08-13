@@ -3149,6 +3149,12 @@ a:focus-visible {
   background-color: var(--selection);
 }
 
+/* 段落分享深链的一次性强调(plan-web-text-deeplink DL-D3):与朗读句
+   高亮同 API 第二注册名,选区色语义,2.4s 后由 App 移除注册即消失。 */
+::highlight(reade-deeplink) {
+  background-color: var(--selection);
+}
+
 .annotation-note-editor {
   position: fixed;
   right: 24px;

@@ -68,6 +68,18 @@ describe("SelectionToolbar", () => {
     expect(onPickColor).toHaveBeenCalledWith("green");
   });
 
+  it("renders the copy-deep-link button only when the web runtime wires it", () => {
+    // 桌面运行时不传 onCopyDeepLink(App 以 IS_WEB_RUNTIME 守卫),按钮不存在。
+    render(<SelectionToolbar {...baseProps} />);
+    expect(screen.queryByRole("button", { name: "链接" })).not.toBeInTheDocument();
+    cleanup();
+
+    const onCopyDeepLink = vi.fn();
+    render(<SelectionToolbar {...baseProps} onCopyDeepLink={onCopyDeepLink} />);
+    fireEvent.click(screen.getByRole("button", { name: "链接" }));
+    expect(onCopyDeepLink).toHaveBeenCalledTimes(1);
+  });
+
   it("labels every swatch with its semantic name plus the base color word", () => {
     render(<SelectionToolbar {...baseProps} />);
     for (const name of [
