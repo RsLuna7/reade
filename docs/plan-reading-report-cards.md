@@ -1,7 +1,7 @@
-# 方案草案：年度/月度阅读报告卡片（本地 Wrapped）
+# 方案定稿：年度/月度阅读报告卡片（本地 Wrapped）
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（实施中）**
 - 定位：完全本地的"年度/月度阅读报告"：总时长/活跃天数/最长连续纪录/读得最久的书/划线最多的书/年度金句等，渲染为一组精致 PNG 卡片，可复制/下载。数据不出网，仪式感拉满。
 - 关联：canvas 渲染与主题取色完全复用金句卡片管线（`docs/plan-quote-cards.md` 的 `quoteCard.ts`/`quoteCardLayout.ts`，含 17-token 主题契约）；数据聚合复用 `readingStats.ts` 纯函数族；入口放阅读统计视图（桌面专属，与 stats 现状一致）。
 
@@ -77,21 +77,31 @@ export function buildReadingReport(input: {
 | 3 | `src/components/ReportDialog.tsx`（新）+ StatsView 接线 | 入口与预览 | M |
 | 4 | `src/App.css`、`docs/USER_GUIDE.md` | 对话框样式 + 文档 | S |
 
-## 5. 验收标准（草案级）
+## 5. 验收标准（实施回填）
 
-- [ ] 聚合测试：range 边界（跨年/闰月）、上期对比、活跃天不足返回 null、Top3 并列决胜、金句挑选。
-- [ ] 运行时：真实数据生成年度/月度各一组；四系列 × 明暗抽查 4 组取色正确；复制到剪贴板与下载文件均可打开；2× 导出清晰度检查。
-- [ ] 空档回退：无标注时金句卡缺席、其余三张正常。
-- [ ] 回归：金句卡片功能不回归（若共享了排版原语）；`pnpm test`、`tsc --noEmit`。
+- [x] 聚合测试：range 边界（1 月上期跨年）、上期对比（含上期无记录）、活跃天不足返回 null、Top3 并列决胜（路径升序）、金句挑选（最长/同长取先创建）——`readingReport.test.ts` 10 例。
+- [x] 排版/绘制测试：四张卡构成与固定尺寸、省略号原语、水平越界防线、格式条宽度、2× 渲染与文件名——`reportCards.test.ts` 15 例；对话框接线（档位禁用/切卡/复制/下载/不足态）——`ReportDialog.test.tsx` 7 例。
+- [x] 视觉矩阵：paper-light / paper-dark / celadon-light / ink-dark 四组卡片 + 对话框明暗两张，截图存 `output/playwright/roadmap-batch5/report-cards-*.png`、`report-dialog-*.png`（Vite dev 页动态 import 源模块渲染，与桌面同一 canvas 代码路径）。
+- [x] 空档回退：无标注时金句卡缺席、书单卡显示"该周期还没有标注"（单测覆盖）。
+- [x] 回归：金句卡片零改动；`pnpm test` 921 通过、`tsc --noEmit` 干净。
+- [ ] 桌面真机：StatsView 入口按钮 → 真实 SQLite 会话数据出卡、剪贴板粘贴到外部应用（待桌面环境人工走查；对话框打开期间切主题不重渲卡片，与金句卡行为一致）。
 
 ## 6. 决策点
 
-| # | 决策 | 推荐 | 备选 |
+| # | 决策 | 定稿 | 备选 |
 |---|------|------|------|
-| RC-D1 | 卡片组构成 | **固定四张（总览/习惯/书单/金句）** | 单张长图（信息过载、复制场景差）；可勾选生成（配置面膨胀） |
-| RC-D2 | 与金句卡的代码关系 | **共享排版原语小工具，卡片绘制各自独立**（避免把金句卡改成"通用卡片框架"的过度抽象） | 抽通用 CardRenderer 框架（premature abstraction，否） |
-| RC-D3 | 入口范围 | **本月/今年/上一年 三档** | 任意区间选择器（配置面大，Wrapped 语义是"固定周期"） |
-| RC-D4 | 数据门槛 | **活跃天 ≥7 才可生成**（防空报告尴尬） | 无门槛（新用户生成一张空卡，体验差） |
+| RC-D1 | 卡片组构成 | **固定四张（总览/习惯/书单/金句）**；期内无标注时金句卡缺席、其余照常 | 单张长图（信息过载、复制场景差）；可勾选生成（配置面膨胀） |
+| RC-D2 | 与金句卡的代码关系 | **直接 import 既有导出原语，quoteCard 零改动**——复核确认 `cardFontCss`/`CardCanvasContext`/`CardCanvas`/`readCardTheme`/`CARD_EXPORT_SCALE`（quoteCard.ts）与 `layoutQuoteLines`/`CardTextBlock`/`CardDivider`/`formatCardDateLabel`（quoteCardLayout.ts）均已是公开导出，无需任何重构 | 抽通用 CardRenderer 框架（premature abstraction，否） |
+| RC-D3 | 入口范围 | **本月/今年/上一年 三档**；默认选中"今年"，不足 7 活跃天时回落到首个可用档 | 任意区间选择器（配置面大，Wrapped 语义是"固定周期"） |
+| RC-D4 | 数据门槛 | **活跃天 ≥7 才可生成**（`buildReadingReport` 返回 null；入口按档禁用并提示） | 无门槛（新用户生成一张空卡，体验差） |
+
+**定稿补充决策**
+
+- 对比上期 = **上一个自然月/自然年**（非等长毫秒窗）；上期无记录时显示"上期无记录"而非百分比。
+- 会话跨期界（月初/年初午夜）按墙钟时间比例切分归属（与 `aggregateDaily` 同一语义），杜绝跨界会话整段计入单侧。
+- 四张卡固定 **720×900** 逻辑 px（不随内容伸缩），2× 导出，成组观感一致。
+- 通知形态：StatsView 无全局 notice 通道，对话框内用 `role="status"` 行内提示（复制/下载反馈），不新增全局通道。
+- 视觉验收借 Vite dev 页动态 import 源模块直接渲染卡片（canvas 输出只依赖主题 token + 数据，与桌面运行时同一代码路径）；桌面端入口交互另行人工走查。
 
 ## 7. 风险
 

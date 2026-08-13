@@ -1,5 +1,7 @@
 import {
   cloneElement,
+  lazy,
+  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -17,6 +19,7 @@ import {
   Flame,
   Info,
   RefreshCw,
+  Sparkles,
   Target,
   X,
 } from "lucide-react";
@@ -65,6 +68,9 @@ import {
 import { chartMotionProps, useCountUp, useEntranceFlag } from "../lib/statsMotion";
 import { runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { THEME_META, useReaderStore } from "../store/useReaderStore";
+
+// 阅读报告卡片(plan-reading-report-cards):随点随生成,懒加载出卡管线。
+const ReportDialog = lazy(() => import("./ReportDialog").then((module) => ({ default: module.ReportDialog })));
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HEATMAP_DAYS = 365;
@@ -568,6 +574,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const [docDetailPath, setDocDetailPath] = useState<string | null>(null);
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
   const rootRef = useRef<HTMLDivElement>(null);
   const rootPath = snapshot?.rootPath ?? null;
   const entered = useEntranceFlag(motionLevel);
@@ -613,13 +620,14 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const overlayState = useRef({ goal: false, exportMenu: false, doc: null as string | null, day: null as string | null });
-  overlayState.current = { goal: goalEditorOpen, exportMenu: exportOpen, doc: docDetailPath, day: drillDay };
+  const overlayState = useRef({ report: false, goal: false, exportMenu: false, doc: null as string | null, day: null as string | null });
+  overlayState.current = { report: reportOpen, goal: goalEditorOpen, exportMenu: exportOpen, doc: docDetailPath, day: drillDay };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
       const overlays = overlayState.current;
-      if (overlays.goal) setGoalEditorOpen(false);
+      if (overlays.report) setReportOpen(false);
+      else if (overlays.goal) setGoalEditorOpen(false);
       else if (overlays.exportMenu) setExportOpen(false);
       else if (overlays.doc) setDocDetailPath(null);
       else if (overlays.day) setDrillDay(null);
@@ -856,6 +864,16 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
               </div>
             )}
           </div>
+          <button
+            className="icon-button"
+            type="button"
+            aria-label="生成阅读报告"
+            title="生成阅读报告"
+            disabled={loaded.length === 0}
+            onClick={() => setReportOpen(true)}
+          >
+            <Sparkles size={15} aria-hidden="true" />
+          </button>
           <button
             className="icon-button"
             type="button"
@@ -1242,6 +1260,15 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
           onClose={() => setDocDetailPath(null)}
           onOpenDocument={openDocument}
         />
+      )}
+      {reportOpen && (
+        <Suspense fallback={null}>
+          <ReportDialog
+            sessions={loaded}
+            documents={documents}
+            onClose={() => setReportOpen(false)}
+          />
+        </Suspense>
       )}
     </div>
   );

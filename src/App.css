@@ -3700,6 +3700,104 @@ button.links-panel-entry:focus-visible {
   font-weight: 600;
 }
 
+/* 阅读报告卡片(plan-reading-report-cards):StatsView 内的预览对话框,
+   复用金句卡的 state/hint/actions 样式,加范围档与缩略图条。 */
+.report-dialog {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  z-index: 46;
+  display: grid;
+  gap: 12px;
+  width: min(600px, calc(100vw - 32px));
+  max-height: calc(100vh - 48px);
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  transform: translate(-50%, -50%);
+}
+
+.report-dialog .settings-heading {
+  margin: 0;
+}
+
+.report-range-toggle {
+  display: flex;
+  gap: 6px;
+}
+
+.report-range-toggle button {
+  padding: 5px 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+}
+
+.report-range-toggle button.active {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.report-range-toggle button:disabled {
+  opacity: 0.45;
+}
+
+.report-preview {
+  display: grid;
+  min-height: 180px;
+  max-height: min(52vh, 460px);
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--paper);
+  place-items: center;
+}
+
+.report-preview img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+
+.report-thumbs {
+  display: flex;
+  gap: 8px;
+  overflow-x: auto;
+}
+
+.report-thumbs button {
+  display: grid;
+  gap: 4px;
+  min-width: 72px;
+  padding: 6px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  justify-items: center;
+}
+
+.report-thumbs button img {
+  display: block;
+  width: 56px;
+  height: 70px;
+  border-radius: 4px;
+  object-fit: cover;
+  object-position: top;
+}
+
+.report-thumbs button.active {
+  border-color: var(--line-strong);
+  color: var(--ink);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+}
+
 /* 命令面板(plan-command-palette):Ctrl+P 呼出的居中切换器。 */
 .command-palette-backdrop {
   position: fixed;
