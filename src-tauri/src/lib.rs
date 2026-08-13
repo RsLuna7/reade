@@ -6,10 +6,11 @@ mod transfer;
 mod user_store;
 
 use library::{
-    clear_conversion_cache, find_related_passages, list_document_extents, list_document_links,
-    open_document, open_library, probe_library_path, read_asset, read_document_preview,
-    read_document_range, read_document_thumbnail, read_epub_asset, read_pdf_reading_mode,
-    refresh_library, retry_document_index, search_documents, store_document_thumbnail, AppState,
+    capture_read_snapshot, clear_conversion_cache, find_related_passages, list_document_extents,
+    list_document_links, open_document, open_library, probe_library_path, read_asset,
+    read_document_preview, read_document_range, read_document_thumbnail, read_epub_asset,
+    read_pdf_reading_mode, read_snapshot_diff, refresh_library, retry_document_index,
+    search_documents, store_document_thumbnail, AppState,
 };
 use stats::{list_reading_sessions, record_reading_session, StatsState};
 use tauri::Manager;
@@ -58,6 +59,8 @@ pub fn run() {
             list_document_extents,
             read_document_thumbnail,
             store_document_thumbnail,
+            capture_read_snapshot,
+            read_snapshot_diff,
             list_document_links,
             read_document_preview,
             find_related_passages,

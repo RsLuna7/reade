@@ -374,6 +374,45 @@ export async function storeDocumentThumbnail(
 }
 
 /**
+ * 增量重读（plan-incremental-reread §3/§8）：快照捕获与 diff 查询的
+ * camelCase 契约（Rust `ChangedSegment` / `ReadSnapshotDiff` 的孪生）。
+ * 桌面专属：Web 构建没有缓存 sqlite，恒"未捕获/无差异"，横幅整条
+ * 路径自然不出现。
+ */
+export interface ReadSnapshotChange {
+  /** 新文档中的单元序号：markdown 段序 / EPUB 章序 / PDF 零基页码。 */
+  index: number;
+  kind: "added" | "modified";
+  /** 段落在源文件中的 1 基行号区间（仅 markdown）。 */
+  startLine: number | null;
+  endLine: number | null;
+}
+
+export interface ReadSnapshotDiff {
+  granularity: "paragraph" | "chapter" | "page";
+  changedSegments: ReadSnapshotChange[];
+  removedCount: number;
+  capturedAt: number;
+  /** diff 已降级为"整篇有更新"（IR-D3）；此时 changedSegments 为空。 */
+  truncated: boolean;
+}
+
+/** 把当前索引文本存为"上次已读版本"；返回是否真的写入了快照。 */
+export async function captureReadSnapshot(relativePath: string): Promise<boolean> {
+  if (APP_RUNTIME === "web") return false;
+  return (await getTauriBackend()).captureReadSnapshot(relativePath);
+}
+
+/**
+ * 上次已读快照与当前索引文本的差异；null 表示无快照（首读）、无变化
+ * 或索引尚未追上磁盘（IR-D8，前端在 indexStatus 变化后重查）。
+ */
+export async function readSnapshotDiff(relativePath: string): Promise<ReadSnapshotDiff | null> {
+  if (APP_RUNTIME === "web") return null;
+  return (await getTauriBackend()).readSnapshotDiff(relativePath);
+}
+
+/**
  * Read-only backlink/outgoing view for one document (plan-backlinks
  * §3.3). Desktop reads the derived `document_links` cache table; the web
  * build extracts links from `search.json` at runtime and throws the

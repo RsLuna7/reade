@@ -33,6 +33,23 @@ const THUMBNAIL_MAX_DIMENSION: u32 = 640;
 const PNG_MAGIC: [u8; 8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A];
 const CACHE_SOFT_LIMIT_BYTES: u64 = 1024 * 1024 * 1024;
 const CACHE_LOW_WATER_BYTES: u64 = CACHE_SOFT_LIMIT_BYTES * 9 / 10;
+/// Read snapshots (docs/plan-incremental-reread.md IR-D5): an independent
+/// 256 MiB LRU sub-budget so "last read version" copies never eat into the
+/// 1 GiB conversion-cache budget above. Unlike the main eviction, snapshot
+/// eviction may drop rows of the active library (pure LRU by last_accessed).
+const SNAPSHOT_SOFT_LIMIT_BYTES: u64 = 256 * 1024 * 1024;
+const SNAPSHOT_LOW_WATER_BYTES: u64 = SNAPSHOT_SOFT_LIMIT_BYTES * 9 / 10;
+/// Multi-segment formats (PDF pages / EPUB chapters) join their segment
+/// texts with this record separator inside `document_read_snapshots.content`;
+/// the diff splits both sides through the same join+split transform.
+const SNAPSHOT_UNIT_SEPARATOR: &str = "\u{1E}";
+/// Diff degradation ladder (IR-D3): beyond this many units on either side
+/// the diff reports a whole-document update instead of per-unit marks.
+const DIFF_MAX_UNITS: usize = 5_000;
+/// Mid-section LCS table cap (u16 cells ≈ 8 MiB); larger middles fall back
+/// to the multiset approximation (moves stop being flagged, still exact
+/// about fresh/removed counts).
+const DIFF_MAX_LCS_CELLS: usize = 4_000_000;
 const DEFAULT_SEARCH_LIMIT: u32 = 30;
 const MAX_SEARCH_LIMIT: u32 = 100;
 /// `list_document_links` truncates each of its lists to this many entries.
@@ -869,6 +886,590 @@ fn store_thumbnail_record(
     Ok(())
 }
 
+/// Captures the "last read version" snapshot for incremental re-reading
+/// (docs/plan-incremental-reread.md §3.2/§8). The content is copied from
+/// `search_segments` inside one transaction together with the fingerprint
+/// of the matching `document_cache` row, so a concurrent background
+/// re-index can never produce a snapshot whose text and fingerprint
+/// disagree. Returns false when nothing indexed exists to snapshot or the
+/// text exceeds the 10 MiB per-document cap.
+#[tauri::command]
+pub fn capture_read_snapshot(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<bool> {
+    validate_relative_library_path(&relative_path)?;
+    let mut current = lock_state(&state)?;
+    let root_key = {
+        let root = current
+            .root
+            .as_ref()
+            .ok_or_else(|| "No library is open".to_owned())?;
+        normalize_root(root)
+    };
+    if !current
+        .documents
+        .iter()
+        .any(|document| document.relative_path == relative_path)
+    {
+        return Err("Document is not in the current library".to_owned());
+    }
+    capture_snapshot_record(&mut current.cache, &root_key, &relative_path)
+}
+
+/// Compares the stored read snapshot with the currently indexed text and
+/// returns the changed units (paragraphs / chapters / pages), or None when
+/// there is no snapshot, nothing changed, or the index has not caught up
+/// with the on-disk file yet (IR-D8; the frontend re-queries after the
+/// index-status event).
+#[tauri::command]
+pub fn read_snapshot_diff(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<Option<ReadSnapshotDiff>> {
+    validate_relative_library_path(&relative_path)?;
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    let document = current
+        .documents
+        .iter()
+        .find(|document| document.relative_path == relative_path)
+        .ok_or_else(|| "Document is not in the current library".to_owned())?;
+    snapshot_diff_record(
+        &current.cache,
+        &normalize_root(root),
+        &relative_path,
+        document.format,
+        document.size,
+        document.modified,
+    )
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ChangedSegment {
+    /// Unit ordinal in the NEW document: paragraph index for markdown,
+    /// chapter ordinal for EPUB, zero-based page for PDF.
+    pub index: u32,
+    pub kind: &'static str,
+    /// 1-based source line range of the paragraph (markdown only).
+    pub start_line: Option<u32>,
+    pub end_line: Option<u32>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReadSnapshotDiff {
+    /// "paragraph" (markdown/mdx), "chapter" (EPUB) or "page" (PDF).
+    pub granularity: &'static str,
+    pub changed_segments: Vec<ChangedSegment>,
+    pub removed_count: u32,
+    pub captured_at: u64,
+    /// True when the diff degraded to a whole-document hint (unit count
+    /// beyond DIFF_MAX_UNITS); changed_segments is empty in that case.
+    pub truncated: bool,
+}
+
+fn capture_snapshot_record(
+    connection: &mut Connection,
+    root_key: &str,
+    relative_path: &str,
+) -> CommandResult<bool> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot start snapshot capture: {error}"))?;
+    let fingerprint = transaction
+        .query_row(
+            "SELECT source_size, source_modified FROM document_cache
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read snapshot fingerprint: {error}"))?;
+    let Some((source_size, source_modified)) = fingerprint else {
+        return Ok(false);
+    };
+    let segments = read_segment_contents(&transaction, root_key, relative_path)?;
+    if segments.is_empty() {
+        return Ok(false);
+    }
+    let content = segments.join(SNAPSHOT_UNIT_SEPARATOR);
+    if content.len() as u64 > MAX_MARKDOWN_BYTES {
+        return Ok(false);
+    }
+    let now = now_millis();
+    transaction
+        .execute(
+            "INSERT INTO document_read_snapshots(
+                 library_root, relative_path, content, source_size, source_modified,
+                 captured_at, last_accessed)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?6)
+             ON CONFLICT(library_root, relative_path) DO UPDATE SET
+                 content = excluded.content,
+                 source_size = excluded.source_size,
+                 source_modified = excluded.source_modified,
+                 captured_at = excluded.captured_at,
+                 last_accessed = excluded.last_accessed",
+            params![
+                root_key,
+                relative_path,
+                content,
+                source_size,
+                source_modified,
+                now,
+            ],
+        )
+        .map_err(|error| format!("Cannot store read snapshot: {error}"))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit read snapshot: {error}"))?;
+    enforce_snapshot_budget(connection)?;
+    Ok(true)
+}
+
+fn snapshot_diff_record(
+    connection: &Connection,
+    root_key: &str,
+    relative_path: &str,
+    format: DocumentFormat,
+    disk_size: u64,
+    disk_modified: u64,
+) -> CommandResult<Option<ReadSnapshotDiff>> {
+    let row = connection
+        .query_row(
+            "SELECT content, source_size, source_modified, captured_at
+             FROM document_read_snapshots
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)?,
+                    row.get::<_, i64>(2)?,
+                    row.get::<_, i64>(3)?,
+                ))
+            },
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read document snapshot: {error}"))?;
+    let Some((snapshot_content, snapshot_size, snapshot_modified, captured_at)) = row else {
+        return Ok(None);
+    };
+    connection
+        .execute(
+            "UPDATE document_read_snapshots SET last_accessed = ?3
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path, now_millis()],
+        )
+        .map_err(|error| format!("Cannot touch document snapshot: {error}"))?;
+    if snapshot_size == disk_size as i64 && snapshot_modified == disk_modified as i64 {
+        return Ok(None);
+    }
+    // IR-D8: only diff against segments that describe the on-disk file; a
+    // pending background re-index would otherwise produce stale marks.
+    let cached = connection
+        .query_row(
+            "SELECT source_size, source_modified FROM document_cache
+             WHERE library_root = ?1 AND relative_path = ?2",
+            params![root_key, relative_path],
+            |row| Ok((row.get::<_, i64>(0)?, row.get::<_, i64>(1)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read cached fingerprint: {error}"))?;
+    let Some((cached_size, cached_modified)) = cached else {
+        return Ok(None);
+    };
+    if cached_size != disk_size as i64 || cached_modified != disk_modified as i64 {
+        return Ok(None);
+    }
+    let segments = read_segment_contents(connection, root_key, relative_path)?;
+    if segments.is_empty() {
+        return Ok(None);
+    }
+    let current_content = segments.join(SNAPSHOT_UNIT_SEPARATOR);
+    let diff = diff_snapshot_texts(&snapshot_content, &current_content, format);
+    if diff.changed.is_empty() && diff.removed_count == 0 && !diff.truncated {
+        // Fingerprints moved but the normalized text did not (e.g. a pure
+        // CRLF→LF rewrite): stay silent instead of nagging.
+        return Ok(None);
+    }
+    let granularity = match format {
+        DocumentFormat::Markdown | DocumentFormat::Mdx => "paragraph",
+        DocumentFormat::Epub => "chapter",
+        DocumentFormat::Pdf => "page",
+    };
+    Ok(Some(ReadSnapshotDiff {
+        granularity,
+        changed_segments: diff.changed,
+        removed_count: diff.removed_count,
+        captured_at: captured_at.max(0) as u64,
+        truncated: diff.truncated,
+    }))
+}
+
+fn read_segment_contents(
+    connection: &Connection,
+    root_key: &str,
+    relative_path: &str,
+) -> CommandResult<Vec<String>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT content FROM search_segments
+             WHERE library_root = ?1 AND relative_path = ?2
+             ORDER BY ordinal ASC",
+        )
+        .map_err(|error| format!("Cannot prepare snapshot source query: {error}"))?;
+    let rows = statement
+        .query_map(params![root_key, relative_path], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(|error| format!("Cannot read snapshot source segments: {error}"))?;
+    rows.collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(|error| format!("Cannot decode snapshot source segments: {error}"))
+}
+
+struct SnapshotTextDiff {
+    changed: Vec<ChangedSegment>,
+    removed_count: u32,
+    truncated: bool,
+}
+
+/// Pure diff between the snapshot text and the current text
+/// (docs/plan-incremental-reread.md IR-D3). Markdown diffs blank-line
+/// paragraphs of the single segment and carries 1-based source line
+/// ranges; EPUB/PDF diff whole units (chapters/pages) split on the
+/// snapshot separator, which both sides pass through identically.
+fn diff_snapshot_texts(old: &str, new: &str, format: DocumentFormat) -> SnapshotTextDiff {
+    match format {
+        DocumentFormat::Markdown | DocumentFormat::Mdx => {
+            let old_units = split_markdown_paragraphs(old);
+            let new_units = split_markdown_paragraphs(new);
+            let old_hashes: Vec<u64> = old_units.iter().map(|unit| unit.hash).collect();
+            let new_hashes: Vec<u64> = new_units.iter().map(|unit| unit.hash).collect();
+            let outcome = diff_unit_hashes(&old_hashes, &new_hashes);
+            SnapshotTextDiff {
+                changed: outcome
+                    .changed
+                    .iter()
+                    .map(|(index, kind)| ChangedSegment {
+                        index: *index as u32,
+                        kind: kind.as_str(),
+                        start_line: Some(new_units[*index].start_line),
+                        end_line: Some(new_units[*index].end_line),
+                    })
+                    .collect(),
+                removed_count: outcome.removed_count,
+                truncated: outcome.truncated,
+            }
+        }
+        DocumentFormat::Epub | DocumentFormat::Pdf => {
+            let old_hashes: Vec<u64> = old
+                .split(SNAPSHOT_UNIT_SEPARATOR)
+                .map(normalized_unit_hash)
+                .collect();
+            let new_hashes: Vec<u64> = new
+                .split(SNAPSHOT_UNIT_SEPARATOR)
+                .map(normalized_unit_hash)
+                .collect();
+            let outcome = diff_unit_hashes(&old_hashes, &new_hashes);
+            SnapshotTextDiff {
+                changed: outcome
+                    .changed
+                    .iter()
+                    .map(|(index, kind)| ChangedSegment {
+                        index: *index as u32,
+                        kind: kind.as_str(),
+                        start_line: None,
+                        end_line: None,
+                    })
+                    .collect(),
+                removed_count: outcome.removed_count,
+                truncated: outcome.truncated,
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UnitChangeKind {
+    Added,
+    Modified,
+}
+
+impl UnitChangeKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            UnitChangeKind::Added => "added",
+            UnitChangeKind::Modified => "modified",
+        }
+    }
+}
+
+struct UnitDiffOutcome {
+    /// (index into the new unit list, kind), ascending by index.
+    changed: Vec<(usize, UnitChangeKind)>,
+    removed_count: u32,
+    truncated: bool,
+}
+
+struct MarkdownParagraph {
+    start_line: u32,
+    end_line: u32,
+    hash: u64,
+}
+
+/// Splits markdown source into blank-line paragraphs with 1-based line
+/// ranges. Normalization discipline: leading BOM stripped, CR/CRLF folded,
+/// per-line trailing whitespace ignored for hashing.
+fn split_markdown_paragraphs(text: &str) -> Vec<MarkdownParagraph> {
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+    let mut paragraphs = Vec::new();
+    let mut current_lines: Vec<&str> = Vec::new();
+    let mut current_start = 0u32;
+    let mut current_end = 0u32;
+    let mut flush = |lines: &mut Vec<&str>, start: u32, end: u32| {
+        if lines.is_empty() {
+            return;
+        }
+        paragraphs.push(MarkdownParagraph {
+            start_line: start,
+            end_line: end,
+            hash: hash_lines(lines),
+        });
+        lines.clear();
+    };
+    for (index, raw_line) in text.split('\n').enumerate() {
+        let line_number = (index + 1) as u32;
+        let line = raw_line.strip_suffix('\r').unwrap_or(raw_line).trim_end();
+        if line.trim().is_empty() {
+            flush(&mut current_lines, current_start, current_end);
+        } else {
+            if current_lines.is_empty() {
+                current_start = line_number;
+            }
+            current_end = line_number;
+            current_lines.push(line);
+        }
+    }
+    flush(&mut current_lines, current_start, current_end);
+    paragraphs
+}
+
+fn hash_lines(lines: &[&str]) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for line in lines {
+        line.hash(&mut hasher);
+    }
+    hasher.finish()
+}
+
+/// Whole-unit hash for chapter/page texts: line endings folded and
+/// per-line trailing whitespace plus surrounding blank lines ignored.
+fn normalized_unit_hash(text: &str) -> u64 {
+    let text = text.strip_prefix('\u{FEFF}').unwrap_or(text);
+    let lines: Vec<&str> = text
+        .split('\n')
+        .map(|line| line.strip_suffix('\r').unwrap_or(line).trim_end())
+        .collect();
+    let start = lines
+        .iter()
+        .position(|line| !line.is_empty())
+        .unwrap_or(lines.len());
+    let end = lines
+        .iter()
+        .rposition(|line| !line.is_empty())
+        .map_or(start, |position| position + 1);
+    hash_lines(&lines[start..end])
+}
+
+/// Hash-sequence diff (IR-D3): common prefix/suffix trim, then an exact
+/// LCS over the middle while the DP table stays within DIFF_MAX_LCS_CELLS,
+/// falling back to a multiset approximation beyond that (pure moves stop
+/// being flagged). Fresh new units are paired in order with removed old
+/// units as "modified"; the leftovers become "added" or removed_count.
+fn diff_unit_hashes(old: &[u64], new: &[u64]) -> UnitDiffOutcome {
+    if old.len() > DIFF_MAX_UNITS || new.len() > DIFF_MAX_UNITS {
+        return UnitDiffOutcome {
+            changed: Vec::new(),
+            removed_count: 0,
+            truncated: true,
+        };
+    }
+    let mut prefix = 0;
+    while prefix < old.len() && prefix < new.len() && old[prefix] == new[prefix] {
+        prefix += 1;
+    }
+    let mut suffix = 0;
+    while suffix < old.len() - prefix
+        && suffix < new.len() - prefix
+        && old[old.len() - 1 - suffix] == new[new.len() - 1 - suffix]
+    {
+        suffix += 1;
+    }
+    let old_mid = &old[prefix..old.len() - suffix];
+    let new_mid = &new[prefix..new.len() - suffix];
+    let (fresh_mid_indices, removed_old) =
+        if old_mid.len().saturating_mul(new_mid.len()) <= DIFF_MAX_LCS_CELLS {
+            lcs_unmatched(old_mid, new_mid)
+        } else {
+            multiset_unmatched(old_mid, new_mid)
+        };
+    let modified_pairs = fresh_mid_indices.len().min(removed_old);
+    let changed = fresh_mid_indices
+        .iter()
+        .enumerate()
+        .map(|(order, mid_index)| {
+            let kind = if order < modified_pairs {
+                UnitChangeKind::Modified
+            } else {
+                UnitChangeKind::Added
+            };
+            (prefix + mid_index, kind)
+        })
+        .collect();
+    UnitDiffOutcome {
+        changed,
+        removed_count: (removed_old - modified_pairs) as u32,
+        truncated: false,
+    }
+}
+
+/// Exact LCS walk: returns the new-side indices (relative to the slices)
+/// that are not on the common subsequence, plus the count of unmatched old
+/// units. Ties prefer consuming old units first so in-order edit pairing
+/// stays aligned.
+fn lcs_unmatched(old: &[u64], new: &[u64]) -> (Vec<usize>, usize) {
+    let rows = old.len();
+    let columns = new.len();
+    let stride = columns + 1;
+    let mut table = vec![0u16; (rows + 1) * stride];
+    for i in (0..rows).rev() {
+        for j in (0..columns).rev() {
+            table[i * stride + j] = if old[i] == new[j] {
+                table[(i + 1) * stride + j + 1] + 1
+            } else {
+                table[(i + 1) * stride + j].max(table[i * stride + j + 1])
+            };
+        }
+    }
+    let mut fresh = Vec::new();
+    let mut removed = 0usize;
+    let mut i = 0;
+    let mut j = 0;
+    while i < rows && j < columns {
+        if old[i] == new[j] {
+            i += 1;
+            j += 1;
+        } else if table[(i + 1) * stride + j] >= table[i * stride + j + 1] {
+            removed += 1;
+            i += 1;
+        } else {
+            fresh.push(j);
+            j += 1;
+        }
+    }
+    removed += rows - i;
+    fresh.extend(j..columns);
+    (fresh, removed)
+}
+
+/// Approximate fallback for very large middles: a hash multiset match.
+/// Cheaper than LCS and never mislabels unchanged text, but a pure move
+/// counts as unchanged here instead of one modified unit.
+fn multiset_unmatched(old: &[u64], new: &[u64]) -> (Vec<usize>, usize) {
+    let mut counts: HashMap<u64, usize> = HashMap::new();
+    for hash in old {
+        *counts.entry(*hash).or_default() += 1;
+    }
+    let mut fresh = Vec::new();
+    for (index, hash) in new.iter().enumerate() {
+        match counts.get_mut(hash) {
+            Some(count) if *count > 0 => *count -= 1,
+            _ => fresh.push(index),
+        }
+    }
+    let removed = counts.values().sum();
+    (fresh, removed)
+}
+
+fn snapshot_table_bytes(connection: &Connection) -> CommandResult<u64> {
+    let bytes: i64 = connection
+        .query_row(
+            "SELECT COALESCE(SUM(LENGTH(CAST(content AS BLOB))), 0)
+             FROM document_read_snapshots",
+            [],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot measure snapshot storage: {error}"))?;
+    Ok(bytes.max(0) as u64)
+}
+
+fn enforce_snapshot_budget(connection: &Connection) -> CommandResult<()> {
+    enforce_snapshot_budget_with_limits(
+        connection,
+        SNAPSHOT_SOFT_LIMIT_BYTES,
+        SNAPSHOT_LOW_WATER_BYTES,
+    )
+}
+
+/// IR-D5: independent LRU over the snapshot table only. May evict rows of
+/// the active library — snapshots are a convenience layer, unlike the
+/// conversion cache the reader depends on right now.
+fn enforce_snapshot_budget_with_limits(
+    connection: &Connection,
+    soft_limit: u64,
+    low_water: u64,
+) -> CommandResult<()> {
+    let mut total = snapshot_table_bytes(connection)?;
+    if total <= soft_limit {
+        return Ok(());
+    }
+    let candidates = {
+        let mut statement = connection
+            .prepare(
+                "SELECT library_root, relative_path, LENGTH(CAST(content AS BLOB))
+                 FROM document_read_snapshots
+                 ORDER BY last_accessed ASC",
+            )
+            .map_err(|error| format!("Cannot prepare snapshot eviction: {error}"))?;
+        let rows = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, i64>(2)?,
+                ))
+            })
+            .map_err(|error| format!("Cannot list snapshot eviction candidates: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Cannot decode snapshot eviction candidates: {error}"))?
+    };
+    let mut evicted = false;
+    for (root, relative_path, bytes) in candidates {
+        connection
+            .execute(
+                "DELETE FROM document_read_snapshots
+                 WHERE library_root = ?1 AND relative_path = ?2",
+                params![root, relative_path],
+            )
+            .map_err(|error| format!("Cannot evict read snapshot: {error}"))?;
+        evicted = true;
+        total = total.saturating_sub(bytes.max(0) as u64);
+        if total <= low_water {
+            break;
+        }
+    }
+    if evicted {
+        reclaim_cache_space(connection)?;
+    }
+    Ok(())
+}
+
 /// Read-only backlink/outgoing view for one document
 /// (`docs/plan-backlinks.md` §3.3). Pure SELECTs over the derived
 /// `document_links` table plus the in-memory scan snapshot; the link table
@@ -1510,6 +2111,25 @@ fn initialize_cache(connection: &Connection) -> CommandResult<()> {
                  last_accessed INTEGER NOT NULL,
                  PRIMARY KEY(library_root, relative_path)
              );
+             -- Last-read text snapshots for incremental re-reading
+             -- (docs/plan-incremental-reread.md §3.1/§8). Pure derived data
+             -- copied from search_segments, so it rides the same
+             -- IF NOT EXISTS attachment precedent as document_links and
+             -- document_thumbnails without bumping CACHE_SCHEMA_VERSION;
+             -- older cache files grow the table on the next start. Bump the
+             -- version if the columns ever change. Multi-segment formats
+             -- join segment texts with U+001E; the fingerprint columns are
+             -- read from document_cache in the same capture transaction.
+             CREATE TABLE IF NOT EXISTS document_read_snapshots(
+                 library_root TEXT NOT NULL,
+                 relative_path TEXT NOT NULL,
+                 content TEXT NOT NULL,
+                 source_size INTEGER NOT NULL,
+                 source_modified INTEGER NOT NULL,
+                 captured_at INTEGER NOT NULL,
+                 last_accessed INTEGER NOT NULL,
+                 PRIMARY KEY(library_root, relative_path)
+             );
              -- Legacy annotation storage, frozen since annotations moved to
              -- reade-user.sqlite3 (user_store.rs). Kept for one release cycle
              -- as the rescue-migration source and fallback; nothing reads or
@@ -1645,6 +2265,30 @@ fn scan_documents(root: &Path, connection: &mut Connection) -> CommandResult<Vec
                     params![root_key, path],
                 )
                 .map_err(|error| format!("Cannot sweep stale document thumbnail: {error}"))?;
+        }
+    }
+    // Same orphan sweep for read snapshots: their rows normally die with
+    // clear_cached_document, but a snapshot without a document_cache row
+    // (e.g. after a partial cleanup) must not outlive the source file.
+    let snapshot_paths = {
+        let mut statement = connection
+            .prepare("SELECT relative_path FROM document_read_snapshots WHERE library_root = ?1")
+            .map_err(|error| format!("Cannot inspect cached read snapshots: {error}"))?;
+        let rows = statement
+            .query_map(params![root_key], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Cannot list cached read snapshots: {error}"))?;
+        rows.collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("Cannot decode cached snapshot paths: {error}"))?
+    };
+    for path in snapshot_paths {
+        if !seen.contains(&path) {
+            connection
+                .execute(
+                    "DELETE FROM document_read_snapshots
+                     WHERE library_root = ?1 AND relative_path = ?2",
+                    params![root_key, path],
+                )
+                .map_err(|error| format!("Cannot sweep stale read snapshot: {error}"))?;
         }
     }
     documents.sort_by_cached_key(|document| document.relative_path.to_lowercase());
@@ -1838,6 +2482,11 @@ fn clear_cached_document(
             params![root_key, relative_path],
         )
         .map_err(|error| format!("Cannot delete document thumbnail: {error}"))?;
+    // document_read_snapshots intentionally survives this path: it doubles
+    // as the invalidation hook for changed-on-disk documents, and the whole
+    // point of a read snapshot is to outlive exactly that change
+    // (docs/plan-incremental-reread.md IR-D6). Vanished documents lose
+    // their snapshots in the scan_documents orphan sweep instead.
     transaction
         .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
@@ -1864,7 +2513,10 @@ fn enforce_cache_soft_limit_with_limits(
     soft_limit: u64,
     low_water: u64,
 ) -> CommandResult<()> {
-    let mut total = cache_active_bytes(connection)?;
+    // Snapshot bytes live under their own 256 MiB budget (IR-D5) and must
+    // not push conversion-cache documents out of the 1 GiB budget.
+    let snapshot_bytes = snapshot_table_bytes(connection)?;
+    let mut total = cache_active_bytes(connection)?.saturating_sub(snapshot_bytes);
     if total <= soft_limit {
         return Ok(());
     }
@@ -1890,7 +2542,7 @@ fn enforce_cache_soft_limit_with_limits(
     for (root, relative_path) in stale_documents {
         clear_cached_document_by_key(connection, &root, &relative_path)?;
         evicted = true;
-        total = cache_active_bytes(connection)?;
+        total = cache_active_bytes(connection)?.saturating_sub(snapshot_bytes);
         if total <= low_water {
             break;
         }
@@ -1927,6 +2579,9 @@ fn clear_cached_document_by_key(
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot evict document thumbnail: {error}"))?;
+    // Snapshots deliberately survive main-budget eviction: they live under
+    // their own 256 MiB LRU (IR-D5) and stay useful after the evicted
+    // library is reopened and re-indexed.
     transaction
         .execute(
             "DELETE FROM document_cache WHERE library_root = ?1 AND relative_path = ?2",
@@ -1963,6 +2618,9 @@ fn clear_cache_storage(connection: &mut Connection) -> CommandResult<()> {
     transaction
         .execute("DELETE FROM document_thumbnails", [])
         .map_err(|error| format!("Cannot clear cached document thumbnails: {error}"))?;
+    transaction
+        .execute("DELETE FROM document_read_snapshots", [])
+        .map_err(|error| format!("Cannot clear cached read snapshots: {error}"))?;
     transaction
         .execute("DELETE FROM document_cache", [])
         .map_err(|error| format!("Cannot clear cached documents: {error}"))?;
@@ -3220,6 +3878,463 @@ mod tests {
 
         clear_cache_storage(&mut current.cache).expect("clear whole cache");
         assert_eq!(thumbnail_count(&current.cache, &root_key, "c.pdf"), 0);
+    }
+
+    // ---- 增量重读快照(docs/plan-incremental-reread.md §5/§8) ----
+
+    fn insert_cache_document_with_fingerprint(
+        connection: &Connection,
+        root: &str,
+        relative_path: &str,
+        format: &str,
+        size: i64,
+        modified: i64,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO document_cache(
+                     library_root, relative_path, title, format, source_size, source_modified,
+                     converter_revision, status, error, last_accessed
+                 ) VALUES (?1, ?2, 't', ?3, ?4, ?5, 'test', 'ready', NULL, 1)
+                 ON CONFLICT(library_root, relative_path) DO UPDATE SET
+                     source_size = excluded.source_size,
+                     source_modified = excluded.source_modified",
+                params![root, relative_path, format, size, modified],
+            )
+            .expect("insert cache document fixture");
+    }
+
+    fn replace_segments(connection: &Connection, root: &str, path: &str, contents: &[&str]) {
+        connection
+            .execute(
+                "DELETE FROM search_segments WHERE library_root = ?1 AND relative_path = ?2",
+                params![root, path],
+            )
+            .expect("clear segment fixtures");
+        for (ordinal, content) in contents.iter().enumerate() {
+            connection
+                .execute(
+                    "INSERT INTO search_segments(
+                         library_root, relative_path, title, format, ordinal, content, needs_ocr
+                     ) VALUES (?1, ?2, 't', 'markdown', ?3, ?4, 0)",
+                    params![root, path, ordinal as u32, content],
+                )
+                .expect("insert segment fixture");
+        }
+    }
+
+    fn insert_snapshot(
+        connection: &Connection,
+        root: &str,
+        path: &str,
+        content: &str,
+        last_accessed: i64,
+    ) {
+        connection
+            .execute(
+                "INSERT INTO document_read_snapshots(
+                     library_root, relative_path, content, source_size, source_modified,
+                     captured_at, last_accessed
+                 ) VALUES (?1, ?2, ?3, 1, 1, ?4, ?4)",
+                params![root, path, content, last_accessed],
+            )
+            .expect("insert snapshot fixture");
+    }
+
+    fn snapshot_count(connection: &Connection, root: &str, path: &str) -> i64 {
+        connection
+            .query_row(
+                "SELECT count(*) FROM document_read_snapshots
+                 WHERE library_root = ?1 AND relative_path = ?2",
+                params![root, path],
+                |row| row.get(0),
+            )
+            .expect("count snapshots")
+    }
+
+    #[test]
+    fn paragraph_diff_reports_added_modified_removed_with_line_ranges() {
+        let old = "# 标题\n\n第一段。\n\n第二段。\n\n第三段。\n";
+        let new = "# 标题\n\n第一段改。\n\n新增段。\n\n第二段。\n\n第三段。\n";
+        let diff = diff_snapshot_texts(old, new, DocumentFormat::Markdown);
+        assert!(!diff.truncated);
+        assert_eq!(diff.removed_count, 0);
+        assert_eq!(
+            diff.changed,
+            vec![
+                ChangedSegment {
+                    index: 1,
+                    kind: "modified",
+                    start_line: Some(3),
+                    end_line: Some(3),
+                },
+                ChangedSegment {
+                    index: 2,
+                    kind: "added",
+                    start_line: Some(5),
+                    end_line: Some(5),
+                },
+            ]
+        );
+
+        // Pure deletion: no marks to draw, only a removed count.
+        let shrunk = "# 标题\n\n第一段。\n\n第三段。\n";
+        let removed = diff_snapshot_texts(old, shrunk, DocumentFormat::Markdown);
+        assert!(removed.changed.is_empty());
+        assert_eq!(removed.removed_count, 1);
+
+        // Multi-line paragraph carries its whole source range.
+        let long = "开头。\n\n多行段第一行\n多行段第二行\n多行段第三行\n";
+        let grown = diff_snapshot_texts("开头。\n", long, DocumentFormat::Markdown);
+        assert_eq!(
+            grown.changed,
+            vec![ChangedSegment {
+                index: 1,
+                kind: "added",
+                start_line: Some(3),
+                end_line: Some(5),
+            }]
+        );
+
+        // Brand-new document against an empty snapshot: everything added.
+        let fresh = diff_snapshot_texts("", "唯一段落。\n", DocumentFormat::Markdown);
+        assert_eq!(fresh.changed.len(), 1);
+        assert_eq!(fresh.changed[0].kind, "added");
+        // Emptied document: nothing to mark, everything counted as removed.
+        let emptied = diff_snapshot_texts("甲\n\n乙\n", "", DocumentFormat::Markdown);
+        assert!(emptied.changed.is_empty());
+        assert_eq!(emptied.removed_count, 2);
+    }
+
+    #[test]
+    fn paragraph_diff_normalizes_crlf_bom_and_flags_moves_once() {
+        // CRLF→LF rewrite plus BOM removal is not a content change.
+        let old = "\u{FEFF}第一段。\r\n\r\n第二段。  \r\n";
+        let new = "第一段。\n\n第二段。\n";
+        let diff = diff_snapshot_texts(old, new, DocumentFormat::Markdown);
+        assert!(diff.changed.is_empty());
+        assert_eq!(diff.removed_count, 0);
+
+        // A pure move surfaces as exactly one modified unit on the LCS path.
+        let ordered = "甲\n\n乙\n\n丙\n\n丁\n";
+        let moved = "甲\n\n丙\n\n乙\n\n丁\n";
+        let move_diff = diff_snapshot_texts(ordered, moved, DocumentFormat::Markdown);
+        assert_eq!(move_diff.changed.len(), 1);
+        assert_eq!(move_diff.changed[0].kind, "modified");
+        assert_eq!(move_diff.removed_count, 0);
+    }
+
+    #[test]
+    fn unit_diff_degrades_to_multiset_then_whole_document() {
+        // Beyond DIFF_MAX_UNITS on either side: whole-document hint only.
+        let many: Vec<u64> = (0..(DIFF_MAX_UNITS as u64 + 1)).collect();
+        let outcome = diff_unit_hashes(&many, &[1, 2]);
+        assert!(outcome.truncated);
+        assert!(outcome.changed.is_empty());
+
+        // Mid sections larger than DIFF_MAX_LCS_CELLS fall back to the
+        // multiset match: the swapped pair stops being flagged, the edited
+        // head/tail sentinels stay exact.
+        let side = 2_100u64;
+        let mut old: Vec<u64> = (0..side).collect();
+        let mut new = old.clone();
+        old[0] = 900_001;
+        new[0] = 900_002;
+        old[(side - 1) as usize] = 900_003;
+        new[(side - 1) as usize] = 900_004;
+        new.swap(5, 6);
+        assert!(old.len() * new.len() > DIFF_MAX_LCS_CELLS);
+        let approx = diff_unit_hashes(&old, &new);
+        assert!(!approx.truncated);
+        let indices: Vec<usize> = approx.changed.iter().map(|(index, _)| *index).collect();
+        assert_eq!(indices, vec![0, (side - 1) as usize]);
+        assert_eq!(approx.removed_count, 0);
+
+        // The same shape in a small sequence takes the LCS path and flags
+        // the move as a third changed unit.
+        let side = 40u64;
+        let mut old: Vec<u64> = (0..side).collect();
+        let mut new = old.clone();
+        old[0] = 900_001;
+        new[0] = 900_002;
+        old[(side - 1) as usize] = 900_003;
+        new[(side - 1) as usize] = 900_004;
+        new.swap(5, 6);
+        let exact = diff_unit_hashes(&old, &new);
+        assert_eq!(exact.changed.len(), 3);
+    }
+
+    #[test]
+    fn snapshot_capture_diff_and_acknowledge_roundtrip() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = "lib";
+        let path = "notes/a.md";
+        insert_cache_document_with_fingerprint(&current.cache, root, path, "markdown", 100, 1000);
+        replace_segments(&current.cache, root, path, &["第一段。\n\n第二段。\n"]);
+
+        assert!(capture_snapshot_record(&mut current.cache, root, path).expect("capture"));
+        assert_eq!(snapshot_count(&current.cache, root, path), 1);
+        let (snap_size, snap_modified): (i64, i64) = current
+            .cache
+            .query_row(
+                "SELECT source_size, source_modified FROM document_read_snapshots
+                 WHERE library_root = ?1 AND relative_path = ?2",
+                params![root, path],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("read snapshot fingerprint");
+        // The fingerprint comes from the document_cache row in the same
+        // transaction, never from a potentially newer scan snapshot.
+        assert_eq!((snap_size, snap_modified), (100, 1000));
+
+        // Unchanged file: no diff.
+        let same = snapshot_diff_record(
+            &current.cache,
+            root,
+            path,
+            DocumentFormat::Markdown,
+            100,
+            1000,
+        )
+        .expect("diff unchanged");
+        assert_eq!(same, None);
+
+        // External edit + finished re-index: one modified paragraph.
+        insert_cache_document_with_fingerprint(&current.cache, root, path, "markdown", 120, 2000);
+        replace_segments(&current.cache, root, path, &["第一段改。\n\n第二段。\n"]);
+        let diff = snapshot_diff_record(
+            &current.cache,
+            root,
+            path,
+            DocumentFormat::Markdown,
+            120,
+            2000,
+        )
+        .expect("diff changed")
+        .expect("diff present");
+        assert_eq!(diff.granularity, "paragraph");
+        assert_eq!(diff.changed_segments.len(), 1);
+        assert_eq!(diff.changed_segments[0].kind, "modified");
+        assert_eq!(diff.changed_segments[0].start_line, Some(1));
+
+        // "知道了" = capture again: the banner stays quiet afterwards.
+        assert!(capture_snapshot_record(&mut current.cache, root, path).expect("acknowledge"));
+        let after = snapshot_diff_record(
+            &current.cache,
+            root,
+            path,
+            DocumentFormat::Markdown,
+            120,
+            2000,
+        )
+        .expect("diff acknowledged");
+        assert_eq!(after, None);
+    }
+
+    #[test]
+    fn snapshot_diff_waits_for_reindex_and_respects_library_isolation() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let path = "notes/a.md";
+        for root in ["lib-a", "lib-b"] {
+            insert_cache_document_with_fingerprint(
+                &current.cache,
+                root,
+                path,
+                "markdown",
+                100,
+                1000,
+            );
+        }
+        replace_segments(&current.cache, "lib-a", path, &["A 库正文。\n"]);
+        replace_segments(&current.cache, "lib-b", path, &["B 库正文。\n"]);
+        assert!(capture_snapshot_record(&mut current.cache, "lib-a", path).expect("capture a"));
+        assert!(capture_snapshot_record(&mut current.cache, "lib-b", path).expect("capture b"));
+
+        // The file changed on disk but the background index has not caught
+        // up (document_cache still carries the old fingerprint): stay
+        // silent instead of diffing stale segments (IR-D8).
+        let pending = snapshot_diff_record(
+            &current.cache,
+            "lib-a",
+            path,
+            DocumentFormat::Markdown,
+            120,
+            2000,
+        )
+        .expect("diff while pending");
+        assert_eq!(pending, None);
+
+        // After re-index only lib-a reports changes; lib-b is untouched.
+        insert_cache_document_with_fingerprint(
+            &current.cache,
+            "lib-a",
+            path,
+            "markdown",
+            120,
+            2000,
+        );
+        replace_segments(&current.cache, "lib-a", path, &["A 库正文改。\n"]);
+        let changed = snapshot_diff_record(
+            &current.cache,
+            "lib-a",
+            path,
+            DocumentFormat::Markdown,
+            120,
+            2000,
+        )
+        .expect("diff a")
+        .expect("diff present");
+        assert_eq!(changed.changed_segments.len(), 1);
+        let other = snapshot_diff_record(
+            &current.cache,
+            "lib-b",
+            path,
+            DocumentFormat::Markdown,
+            100,
+            1000,
+        )
+        .expect("diff b");
+        assert_eq!(other, None);
+    }
+
+    #[test]
+    fn snapshot_capture_skips_missing_index_and_oversized_documents() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        // No document_cache row yet (still indexing): nothing to snapshot.
+        assert!(!capture_snapshot_record(&mut current.cache, "lib", "a.md").expect("no cache row"));
+        assert_eq!(snapshot_count(&current.cache, "lib", "a.md"), 0);
+
+        // Content beyond the 10 MiB red line is refused, not truncated.
+        insert_cache_document_with_fingerprint(&current.cache, "lib", "big.md", "markdown", 1, 1);
+        let oversized = "a".repeat(MAX_MARKDOWN_BYTES as usize + 1);
+        replace_segments(&current.cache, "lib", "big.md", &[oversized.as_str()]);
+        assert!(!capture_snapshot_record(&mut current.cache, "lib", "big.md").expect("oversized"));
+        assert_eq!(snapshot_count(&current.cache, "lib", "big.md"), 0);
+    }
+
+    #[test]
+    fn pdf_and_epub_snapshots_diff_at_unit_granularity() {
+        // PDF: page 2 edited → zero-based page ordinal 1, no line ranges.
+        let old_pages = ["第一页", "第二页", "第三页"].join(SNAPSHOT_UNIT_SEPARATOR);
+        let new_pages = ["第一页", "第二页改", "第三页"].join(SNAPSHOT_UNIT_SEPARATOR);
+        let pdf = diff_snapshot_texts(&old_pages, &new_pages, DocumentFormat::Pdf);
+        assert_eq!(pdf.changed.len(), 1);
+        assert_eq!(pdf.changed[0].index, 1);
+        assert_eq!(pdf.changed[0].kind, "modified");
+        assert_eq!(pdf.changed[0].start_line, None);
+
+        // EPUB: a chapter inserted in the middle → added at ordinal 1.
+        let old_chapters = ["第一章", "第二章"].join(SNAPSHOT_UNIT_SEPARATOR);
+        let new_chapters = ["第一章", "新章节", "第二章"].join(SNAPSHOT_UNIT_SEPARATOR);
+        let epub = diff_snapshot_texts(&old_chapters, &new_chapters, DocumentFormat::Epub);
+        assert_eq!(epub.changed.len(), 1);
+        assert_eq!(epub.changed[0].index, 1);
+        assert_eq!(epub.changed[0].kind, "added");
+        assert_eq!(epub.removed_count, 0);
+    }
+
+    #[test]
+    fn snapshot_budget_evicts_pure_lru_including_active_library() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let kib = 1024usize;
+        insert_snapshot(&current.cache, "active", "oldest.md", &"a".repeat(kib), 1);
+        insert_snapshot(&current.cache, "other", "middle.md", &"b".repeat(kib), 2);
+        insert_snapshot(&current.cache, "active", "newest.md", &"c".repeat(kib), 3);
+
+        enforce_snapshot_budget_with_limits(&current.cache, 2 * kib as u64, kib as u64)
+            .expect("enforce snapshot budget");
+
+        // Pure LRU: the active library enjoys no immunity here (IR-D5).
+        assert_eq!(snapshot_count(&current.cache, "active", "oldest.md"), 0);
+        assert_eq!(snapshot_count(&current.cache, "other", "middle.md"), 0);
+        assert_eq!(snapshot_count(&current.cache, "active", "newest.md"), 1);
+    }
+
+    #[test]
+    fn snapshot_lifecycle_survives_invalidation_but_follows_full_clear() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = Path::new("lib");
+        let root_key = normalize_root(root);
+        for path in ["a.md", "b.md", "c.md"] {
+            insert_snapshot(&current.cache, &root_key, path, "正文", 1);
+        }
+
+        // Invalidation of a changed-on-disk document must keep the snapshot
+        // alive — outliving exactly that change is the feature (IR-D6).
+        clear_cached_document(&mut current.cache, root, "a.md").expect("invalidate document");
+        assert_eq!(snapshot_count(&current.cache, &root_key, "a.md"), 1);
+
+        // Main-budget LRU eviction keeps it too: snapshots live under
+        // their own 256 MiB budget (IR-D5).
+        clear_cached_document_by_key(&mut current.cache, &root_key, "b.md")
+            .expect("evict one document");
+        assert_eq!(snapshot_count(&current.cache, &root_key, "b.md"), 1);
+
+        // The explicit whole-cache clear drops everything.
+        clear_cache_storage(&mut current.cache).expect("clear whole cache");
+        for path in ["a.md", "b.md", "c.md"] {
+            assert_eq!(snapshot_count(&current.cache, &root_key, path), 0);
+        }
+    }
+
+    #[test]
+    fn main_soft_limit_measures_documents_without_snapshot_bytes() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let active_root = Path::new("active-library");
+        insert_cache_document(&current.cache, "stale-library", "doc.md", "small", 1);
+        // A large snapshot alone must not push conversion-cache documents
+        // out of the 1 GiB budget (IR-D5: independent sub-budget).
+        insert_snapshot(
+            &current.cache,
+            "stale-library",
+            "doc.md",
+            &"s".repeat(1024 * 1024),
+            1,
+        );
+        assert!(cache_active_bytes(&current.cache).expect("cache size") > 512 * 1024);
+
+        enforce_cache_soft_limit_with_limits(
+            &mut current.cache,
+            active_root,
+            512 * 1024,
+            460 * 1024,
+        )
+        .expect("enforce main limit");
+
+        let remaining: i64 = current
+            .cache
+            .query_row(
+                "SELECT count(*) FROM document_cache WHERE library_root = 'stale-library'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count stale documents");
+        assert_eq!(remaining, 1);
+    }
+
+    #[test]
+    fn scan_sweeps_orphan_snapshots_but_keeps_changed_documents() {
+        let library = tempdir().expect("temp library");
+        fs::write(library.path().join("kept.md"), "# Kept").expect("write kept");
+        let root = canonical_library_root(library.path()).expect("canonical root");
+        let root_key = normalize_root(&root);
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        // kept.md has no matching document_cache row, so the scan runs the
+        // invalidation path on it — the snapshot must survive that.
+        insert_snapshot(&current.cache, &root_key, "kept.md", "正文", 1);
+        insert_snapshot(&current.cache, &root_key, "ghost.md", "正文", 1);
+
+        scan_documents(&root, &mut current.cache).expect("scan");
+
+        assert_eq!(snapshot_count(&current.cache, &root_key, "kept.md"), 1);
+        assert_eq!(snapshot_count(&current.cache, &root_key, "ghost.md"), 0);
     }
 
     #[test]

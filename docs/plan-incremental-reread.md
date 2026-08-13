@@ -1,7 +1,7 @@
-# 方案草案：增量重读
+# 方案定稿：增量重读
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（批次 9 实施版）**——定稿差异与决策见 §8
 - 定位：常读文档更新后（笔记库、连载、协作文档），打开时提示"自上次阅读后有更新"，正文左缘标出变更段落——只重读改动的部分。缓存 sqlite 新增"上次阅读时的文本快照"（派生数据，受既有 1 GiB 治理）。
 - 关联：快照失效指纹沿 `document_cache` 的 size/modified 契约；变更标记的左缘视觉语义与 TOC 覆盖线（inset 细线）一族；diff 为纯函数（TS 契约孪生思想沿相关段落方案）。
 
@@ -97,3 +97,41 @@
 - schema bump 与书架封面方案都动缓存库：**两案必须协调一次 bump**（版本号冲突会互相触发整库重建），实施顺序需用户/实施方拍板。
 - `data-source-start` 映射对深度嵌套结构（列表内段落）可能粗粒度：左缘线落在最近的带行号块上，可接受；用例表锚定嵌套场景。
 - 监听触发的 `refreshLibrary` 会更新 search_segments——打开中的文档被外部修改时，快照（旧）与 segments（新）的读写顺序要在 Rust 侧加测试防竞态。
+
+## 8. 定稿记录（2026-08-13，实施前复核）
+
+基线复核结论：§1 表中除两处外全部成立。两处出入及处理：
+
+1. **`data-source-start` 实际只有标题（h1–h6）携带**（`MarkdownRenderer.tsx` 的 heading 工厂），并非"块级元素"普遍带有。定稿：给 `p/ul/ol/blockquote/table/div` 与 `pre` 链（普通 pre / 代码块 figure / Mermaid 容器）补 `data-source-start/end` 位置戳（沿标题先例，纯附加属性，无行为变化），变更标记与行号映射建立在其上。
+2. **EPUB 收窄到章级**：`blocks_plain` 对嵌套块（列表/表格/引用）每项产出多行，快照文本行与渲染 DOM 的块索引没有稳定一一对应；按"明确收窄优于半坏映射"，EPUB 变更定位到章（`.epub-chapter` 容器边缘标记 + 章级跳转），不做草案 §3.3 设想的块级索引。Markdown/mdx 维持段级（完整形态），PDF 维持页级提示（IR-D4 原样）。
+
+拍板与实施决策：
+
+| # | 决策 | 定稿 |
+|---|------|------|
+| IR-D1 | 快照来源 | Rust 从 `search_segments` 自取（按草案）；多段格式（PDF 页/EPUB 章）以 `\u{1E}` 记录分隔符拼接为单行 `content`，diff 时按分隔符还原段列表 |
+| IR-D2 | 捕获时机 | 微调为**双点捕获**：打开后驻留满 30s 即捕获一次（定时器，覆盖崩溃/直接关窗，语义＝"到达阅读门槛即视为已读该版本"）；离开/切换文档时再捕获，但**仅当磁盘指纹自打开起未变**（防止把阅读期间被外部改写、用户从未看过的新版本误记为已读）；横幅"知道了"= 立即捕获（无门槛）。`beforeunload` 不再单独挂钩——30s 定时捕获已覆盖关窗场景 |
+| IR-D2b | acknowledge 命令 | 折叠进 `capture_read_snapshot`（前端直接调用，无门槛语义在前端），IPC 面从 3 个 command 收敛为 2 个：`capture_read_snapshot`、`read_snapshot_diff` |
+| IR-D3 | diff 算法 | 段级 hash + **前后缀裁剪 + 中段 LCS DP**；中段面积 > 4,000,000 格（≈8 MiB u16 表）时降级为多重集近似（移动段不标）；任一侧段数 > 5,000 时降级为"整篇有更新"（`truncated`，无逐段标记）。added/modified 区分：LCS 对齐后按顺序把新增段与移除段配对为 modified，余量为 added/removedCount |
+| IR-D4 | PDF | 页 hash 提示"第 X、Y 页有变化"，不画行内线、不提供"下一处"跳转（按草案） |
+| IR-D5（新） | 快照子预算 | **独立 256 MiB LRU 子预算**（用户拍板）：按 `last_accessed ASC` 独立淘汰（含当前库，与 1 GiB"当前库不淘汰"语义解耦）、低水位 90%；主 1 GiB 治理测量时**减去快照表字节**，快照永不挤占文档缓存的淘汰预算；单条快照沿 10 MiB 红线超限不存 |
+| IR-D6（新） | 清理联动 | **快照的生命周期与缩略图相反**：`clear_cached_document` 兼任"文件已变更"的失效钩子，若在此删快照，文件一变快照即灭、功能自毁——故失效路径与主预算 LRU 逐出（`clear_cached_document_by_key`）**保留**快照（快照价值恰是"比当前版本旧"，且有独立 256 MiB 预算兜底）；删除发生在：文档从库中消失（`scan_documents` 快照孤儿清扫，`document_thumbnails` 先例）、整库清空（`clear_cache_storage`）、快照子预算 LRU |
+| IR-D7（新） | 横幅形态 | 既有 notice 为 4.2s 瞬态 toast，不适合承载循环跳转；新增驻留式 `RereadBanner`（reading-frame 顶部覆盖条）：文案 + "下一处"（markdown 循环跳块 / EPUB 循环跳章）+ "知道了"（确认并滚动快照）。变更标记为 `data-reread-changed` 属性 + 左缘 accent 细线（`.toc-link.is-reached` inset 线族） |
+| IR-D8（新） | 索引滞后 | 打开时若 `document_cache` 指纹 ≠ 磁盘指纹（后台重索引未完成），`read_snapshot_diff` 返回 null 不出横幅；前端在 `indexStatus` 变化时重查一次，索引完成后横幅自然出现 |
+
+schema（`CREATE TABLE IF NOT EXISTS` 纯附加，不 bump `CACHE_SCHEMA_VERSION`，`document_links`/`document_thumbnails` 先例）：
+
+```sql
+CREATE TABLE IF NOT EXISTS document_read_snapshots(
+    library_root TEXT NOT NULL,
+    relative_path TEXT NOT NULL,
+    content TEXT NOT NULL,          -- 段落文本，多段格式以 U+001E 分隔
+    source_size INTEGER NOT NULL,   -- 捕获时的 document_cache 指纹（同事务读取）
+    source_modified INTEGER NOT NULL,
+    captured_at INTEGER NOT NULL,
+    last_accessed INTEGER NOT NULL,
+    PRIMARY KEY(library_root, relative_path)
+);
+```
+
+已知边界（如实标注）：捕获指纹取自捕获事务内的 `document_cache` 行（内容与指纹恒自洽）；若文件在打开后 30s 内被外部改写**且**后台完成重索引，30s 捕获会存入用户未读的新版本、错过一轮横幅（窗口极小，不误报只漏报）。阅读中文档不热重载（既有行为），离开捕获的指纹门用打开时刻的 size/modified 判定。

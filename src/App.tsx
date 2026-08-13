@@ -65,6 +65,7 @@ import {
   APP_RUNTIME,
   DEFAULT_LIBRARY_ROOT,
   assetDataUrl,
+  captureReadSnapshot,
   detectMovedDocuments,
   findRelatedPassages,
   importAnnotations,
@@ -85,6 +86,7 @@ import {
   readAsset,
   readDocument,
   readPdfReadingMode,
+  readSnapshotDiff,
   rebindDocumentAnnotations,
   recordReadingSession,
   reviewSummary,
@@ -96,6 +98,7 @@ import {
   type DocumentExtent,
   type LibrarySnapshot,
   type MovedDocumentCandidate,
+  type ReadSnapshotDiff,
   type ReviewSummary,
   type SearchResult,
 } from "./lib/backend";
@@ -144,6 +147,17 @@ import {
   CollectionsSection,
 } from "./components/CollectionsSection";
 import { createReadingTracker, type ReadingTracker } from "./lib/readingTracker";
+import {
+  REREAD_DWELL_CAPTURE_MS,
+  applyRereadMarks,
+  clearRereadMarks,
+  markdownLineOffset,
+  nextRereadCursor,
+  rereadBannerMessage,
+  rereadJumpEnabled,
+  shouldCaptureOnLeave,
+} from "./lib/reread";
+import { RereadBanner } from "./components/RereadBanner";
 import {
   ANNOTATION_COLORS,
   ANNOTATION_COLOR_NAME_MAX_CHARS,
@@ -1806,6 +1820,82 @@ function App() {
     }
   }, [activeView, currentPath, trackedFormat, trackedTitle]);
 
+  // ---- 增量重读(plan-incremental-reread §3/§8;桌面专属) ----
+  // 横幅状态:diff 在打开时查一次,cursor 是"下一处"的循环游标。
+  const [reread, setReread] = useState<
+    { path: string; diff: ReadSnapshotDiff; cursor: number } | null
+  >(null);
+
+  // 双点捕获(IR-D2):打开后驻留满 30s 捕获一次(覆盖直接关窗);
+  // 离开/切换时再捕获,但仅当磁盘指纹自打开起未变(捕获门,防止把
+  // 用户从未看过的新版本误记为已读)。
+  useEffect(() => {
+    if (IS_WEB_RUNTIME || !currentPath) return;
+    const path = currentPath;
+    const opened = useReaderStore
+      .getState()
+      .documents.find((document) => document.relativePath === path);
+    if (!opened) return;
+    const openedFingerprint = { size: opened.size, modified: opened.modified };
+    const dwellTimer = window.setTimeout(() => {
+      void captureReadSnapshot(path).catch(() => undefined);
+    }, REREAD_DWELL_CAPTURE_MS);
+    return () => {
+      window.clearTimeout(dwellTimer);
+      setReread((current) => (current?.path === path ? null : current));
+      const latest =
+        useReaderStore
+          .getState()
+          .documents.find((document) => document.relativePath === path) ?? null;
+      if (shouldCaptureOnLeave(openedFingerprint, latest)) {
+        void captureReadSnapshot(path).catch(() => undefined);
+      }
+    };
+  }, [currentPath]);
+
+  // diff 查询:索引就绪即查;打开时索引若还没追上磁盘,diff 返回 null,
+  // indexStatus 翻转后本效应重跑、横幅自然出现(IR-D8)。
+  const rereadIndexStatus = currentDocument?.indexStatus ?? null;
+  useEffect(() => {
+    if (IS_WEB_RUNTIME || !currentPath) return;
+    if (rereadIndexStatus !== "ready" && rereadIndexStatus !== "partial") return;
+    const path = currentPath;
+    let cancelled = false;
+    void readSnapshotDiff(path)
+      .then((diff) => {
+        if (cancelled || !diff) return;
+        setReread((current) =>
+          current?.path === path ? current : { path, diff, cursor: -1 },
+        );
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [currentPath, rereadIndexStatus]);
+
+  const handleRereadJump = useCallback(() => {
+    const root = articleRef.current;
+    if (!reread || !root) return;
+    const marks = Array.from(root.querySelectorAll<HTMLElement>("[data-reread-changed]"));
+    if (marks.length === 0) return;
+    const cursor = nextRereadCursor(reread.cursor, marks.length);
+    scrollElementWithinContainer(
+      readerRef.current,
+      marks[cursor] ?? null,
+      motionLevel === "off" ? "auto" : "smooth",
+    );
+    setReread({ ...reread, cursor });
+  }, [motionLevel, reread]);
+
+  // "知道了"= 确认并立即滚动快照(无 30s 门槛,IR-D2b)。
+  const handleRereadAcknowledge = useCallback(() => {
+    if (!reread) return;
+    const path = reread.path;
+    setReread(null);
+    void captureReadSnapshot(path).catch(() => undefined);
+  }, [reread]);
+
   // 主页「库内新动态」的 baseline 在离开主页时推进(方案 §3.3 ③):
   // 停留期间列表保持稳定,离开即视为已读完这批动态。
   const previousHomeOpen = useRef(false);
@@ -1854,6 +1944,24 @@ function App() {
     () => displayMarkdown(currentContent?.kind === "markdown" ? currentContent.markdown : ""),
     [currentContent],
   );
+
+  // 变更段落的左缘标记:markdown 段级 / EPUB 章级(IR-D7);重渲染
+  // (正文或标注变化)后重挂。PDF 页级只有横幅文案,无行内标记。
+  // diff 行号基于磁盘原文,渲染剥掉了 frontmatter/首 H1,先算行偏移。
+  useEffect(() => {
+    const root = articleRef.current;
+    if (!root) return;
+    if (!reread || reread.path !== currentPath) {
+      clearRereadMarks(root);
+      return;
+    }
+    const lineOffset =
+      currentContent?.kind === "markdown"
+        ? markdownLineOffset(currentContent.markdown, renderedMarkdown)
+        : 0;
+    applyRereadMarks(root, reread.diff, lineOffset);
+    return () => clearRereadMarks(root);
+  }, [reread, currentPath, renderedMarkdown, currentContent, annotations]);
   const toc = tocState?.path === currentPath ? tocState.items : [];
   const activeHeading = activeHeadingState?.path === currentPath ? activeHeadingState.id : null;
   const handleTocChange = useCallback((items: TocItem[]) => {
@@ -5492,6 +5600,13 @@ function App() {
             {/* reading-frame(RS-D5):替 reading-scroll 占据原 grid 轨道,
                 为右缘刻度层提供定位锚;副栏不挂刻度层。 */}
             <div className="reading-frame">
+            {reread && reread.path === currentPath && (
+              <RereadBanner
+                message={rereadBannerMessage(reread.diff)}
+                onJump={rereadJumpEnabled(reread.diff) ? handleRereadJump : null}
+                onAcknowledge={handleRereadAcknowledge}
+              />
+            )}
             <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,

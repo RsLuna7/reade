@@ -67,6 +67,27 @@ function heading(level: 1 | 2 | 3 | 4 | 5 | 6) {
   };
 }
 
+type SourceStampedTag = "p" | "ul" | "ol" | "blockquote" | "table";
+type BlockProps = ComponentPropsWithoutRef<SourceStampedTag> &
+  ExtraProps & {
+    node?: { position?: SourcePosition };
+  };
+
+/**
+ * 块级元素的源行号位置戳（plan-incremental-reread §8）：沿标题先例
+ * 附加 data-source-start/end，供增量重读把变更段落映射回渲染 DOM。
+ * 纯附加属性，无行为变化。
+ */
+function sourceStampedBlock(tag: SourceStampedTag) {
+  return function MarkdownBlock({ node, ...props }: BlockProps) {
+    return createElement(tag, {
+      ...props,
+      "data-source-start": node?.position?.start?.line,
+      "data-source-end": node?.position?.end?.line,
+    });
+  };
+}
+
 function codeDetails(children: ReactNode): { code: string; language: string | null } | null {
   const child = Children.only(children);
   if (!isValidElement<{ children?: ReactNode; className?: string }>(child)) {
@@ -171,7 +192,17 @@ async function highlightCode(code: string, requestedLanguage: string | null) {
   });
 }
 
-function CodeBlock({ code, language }: { code: string; language: string | null }) {
+function CodeBlock({
+  code,
+  language,
+  sourceStart,
+  sourceEnd,
+}: {
+  code: string;
+  language: string | null;
+  sourceStart?: number;
+  sourceEnd?: number;
+}) {
   const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
 
@@ -204,7 +235,12 @@ function CodeBlock({ code, language }: { code: string; language: string | null }
   };
 
   return (
-    <figure className="markdown-code-block" data-language={language ?? "text"}>
+    <figure
+      className="markdown-code-block"
+      data-language={language ?? "text"}
+      data-source-start={sourceStart}
+      data-source-end={sourceEnd}
+    >
       <figcaption className="markdown-code-toolbar">
         <span className="markdown-code-language">{language ?? "text"}</span>
         <button className="markdown-code-copy" type="button" onClick={copy} aria-label="复制代码">
@@ -245,7 +281,15 @@ function readableError(error: unknown): string {
   return message.replace(/\s+/g, " ").slice(0, 240);
 }
 
-function MermaidBlock({ source }: { source: string }) {
+function MermaidBlock({
+  source,
+  sourceStart,
+  sourceEnd,
+}: {
+  source: string;
+  sourceStart?: number;
+  sourceEnd?: number;
+}) {
   const id = `mermaid-${useId().replace(/[^a-zA-Z0-9_-]/g, "")}`;
   const containerRef = useRef<HTMLDivElement>(null);
   const [visible, setVisible] = useState(false);
@@ -318,7 +362,12 @@ function MermaidBlock({ source }: { source: string }) {
   }, [id, source, visible]);
 
   return (
-    <div className="markdown-mermaid" ref={containerRef}>
+    <div
+      className="markdown-mermaid"
+      ref={containerRef}
+      data-source-start={sourceStart}
+      data-source-end={sourceEnd}
+    >
       {error ? (
         <div className="markdown-mermaid-error" role="alert">
           <strong>Mermaid 图表无法渲染</strong>
@@ -340,17 +389,28 @@ function MermaidBlock({ source }: { source: string }) {
   );
 }
 
-function MarkdownPre({ children }: { children?: ReactNode }) {
+function MarkdownPre({
+  children,
+  sourceStart,
+  sourceEnd,
+}: {
+  children?: ReactNode;
+  sourceStart?: number;
+  sourceEnd?: number;
+}) {
+  // pre 链（普通 pre / 代码块 figure / Mermaid 容器）与其他块级元素
+  // 一样带源行号位置戳（plan-incremental-reread §8）。
+  const stamp = { "data-source-start": sourceStart, "data-source-end": sourceEnd };
   const details = codeDetails(children);
   if (!details) {
-    return <pre>{children}</pre>;
+    return <pre {...stamp}>{children}</pre>;
   }
 
   if (details.language === "mermaid") {
-    return <MermaidBlock source={details.code} />;
+    return <MermaidBlock source={details.code} sourceStart={sourceStart} sourceEnd={sourceEnd} />;
   }
 
-  return <CodeBlock {...details} />;
+  return <CodeBlock {...details} sourceStart={sourceStart} sourceEnd={sourceEnd} />;
 }
 
 function resolvedUrl(value: string, resolver?: (value: string) => string | null): string | null {
@@ -379,13 +439,24 @@ export function MarkdownRenderer({
     h4: heading(4),
     h5: heading(5),
     h6: heading(6),
+    p: sourceStampedBlock("p"),
+    ul: sourceStampedBlock("ul"),
+    ol: sourceStampedBlock("ol"),
+    blockquote: sourceStampedBlock("blockquote"),
+    table: sourceStampedBlock("table"),
     code: ({ node, ...props }) => {
       void node;
       return <code {...props} />;
     },
     pre: ({ node, ...props }) => {
-      void node;
-      return <MarkdownPre {...props} />;
+      const position = (node as { position?: SourcePosition } | undefined)?.position;
+      return (
+        <MarkdownPre
+          {...props}
+          sourceStart={position?.start?.line}
+          sourceEnd={position?.end?.line}
+        />
+      );
     },
     a: ({ node, href, children, ...props }) => {
       void node;

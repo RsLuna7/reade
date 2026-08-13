@@ -19,6 +19,7 @@ import type {
   IndexProgress,
   MovedDocumentCandidate,
   PdfReadingMode,
+  ReadSnapshotDiff,
   ReadingSession,
   ReviewQueueItem,
   ReviewState,
@@ -61,6 +62,12 @@ export function storeDocumentThumbnail(
   height: number,
 ): Promise<void> {
   return invoke("store_document_thumbnail", { relativePath, png, width, height });
+}
+export function captureReadSnapshot(relativePath: string): Promise<boolean> {
+  return invoke("capture_read_snapshot", { relativePath });
+}
+export function readSnapshotDiff(relativePath: string): Promise<ReadSnapshotDiff | null> {
+  return invoke("read_snapshot_diff", { relativePath });
 }
 export function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
   return invoke("list_document_links", { relativePath });

@@ -69,4 +69,41 @@ describe("MarkdownRenderer", () => {
       { id: "same-1", title: "Same", level: 2, sourceStart: 5, sourceEnd: 5 },
     ]);
   });
+
+  it("stamps block elements with source line positions for reread marks", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={[
+          "First paragraph",
+          "",
+          "- item one",
+          "- item two",
+          "",
+          "> quoted",
+          "",
+          "| A |",
+          "| - |",
+          "| 1 |",
+          "",
+          "```js",
+          "code();",
+          "```",
+        ].join("\n")}
+      />,
+    );
+
+    expect(container.querySelector("p")).toHaveAttribute("data-source-start", "1");
+    expect(container.querySelector("ul")).toHaveAttribute("data-source-start", "3");
+    expect(container.querySelector("ul")).toHaveAttribute("data-source-end", "4");
+    expect(container.querySelector("blockquote")).toHaveAttribute("data-source-start", "6");
+    expect(container.querySelector("table")).toHaveAttribute("data-source-start", "8");
+    expect(container.querySelector(".markdown-code-block")).toHaveAttribute(
+      "data-source-start",
+      "12",
+    );
+    expect(container.querySelector(".markdown-code-block")).toHaveAttribute(
+      "data-source-end",
+      "14",
+    );
+  });
 });
