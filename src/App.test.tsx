@@ -1768,3 +1768,98 @@ describe("command palette (CP)", () => {
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
   });
 });
+
+describe("navigation history (NH)", () => {
+  function setNavState() {
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/nav-lib", documents: [] },
+      documents: [
+        markdownDocument("guide.md", "Guide"),
+        markdownDocument("notes/other.md", "另一篇笔记"),
+      ],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\nBody",
+      },
+      searchQuery: "另一篇",
+      searchResults: [
+        {
+          resultId: "notes/other.md::",
+          relativePath: "notes/other.md",
+          title: "另一篇笔记",
+          snippet: "……",
+          score: 1,
+          format: "markdown",
+          locator: null,
+        },
+      ],
+      navHistory: { back: [], forward: [] },
+      motionLevel: "off",
+    });
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# 目标\n\n正文",
+    }));
+  }
+
+  it("returns to the departure position after a search jump via Alt+Left, then forward", async () => {
+    setNavState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const backButton = screen.getByRole("button", { name: "后退" });
+    const forwardButton = screen.getByRole("button", { name: "前进" });
+    expect(backButton).toBeDisabled();
+    expect(forwardButton).toBeDisabled();
+
+    // 在 guide.md 里读到 400px 处,点搜索结果跳走。
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    reader.scrollTop = 400;
+    fireEvent.click(screen.getByRole("button", { name: /另一篇笔记/ }));
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("notes/other.md");
+    });
+    expect(backButton).toBeEnabled();
+
+    // Alt+← 回到出发文档与出发位置(事件被 preventDefault,拦掉整页后退)。
+    expect(fireEvent.keyDown(window, { key: "ArrowLeft", altKey: true })).toBe(false);
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("guide.md");
+    });
+    await waitFor(() => {
+      expect(reader.scrollTop).toBe(400);
+    });
+    expect(forwardButton).toBeEnabled();
+
+    // Alt+→ 原路前进回搜索命中文档。
+    fireEvent.keyDown(window, { key: "ArrowRight", altKey: true });
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("notes/other.md");
+    });
+    expect(useReaderStore.getState().navHistory.forward).toHaveLength(0);
+  });
+
+  it("walks back through the topbar button as well", async () => {
+    setNavState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: /另一篇笔记/ }));
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("notes/other.md");
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "后退" }));
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("guide.md");
+    });
+    expect(screen.getByRole("button", { name: "前进" })).toBeEnabled();
+  });
+});

@@ -4,6 +4,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const backendMocks = vi.hoisted(() => ({
   clearConversionCache: vi.fn<() => Promise<void>>(),
+  openLibrary: vi.fn<(rootPath: string) => Promise<import("../lib/backend").LibrarySnapshot>>(),
   readDocument: vi.fn<(relativePath: string) => Promise<import("../lib/backend").DocumentContent>>(),
   retryDocumentIndex: vi.fn<(relativePath: string) => Promise<void>>(),
 }));
@@ -45,6 +46,9 @@ describe("reading settings", () => {
     localStorage.clear();
     mockReducedMotion(false);
     backendMocks.clearConversionCache.mockReset().mockResolvedValue(undefined);
+    backendMocks.openLibrary
+      .mockReset()
+      .mockImplementation(async (rootPath) => ({ rootPath, documents: [] }));
     backendMocks.readDocument.mockReset().mockImplementation(async (relativePath) => ({ kind: "markdown", relativePath, markdown: "# Test" }));
     backendMocks.retryDocumentIndex.mockReset().mockResolvedValue(undefined);
     useReaderStore.setState({
@@ -62,6 +66,7 @@ describe("reading settings", () => {
       currentContent: null,
       documents: [],
       indexProgress: null,
+      navHistory: { back: [], forward: [] },
       error: null,
     });
   });
@@ -488,5 +493,55 @@ describe("reading settings", () => {
     expect(second).toEqual(locator);
     expect(first).not.toBe(locator);
     expect(second).not.toBe(first);
+  });
+});
+
+describe("navigation history (plan-nav-history)", () => {
+  const departure = {
+    path: "a.md",
+    position: { kind: "scroll", scrollTop: 100 },
+  } as const;
+
+  beforeEach(() => {
+    backendMocks.openLibrary
+      .mockReset()
+      .mockImplementation(async (rootPath) => ({ rootPath, documents: [] }));
+    useReaderStore.setState({
+      navHistory: { back: [], forward: [] },
+      expandedPaths: [],
+      error: null,
+    });
+  });
+
+  it("records departures and walks back/forward through the store actions", () => {
+    useReaderStore.getState().recordNavLocation(departure);
+    expect(useReaderStore.getState().navHistory.back).toHaveLength(1);
+
+    const current = {
+      path: "b.md",
+      position: { kind: "scroll", scrollTop: 0 },
+    } as const;
+    const target = useReaderStore.getState().navBack(current);
+    expect(target).toEqual(departure);
+    expect(useReaderStore.getState().navHistory.back).toHaveLength(0);
+    expect(useReaderStore.getState().navHistory.forward).toEqual([current]);
+
+    const forwardTarget = useReaderStore.getState().navForward(departure);
+    expect(forwardTarget).toEqual(current);
+    expect(useReaderStore.getState().navHistory.forward).toHaveLength(0);
+    expect(useReaderStore.getState().navHistory.back).toEqual([departure]);
+  });
+
+  it("returns null on empty stacks without touching state", () => {
+    expect(useReaderStore.getState().navBack(departure)).toBeNull();
+    expect(useReaderStore.getState().navForward(departure)).toBeNull();
+    expect(useReaderStore.getState().navHistory).toEqual({ back: [], forward: [] });
+  });
+
+  it("clears the history when a library opens", async () => {
+    useReaderStore.getState().recordNavLocation(departure);
+    await useReaderStore.getState().openLibrary("D:/next-library");
+    expect(backendMocks.openLibrary).toHaveBeenCalledWith("D:/next-library");
+    expect(useReaderStore.getState().navHistory).toEqual({ back: [], forward: [] });
   });
 });

@@ -17,6 +17,14 @@ import {
   type SearchResult,
 } from "../lib/backend";
 import type { ReaderMotionLevel } from "../lib/motion";
+import {
+  EMPTY_NAV_HISTORY,
+  popNavBack,
+  popNavForward,
+  pushNavLocation,
+  type NavHistory,
+  type NavLocation,
+} from "../lib/navHistory";
 import { clampTtsRate, TTS_DEFAULT_RATE } from "../lib/ttsPlayer";
 import {
   LEGACY_THEME_ID_MAP,
@@ -272,6 +280,11 @@ interface ReaderState {
   ttsRate: number;
   /** Preferred read-aloud voice by name; null = auto pick. Persisted. */
   ttsVoiceName: string | null;
+  /**
+   * 阅读回退栈(plan-nav-history):跳转历史的后退/前进双栈。
+   * Session-only,不进 persisted preferences;切换书库时清空。
+   */
+  navHistory: NavHistory;
   loading: boolean;
   error: string | null;
   chooseAndOpenLibrary: () => Promise<void>;
@@ -297,6 +310,11 @@ interface ReaderState {
   setDailyGoalMinutes: (minutes: number) => void;
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string | null) => void;
+  /** 跳转前记录出发点(捕获由 App 完成,见 plan-nav-history NH-D1)。 */
+  recordNavLocation: (location: NavLocation) => void;
+  /** 后退/前进:弹出目标并把当前位置压入对侧栈;返回 null 表示栈空。 */
+  navBack: (current: NavLocation | null) => NavLocation | null;
+  navForward: (current: NavLocation | null) => NavLocation | null;
   resetReaderPreferences: () => void;
   toggleDirectory: (path: string) => void;
   clearError: () => void;
@@ -340,6 +358,8 @@ export const useReaderStore = create<ReaderState>()(
             searchQuery: "",
             searchResults: [],
             expandedPaths,
+            // 切换书库清空跳转历史:栈里的相对路径只对旧库有意义。
+            navHistory: EMPTY_NAV_HISTORY,
           });
         } catch (error) {
           set({ error: errorMessage(error) });
@@ -369,6 +389,7 @@ export const useReaderStore = create<ReaderState>()(
         dailyGoalMinutes: 0,
         ttsRate: TTS_DEFAULT_RATE,
         ttsVoiceName: null,
+        navHistory: EMPTY_NAV_HISTORY,
         loading: false,
         error: null,
 
@@ -581,6 +602,24 @@ export const useReaderStore = create<ReaderState>()(
 
         setTtsVoiceName: (name) => {
           set({ ttsVoiceName: typeof name === "string" && name ? name : null });
+        },
+
+        recordNavLocation: (location) => {
+          set((state) => ({ navHistory: pushNavLocation(state.navHistory, location) }));
+        },
+
+        navBack: (current) => {
+          const result = popNavBack(get().navHistory, current);
+          if (!result) return null;
+          set({ navHistory: result.history });
+          return result.target;
+        },
+
+        navForward: (current) => {
+          const result = popNavForward(get().navHistory, current);
+          if (!result) return null;
+          set({ navHistory: result.history });
+          return result.target;
         },
 
         resetReaderPreferences: () => {

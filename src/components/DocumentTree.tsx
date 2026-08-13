@@ -31,9 +31,14 @@ export interface DocumentTreeProps {
    * 未传入时行为与传统单栏完全一致。
    */
   onOpenSecondary?: (path: string) => void;
+  /**
+   * 打开文档前的回调(plan-nav-history):App 借此在跳转发生前记录
+   * 阅读回退栈的出发点。仅主栏切换文档时调用,Alt+副栏打开不算跳转。
+   */
+  onBeforeSelect?: () => void;
 }
 
-export function DocumentTree({ onOpenSecondary }: DocumentTreeProps = {}) {
+export function DocumentTree({ onOpenSecondary, onBeforeSelect }: DocumentTreeProps = {}) {
   const documents = useReaderStore((state) => state.documents);
   const currentPath = useReaderStore((state) => state.currentPath);
   const searchQuery = useReaderStore((state) => state.searchQuery);
@@ -150,7 +155,10 @@ export function DocumentTree({ onOpenSecondary }: DocumentTreeProps = {}) {
         event.preventDefault();
         if (item.node.kind === "directory") toggleDirectory(item.node.path);
         else if (event.altKey && onOpenSecondary) onOpenSecondary(item.node.path);
-        else void selectDocument(item.node.path);
+        else {
+          onBeforeSelect?.();
+          void selectDocument(item.node.path);
+        }
         break;
     }
   };
@@ -190,7 +198,10 @@ export function DocumentTree({ onOpenSecondary }: DocumentTreeProps = {}) {
               onClick={(event) => {
                 if (isDirectory) toggleDirectory(node.path);
                 else if (event.altKey && onOpenSecondary) onOpenSecondary(node.path);
-                else void selectDocument(node.path);
+                else {
+                  onBeforeSelect?.();
+                  void selectDocument(node.path);
+                }
               }}
             >
               {isDirectory ? (
@@ -234,6 +245,7 @@ export function DocumentTree({ onOpenSecondary }: DocumentTreeProps = {}) {
                         onOpenSecondary(result.relativePath);
                         return;
                       }
+                      onBeforeSelect?.();
                       void selectDocument(result.relativePath, result.locator);
                     }}
                   >

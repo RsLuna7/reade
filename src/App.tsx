@@ -14,6 +14,8 @@ import {
 } from "react";
 import {
   AlertCircle,
+  ArrowLeft,
+  ArrowRight,
   AudioLines,
   BarChart3,
   BookOpen,
@@ -88,6 +90,7 @@ import {
 } from "./lib/backend";
 import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteEntry } from "./lib/commandPalette";
+import { canNavBack, canNavForward, type NavLocation } from "./lib/navHistory";
 import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
 import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
@@ -1104,6 +1107,8 @@ function App() {
   const ttsVoiceName = useReaderStore((state) => state.ttsVoiceName);
   const setTtsRate = useReaderStore((state) => state.setTtsRate);
   const setTtsVoiceName = useReaderStore((state) => state.setTtsVoiceName);
+  const navHistory = useReaderStore((state) => state.navHistory);
+  const recordNavLocation = useReaderStore((state) => state.recordNavLocation);
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
@@ -1535,6 +1540,33 @@ function App() {
     setPendingSelection(null);
   }, []);
 
+  // ---- 阅读回退栈:出发点捕获(plan-nav-history NH-D1/NH-D2) ----
+  /** PDF 记页+页内偏移(测量不可用退 scroll),markdown/EPUB 记容器滚动。 */
+  const captureCurrentNavLocation = useCallback((): NavLocation | null => {
+    const state = useReaderStore.getState();
+    const path = state.currentPath;
+    if (!path || !state.currentContent) return null;
+    if (state.currentContent.kind === "pdf") {
+      const position = pdfReaderHandleRef.current?.getPosition();
+      if (position) {
+        return {
+          path,
+          position: { kind: "pdf", page: position.page, offsetRatio: position.offsetRatio },
+        };
+      }
+    }
+    return {
+      path,
+      position: { kind: "scroll", scrollTop: readerRef.current?.scrollTop ?? 0 },
+    };
+  }, []);
+
+  /** 跳转发生前记录出发点(恢复导航不经此路径,无需抑制标志)。 */
+  const recordNavDeparture = useCallback(() => {
+    const location = captureCurrentNavLocation();
+    if (location) recordNavLocation(location);
+  }, [captureCurrentNavLocation, recordNavLocation]);
+
   // 本地朗读(plan-read-aloud):hook 负责切句/队列/句级 mark 跟随,
   // App 只负责入口、控制条与 PDF 原版式引导(RA-D5)。
   const readAloud = useReadAloud({
@@ -1646,9 +1678,10 @@ function App() {
   const handleSelectRelated = useCallback(
     (result: SearchResult) => {
       closeRelatedPassages();
+      recordNavDeparture();
       void selectDocument(result.relativePath, result.locator);
     },
-    [closeRelatedPassages, selectDocument],
+    [closeRelatedPassages, recordNavDeparture, selectDocument],
   );
 
   // ---- 分栏对照(plan-split-view) ----
@@ -1773,6 +1806,7 @@ function App() {
       badge: document.format === "markdown" ? "MD" : document.format.toUpperCase(),
       run: () => {
         setMobileLibraryOpen(false);
+        recordNavDeparture();
         void selectDocument(document.relativePath);
       },
     }));
@@ -1920,6 +1954,7 @@ function App() {
     paletteCollections,
     readAloud.barOpen,
     readAloudDisabledReason,
+    recordNavDeparture,
     refreshLibrary,
     selectDocument,
     setActiveView,
@@ -2014,6 +2049,43 @@ function App() {
       }
     };
   }, [flushPendingPosition]);
+
+  // ---- 阅读回退栈:恢复与前进/后退(plan-nav-history,捕获函数在前文) ----
+  /**
+   * 恢复:scroll 类种子进会话 scrollPositions(跨文档交给既有 layout
+   * effect,同文档直接赋值);PDF 走既有重试恢复循环,同/跨文档通吃。
+   */
+  const applyNavLocation = useCallback(
+    (target: NavLocation) => {
+      const state = useReaderStore.getState();
+      if (target.position.kind === "scroll") {
+        scrollPositions.current.set(target.path, target.position.scrollTop);
+        if (state.currentPath === target.path) {
+          const reader = readerRef.current;
+          if (reader) reader.scrollTop = target.position.scrollTop;
+          return;
+        }
+      } else {
+        schedulePdfPositionRestore(target.path, {
+          page: target.position.page,
+          offsetRatio: target.position.offsetRatio,
+        });
+        if (state.currentPath === target.path) return;
+      }
+      void state.selectDocument(target.path);
+    },
+    [schedulePdfPositionRestore],
+  );
+
+  const handleNavBack = useCallback(() => {
+    const target = useReaderStore.getState().navBack(captureCurrentNavLocation());
+    if (target) applyNavLocation(target);
+  }, [applyNavLocation, captureCurrentNavLocation]);
+
+  const handleNavForward = useCallback(() => {
+    const target = useReaderStore.getState().navForward(captureCurrentNavLocation());
+    if (target) applyNavLocation(target);
+  }, [applyNavLocation, captureCurrentNavLocation]);
 
   const handleCreateBookmark = useCallback(async () => {
     if (!currentPath || !currentContent) return;
@@ -2309,6 +2381,8 @@ function App() {
 
   const jumpToAnnotation = useCallback(
     (annotation: Annotation) => {
+      // 标注跳转也是跳转:先记出发点(同文档内定位同样可回退)。
+      recordNavDeparture();
       if (ensurePdfViewForAnnotation(annotation)) {
         // 切换视图后内容异步加载,交给重试兜底。
         scheduleAnnotationJump(annotation);
@@ -2317,7 +2391,7 @@ function App() {
       const done = performAnnotationJump(annotation, { fallback: false, notify: true });
       if (!done) scheduleAnnotationJump(annotation);
     },
-    [ensurePdfViewForAnnotation, performAnnotationJump, scheduleAnnotationJump],
+    [ensurePdfViewForAnnotation, performAnnotationJump, recordNavDeparture, scheduleAnnotationJump],
   );
 
   const handleDeleteAnnotation = useCallback(
@@ -2611,9 +2685,10 @@ function App() {
   const handleSelectLinkDocument = useCallback(
     (relativePath: string) => {
       setCompactTocOpen(false);
+      recordNavDeparture();
       void selectDocument(relativePath);
     },
-    [selectDocument],
+    [recordNavDeparture, selectDocument],
   );
 
   // 方案四 A1:全库检索与筛选。检索输入 240ms 防抖(沿库搜索的既有模式),
@@ -2724,10 +2799,11 @@ function App() {
         return;
       }
       // pendingHash 模式:等目标文档内容就绪后再跳转。
+      recordNavDeparture();
       pendingAnnotationJump.current = annotation;
       void selectDocument(annotation.relativePath);
     },
-    [currentPath, jumpToAnnotation, selectDocument, setActiveView],
+    [currentPath, jumpToAnnotation, recordNavDeparture, selectDocument, setActiveView],
   );
 
   /** 全屏中枢入口(方案四 A2):来自全库 tab 顶部链接,footer 不加第四图标。 */
@@ -3423,6 +3499,21 @@ function App() {
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Alt+←/→:阅读回退栈(plan-nav-history)。必须 preventDefault,
+      // 否则 WebView2/浏览器把 Alt+← 当整页 history back。
+      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
+        if (event.key === "ArrowLeft") {
+          event.preventDefault();
+          handleNavBack();
+          return;
+        }
+        if (event.key === "ArrowRight") {
+          event.preventDefault();
+          handleNavForward();
+          return;
+        }
+        return;
+      }
       if (!(event.ctrlKey || event.metaKey)) {
         if (event.key === "Escape") {
           // RA-D6:朗读激活时 Esc 只负责停止朗读,优先级高于其余关闭职责。
@@ -3491,6 +3582,8 @@ function App() {
     currentContent,
     currentPath,
     handleCreateBookmark,
+    handleNavBack,
+    handleNavForward,
     handleUndoAnnotation,
     closeRelatedPassages,
     readAloudBarOpen,
@@ -3672,6 +3765,8 @@ function App() {
       if (href.startsWith("#")) {
         const id = decodePath(href.slice(1));
         const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
+        // 文档内锚点跳转:先记出发点,Alt+← 可回到点击处。
+        if (target) recordNavDeparture();
         scrollElementWithinContainer(
           readerRef.current,
           target,
@@ -3702,15 +3797,18 @@ function App() {
         showNotice("目标不在当前 Markdown 文档库中，已阻止打开。");
         return;
       }
+      recordNavDeparture();
       pendingHash.current = hash ? decodePath(hash) : null;
       if (IS_WEB_RUNTIME) replaceWebRoute(target.relativePath, pendingHash.current);
       await selectDocument(target.relativePath);
     },
-    [currentPath, documents, motionLevel, replaceWebRoute, selectDocument, showNotice],
+    [currentPath, documents, motionLevel, recordNavDeparture, replaceWebRoute, selectDocument, showNotice],
   );
 
   const scrollToHeading = useCallback((id: string) => {
     const target = articleRef.current?.querySelector<HTMLElement>(`#${CSS.escape(id)}`) ?? null;
+    // 目录跳转(MD 标题/PDF 页/EPUB 章节)前记出发点。
+    if (target) recordNavDeparture();
     scrollElementWithinContainer(
       readerRef.current,
       target,
@@ -3718,7 +3816,7 @@ function App() {
     );
     if (currentPath) replaceWebRoute(currentPath, id);
     setCompactTocOpen(false);
-  }, [currentContent?.kind, currentPath, motionLevel, replaceWebRoute]);
+  }, [currentContent?.kind, currentPath, motionLevel, recordNavDeparture, replaceWebRoute]);
 
   const libraryName = snapshot
     ? IS_WEB_RUNTIME
@@ -3860,11 +3958,15 @@ function App() {
               onNotice={showNotice}
               onSelectDocument={(path) => {
                 setMobileLibraryOpen(false);
+                recordNavDeparture();
                 void selectDocument(path);
               }}
             />
           )}
-          <DocumentTree onOpenSecondary={handleOpenSecondary} />
+          <DocumentTree
+            onOpenSecondary={handleOpenSecondary}
+            onBeforeSelect={recordNavDeparture}
+          />
         </div>
 
         <footer className="sidebar-footer">
@@ -3957,6 +4059,26 @@ function App() {
             ))}
           </div>
           <div className="topbar-actions">
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="后退"
+              title="后退（Alt+←）"
+              disabled={!canNavBack(navHistory)}
+              onClick={handleNavBack}
+            >
+              <ArrowLeft size={16} aria-hidden="true" />
+            </button>
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="前进"
+              title="前进（Alt+→）"
+              disabled={!canNavForward(navHistory)}
+              onClick={handleNavForward}
+            >
+              <ArrowRight size={16} aria-hidden="true" />
+            </button>
             <button
               className="icon-button library-toggle"
               type="button"
