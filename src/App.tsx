@@ -3718,7 +3718,9 @@ function App() {
     if (!currentPath) return null;
     const label = estimateForPath(currentPath);
     if (!label) return null;
-    return readingSpeed.calibrated ? `全文${label} · 个人速度已校准` : `全文${label}`;
+    // "约 N 分钟"直接连写;"1 分钟内"补空格避免"全文1"粘连。
+    const line = label.startsWith("约") ? `全文${label}` : `全文 ${label}`;
+    return readingSpeed.calibrated ? `${line} · 个人速度已校准` : line;
   }, [currentPath, estimateForPath, readingSpeed.calibrated]);
 
   useEffect(() => {

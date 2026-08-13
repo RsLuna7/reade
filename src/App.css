@@ -2173,6 +2173,8 @@ a:focus-visible {
 .annotation-library {
   display: grid;
   gap: 12px;
+  /* 同上:嵌套内容的 min-content 不得撑破窄侧栏列宽。 */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .annotation-library-total {
@@ -2231,6 +2233,8 @@ a:focus-visible {
 .annotation-filter-controls {
   display: grid;
   gap: 8px;
+  /* 搜索框的内在宽度(约 220px)不得把窄侧栏的单列轨道撑溢出。 */
+  grid-template-columns: minmax(0, 1fr);
 }
 
 .annotation-library-search {
@@ -2248,6 +2252,9 @@ a:focus-visible {
 
 .annotation-library-search input {
   width: 100%;
+  /* 搜索框的内在宽度(约 220px)会把窄侧栏的 grid 轨道撑溢出,
+     使筛选 chip 与工具条被裁切;允许收缩到容器宽。 */
+  min-width: 0;
   height: 30px;
   padding: 0 9px 0 27px;
   border: 1px solid transparent;
