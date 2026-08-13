@@ -40,10 +40,15 @@ import {
   YAxis,
 } from "recharts";
 import {
+  listDocumentExtents,
   listReadingSessions,
+  type DocumentExtent,
   type DocumentFormat,
   type ReadingSession,
 } from "../lib/backend";
+// 库覆盖率知识地图(plan-coverage-treemap):布局与聚合纯函数在 lib/treemap。
+import { CoverageTreemap } from "./CoverageTreemap";
+import { listLibraryReadingPositions } from "../lib/readingPositions";
 import {
   aggregateByDocument,
   aggregateByFormat,
@@ -579,6 +584,33 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const rootPath = snapshot?.rootPath ?? null;
   const entered = useEntranceFlag(motionLevel);
 
+  // 知识地图数据:extents 一次聚合(失败静默降级为 size 兜底),
+  // 阅读位置快照随刷新按钮重取;两者都与会话数据无关。
+  const [extents, setExtents] = useState<Map<string, DocumentExtent> | null>(null);
+  useEffect(() => {
+    if (!rootPath) {
+      setExtents(null);
+      return;
+    }
+    let cancelled = false;
+    void listDocumentExtents()
+      .then((entries) => {
+        if (cancelled) return;
+        setExtents(new Map(entries.map((entry) => [entry.relativePath, entry])));
+      })
+      .catch(() => {
+        if (!cancelled) setExtents(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [rootPath, reloadToken]);
+  const readingPositions = useMemo(
+    () => (rootPath ? listLibraryReadingPositions(rootPath) : {}),
+    // reloadToken:刷新按钮同时刷新位置快照。
+    [rootPath, reloadToken],
+  );
+
   useEffect(() => {
     if (!rootPath) {
       setSessions([]);
@@ -904,8 +936,10 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
         </div>
       )}
 
-      {!loading && !empty && (
+      {!loading && (
         <div className="stats-grid">
+          {!empty && (
+            <>
           <OverviewCards
             summary={summary}
             todayKey={todayKey}
@@ -1236,6 +1270,28 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
                 </li>
               ))}
             </ul>
+          </section>
+            </>
+          )}
+
+          {/* 知识地图与会话数据无关:空会话时同样渲染(定稿补记 §0.4)。 */}
+          <section
+            className="stats-card stats-section stats-span"
+            aria-label="库覆盖率知识地图"
+          >
+            <div className="stats-section-head">
+              <h2>知识地图</h2>
+              <span className="stats-section-hint">
+                面积 = 文本量 · 色深 = 到达覆盖率 · 点击文件夹下钻、文档直达
+              </span>
+            </div>
+            <CoverageTreemap
+              documents={documents}
+              extents={extents}
+              positions={readingPositions}
+              motionLevel={motionLevel}
+              onOpenDocument={openDocument}
+            />
           </section>
         </div>
       )}

@@ -1,13 +1,29 @@
 # 方案草案：库覆盖率知识地图（treemap）
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（批次 7 实施）**
 - 定位：一张手写 squarified treemap 回答"这个库我读了多少、哪一块还荒着"：块面积 = 文档体量（字符数），颜色深浅 = 阅读覆盖率（`readingPositions` 高水位），点击块下钻文件夹 / 打开文档。
 - 关联：覆盖率语义与目录覆盖线（`tocCoverage.ts`）、主页进度同源；色阶复用 `--stats-scale-*` 五档 token；体量数据与阅读时间预估方案（`docs/plan-reading-time-estimate.md`）共享同一"文档字符数"新契约。
 
 > 一句话：新 command `list_document_extents() → [{ relativePath, chars }]` 从 `search_segments` 聚合 `SUM(LENGTH(content))`；前端纯函数 `squarify(nodes, rect)`（零依赖实现经典算法）把文件夹树布局成嵌套矩形，SVG 渲染、覆盖率上色，入口放阅读统计视图；Web 端用 `search.json` content 长度同构。
 
 ---
+
+## 0. 定稿补记（实施前复核结论，2026-08-13）
+
+1. **不再新建 command**：批次 2 阅读时间预估已落地 `list_document_extents`
+   （`DocumentExtent = { relativePath, charCount, segmentCount,
+   needsOcrSegments }`，TE-D6 明确与本方案共享契约），本批直接复用；
+   §3.1 的"新 command"描述作废。`LENGTH()` 的 TEXT 字符数语义已由批次 2
+   的 Rust 测试锚定。
+2. 覆盖率折算复用批次 2 的 `highWaterCoverage(position, segmentCount)`
+   纯函数（scroll 取 maxScrollRatio，PDF 取 maxPage ÷ segmentCount），
+   不再另写一份。
+3. 渲染定稿为 **SVG**（CT-D2 推荐项）；入口定稿为**阅读统计视图新增
+   "知识地图"区块**（CT-D3：本期 Web 不提供）；上色定稿为
+   `calendarLevel(coverage, 1)` 映射 `--stats-scale-0..4` 五档（CT-D4）。
+4. 知识地图区块不依赖阅读会话数据：统计视图无会话记录时该区块照常渲染
+   （覆盖率来自 readingPositions 与 extents，与会话无关）。
 
 ## 1. 现状基线（已核实于 2026-08-13，行号允许漂移）
 
