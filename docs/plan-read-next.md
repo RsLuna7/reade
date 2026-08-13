@@ -1,7 +1,7 @@
-# 方案草案：读完接着读（read next）
+# 方案定稿：读完接着读（read next）
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；定稿：2026-08-13（基线 `adf73bd` 复核）
+- 状态：**定稿**
 - 定位：滚动到文档末尾时浮现一张轻卡片，推荐"下一篇"：合集内下一条 → 同文件夹下一篇 → 反向链接最多的相邻文档，三级回落。把"读完之后干什么"的决策成本降为一次点击。可关闭。
 - 关联：合集顺序来自 `docs/plan-collections.md` 已落地的 `collection_items.position`；反链计数来自只读双链（`list_document_links`）；与主页"继续阅读"卡语义互斥——那是"回到读了一半的"，这是"读完当前的接下一篇"。
 
@@ -93,6 +93,17 @@ export function pickReadNext(input: {
 | RN-D2 | 触发阈值 | **哨兵可见 + ratio≥0.98 + 800ms 驻留**（防误触） | 仅哨兵可见（短文档一进来就触发，吵） |
 | RN-D3 | 与朗读条的区位冲突 | **朗读中不出卡** | 卡片上移避让（两个浮层叠放，视觉噪音） |
 | RN-D4 | dismiss 持久性 | **会话级** | persist（用户改主意后找不回，且状态无限膨胀） |
+
+## 6.1 定稿落点（基线 `adf73bd` 复核后）
+
+- RN-D1～RN-D4 全部按推荐执行：合集 → 同文件夹 → 反链热度；哨兵可见 + ratio ≥ 0.98 + 800ms 驻留；朗读中不出卡；dismiss 会话级（App ref `Set<path>`，换库清空）。
+- 末尾哨兵对三格式统一适用：PDF 原版式是连续滚动（`.pdf-pages` 纵向排列），最末页滚到底时哨兵同样进入视口，无需单独的"当前页 = 末页"分支；无滚动余量的短文档 ratio 恒 0，不出卡（RN-D2 反噪声语义，接受）。
+- 多合集归属取 `collection.updatedAt` 最新者（§5 验收标准原文），不再引入逐条 addedAt 比较。
+- 合集条目契约按现状 `CollectionItem.present`（true = 在库），跳过 present=false 条目；到达合集末条不回环、不跨合集。
+- 树序回落：`tree.ts` 导出排序 collator 与文档显示名（title 优先、文件名兜底），readNext 与文档树共用一份，防两处排序漂移；当前已是同文件夹末篇时不跨文件夹。
+- 反链档：`listDocumentLinks(currentPath)` 的反链来源 + 出链在库文档目标合并为邻居集；权重 = 与当前文档的链接次数（反链用 `count`，出链按出现次数）；过滤未读完（`highWaterCoverage(position, extent.segmentCount) < 0.98`，无记录视为未读）；并列按 collator 比较 relativePath（树序的可接受近似）。Web 端链接视图超 500 篇被禁用时静默落空（只走前两档）。
+- 编排函数 `resolveReadNextSuggestion` 注入 `listCollections/listCollectionItems/listDocumentLinks` 依赖，纯逻辑可测；每文档结果缓存至路径变化，反链 IPC 只在前两档落空时发生一次。
+- 全局开关 `readNextEnabled` 入阅读设置并 persist（默认开）。
 
 ## 7. 风险
 

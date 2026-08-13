@@ -62,6 +62,7 @@ import {
   findRelatedPassages,
   importAnnotations,
   listAnnotations,
+  listCollectionItems,
   listCollections,
   listDocumentLinks,
   listAnnotationsForTransfer,
@@ -230,6 +231,15 @@ import {
   writeReadingPosition,
   type ReadingPosition,
 } from "./lib/readingPositions";
+// 读完接着读(plan-read-next):三级回落纯逻辑在 lib,App 只负责哨兵
+// 触发、会话级 dismiss 与朗读互斥。
+import {
+  READ_NEXT_DWELL_MS,
+  resolveReadNextSuggestion,
+  shouldTriggerReadNext,
+  type ReadNextSuggestion,
+} from "./lib/readNext";
+import { documentTreeName } from "./lib/tree";
 import { buildTocHeat, type TocHeatResult } from "./lib/tocHeat";
 import {
   buildPdfTocCoverage,
@@ -262,6 +272,7 @@ const PDF_READING_MODE_MAX_BYTES = 128 * 1024 * 1024;
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
 const PdfReader = lazy(() => import("./components/PdfReader").then((module) => ({ default: module.PdfReader })));
 const QuoteCardDialog = lazy(() => import("./components/QuoteCardDialog").then((module) => ({ default: module.QuoteCardDialog })));
+const ReadNextCard = lazy(() => import("./components/ReadNextCard").then((module) => ({ default: module.ReadNextCard })));
 const SecondaryPane = lazy(() => import("./components/SecondaryPane").then((module) => ({ default: module.SecondaryPane })));
 const StatsView = lazy(() => import("./components/StatsView").then((module) => ({ default: module.StatsView })));
 const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ default: module.HomeView })));
@@ -744,6 +755,8 @@ export function ReadingSettingsPanel({
   const setTypewriterScroll = useReaderStore((state) => state.setTypewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
   const setReadingRuler = useReaderStore((state) => state.setReadingRuler);
+  const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
+  const setReadNextEnabled = useReaderStore((state) => state.setReadNextEnabled);
   const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
   const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
   const resetAnnotationColorNames = useReaderStore(
@@ -923,6 +936,29 @@ export function ReadingSettingsPanel({
         </div>
         <p className="setting-hint">
           正文右缘的刻度层：标出标注四色、书签、搜索命中与朗读位置，点击可跳转。
+        </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">读完接着读</legend>
+        <div className="motion-level-control" role="group" aria-label="读完接着读开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={readNextEnabled === enabled}
+              className={readNextEnabled === enabled ? "active" : undefined}
+              onClick={() => setReadNextEnabled(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          滚动到文档末尾时推荐下一篇：合集顺序优先，其次同文件夹，再次互链最多的文档。
         </p>
       </fieldset>
 
@@ -1461,6 +1497,7 @@ function App() {
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
   const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
+  const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -4023,6 +4060,153 @@ function App() {
     return readingSpeed.calibrated ? `${line} · 个人速度已校准` : line;
   }, [currentPath, estimateForPath, readingSpeed.calibrated]);
 
+  // ---- 读完接着读(plan-read-next) ----
+  // 哨兵可见 + 高水位 ≥0.98 + 800ms 驻留才出卡(RN-D2);dismiss 是
+  // 会话级 Set(RN-D4),换库清空;推荐结果按文档缓存,反链 IPC 至多一次。
+  const [readNextCard, setReadNextCard] = useState<
+    { path: string; suggestion: ReadNextSuggestion } | null
+  >(null);
+  const readNextDismissed = useRef(new Set<string>());
+  const readNextCache = useRef(new Map<string, ReadNextSuggestion | null>());
+  const readNextRequest = useRef(0);
+
+  useEffect(() => {
+    readNextDismissed.current.clear();
+    readNextCache.current.clear();
+    setReadNextCard(null);
+  }, [snapshot?.rootPath]);
+
+  useEffect(() => {
+    // 换文档收卡;合集增删改(version 递增)后推荐可能变化,缓存作废。
+    setReadNextCard(null);
+    readNextCache.current.clear();
+  }, [currentPath, collectionsVersion]);
+
+  const dismissReadNext = useCallback(() => {
+    setReadNextCard((current) => {
+      // Set 去重,StrictMode 双调 updater 也幂等。
+      if (current) readNextDismissed.current.add(current.path);
+      return null;
+    });
+  }, []);
+
+  useEffect(() => {
+    const reader = readerRef.current;
+    const article = articleRef.current;
+    if (!reader || !article) return;
+    if (!readNextEnabled || !currentPath || !currentContent) return;
+    if (activeView !== "reader" || readAloudBarOpen) return;
+    if (readNextDismissed.current.has(currentPath)) return;
+    const sentinel = article.querySelector("[data-read-next-sentinel]");
+    if (!sentinel) return;
+
+    const path = currentPath;
+    let visible = false;
+    let dwellTimer: number | null = null;
+    let evalFrame: number | null = null;
+    let disposed = false;
+
+    const clearDwell = () => {
+      if (dwellTimer !== null) {
+        window.clearTimeout(dwellTimer);
+        dwellTimer = null;
+      }
+    };
+
+    const fire = async () => {
+      dwellTimer = null;
+      // dismiss 发生在本 effect 存续期间(依赖不变不重建),触发时必须
+      // 复查会话级 Set,否则缓存的推荐会在下一次滚到底时复活。
+      if (disposed || readNextDismissed.current.has(path)) return;
+      let suggestion = readNextCache.current.get(path);
+      if (suggestion === undefined) {
+        const request = ++readNextRequest.current;
+        const rootPath = useReaderStore.getState().snapshot?.rootPath;
+        suggestion = await resolveReadNextSuggestion({
+          currentPath: path,
+          documents,
+          positions: rootPath ? listLibraryReadingPositions(rootPath) : {},
+          extents: documentExtents,
+          listCollections,
+          listCollectionItems,
+          listDocumentLinks,
+        }).catch(() => null);
+        if (disposed || request !== readNextRequest.current) return;
+        readNextCache.current.set(path, suggestion);
+      }
+      if (disposed || !suggestion || !visible) return;
+      setReadNextCard({ path, suggestion });
+    };
+
+    const evaluate = () => {
+      evalFrame = null;
+      if (disposed) return;
+      if (shouldTriggerReadNext(visible, readingScrollRatio())) {
+        if (dwellTimer === null) {
+          dwellTimer = window.setTimeout(() => void fire(), READ_NEXT_DWELL_MS);
+        }
+        return;
+      }
+      clearDwell();
+      // 离开末尾后收起未 dismiss 的卡;滚回末尾重新驻留计时。
+      if (!visible) {
+        setReadNextCard((current) => (current?.path === path ? null : current));
+      }
+    };
+    const scheduleEvaluate = () => {
+      if (evalFrame === null) evalFrame = window.requestAnimationFrame(evaluate);
+    };
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) visible = entry.isIntersecting;
+        scheduleEvaluate();
+      },
+      { root: reader, threshold: 0 },
+    );
+    observer.observe(sentinel);
+    reader.addEventListener("scroll", scheduleEvaluate, { passive: true });
+    return () => {
+      disposed = true;
+      observer.disconnect();
+      reader.removeEventListener("scroll", scheduleEvaluate);
+      clearDwell();
+      if (evalFrame !== null) window.cancelAnimationFrame(evalFrame);
+    };
+  }, [
+    activeView,
+    currentContent,
+    currentPath,
+    documentExtents,
+    documents,
+    readAloudBarOpen,
+    readNextEnabled,
+    readingScrollRatio,
+  ]);
+
+  /** 推荐目标的展示数据;目标已不在库(极端竞态)时整卡不渲染。 */
+  const readNextTarget = useMemo(() => {
+    if (!readNextCard) return null;
+    const target = documents.find(
+      (document) => document.relativePath === readNextCard.suggestion.relativePath,
+    );
+    if (!target) return null;
+    return {
+      document: target,
+      reason: readNextCard.suggestion.reason,
+      title: documentTreeName(target),
+      estimate: estimateForPath(target.relativePath),
+    };
+  }, [documents, estimateForPath, readNextCard]);
+
+  const openReadNext = useCallback(() => {
+    const target = readNextTarget?.document;
+    if (!target) return;
+    dismissReadNext();
+    recordNavDeparture();
+    void selectDocument(target.relativePath);
+  }, [dismissReadNext, readNextTarget, recordNavDeparture, selectDocument]);
+
   useEffect(() => {
     if (!snapshot || IS_WEB_RUNTIME) return;
     let disposed = false;
@@ -4285,6 +4469,7 @@ function App() {
           setMarkEditor(null);
           setQuoteCardSource(null);
           setBookDigestOpen(false);
+          dismissReadNext();
           closeRelatedPassages();
           clearRelocatePreview();
         }
@@ -4331,6 +4516,7 @@ function App() {
     clearRelocatePreview,
     currentContent,
     currentPath,
+    dismissReadNext,
     handleCreateBookmark,
     handleNavBack,
     handleNavForward,
@@ -5107,6 +5293,8 @@ function App() {
                   onActiveChange={handleActiveHeadingChange}
                 />}
                 </ArticleErrorBoundary>
+                {/* 读完接着读的末尾哨兵(plan-read-next §3.2):三格式通用。 */}
+                <div data-read-next-sentinel aria-hidden="true" />
               </div>
             </div>
             {showScrollMap && (
@@ -5481,6 +5669,21 @@ function App() {
           onClose={() => setCommandPaletteOpen(false)}
         />
 
+
+        {/* 读完接着读:与朗读条同区位,朗读中不出卡(RN-D3)。 */}
+        {readNextTarget && !readAloud.barOpen && !overlayViewOpen && (
+          <Suspense fallback={null}>
+            <ReadNextCard
+              title={readNextTarget.title}
+              format={readNextTarget.document.format}
+              reason={readNextTarget.reason}
+              estimate={readNextTarget.estimate}
+              motionLevel={motionLevel}
+              onOpen={openReadNext}
+              onDismiss={dismissReadNext}
+            />
+          </Suspense>
+        )}
 
         {readAloud.barOpen && !overlayViewOpen && (
           <ReadAloudBar

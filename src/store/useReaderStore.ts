@@ -209,6 +209,7 @@ type PersistedReaderPreferences = Partial<
     | "focusSpotlight"
     | "typewriterScroll"
     | "readingRuler"
+    | "readNextEnabled"
     | "ttsRate"
     | "ttsVoiceName"
     | "reviewCardMode"
@@ -271,6 +272,10 @@ export function migrateReaderPreferences(
     ...(typeof state.readingRuler === "boolean"
       ? { readingRuler: state.readingRuler }
       : {}),
+    // 读完接着读(plan-read-next):缺键/坏值回默认开。
+    ...(typeof state.readNextEnabled === "boolean"
+      ? { readNextEnabled: state.readNextEnabled }
+      : {}),
     ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
     ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
     // 回顾卡片渲染档(plan-cloze-review CZ-D9):坏值回落默认摘录档。
@@ -322,6 +327,11 @@ interface ReaderState {
   focusSpotlight: boolean;
   typewriterScroll: boolean;
   readingRuler: boolean;
+  /**
+   * 读完接着读(plan-read-next):滚动到末尾时的"下一篇"推荐卡。
+   * 默认开;持久化、双端同构。
+   */
+  readNextEnabled: boolean;
   expandedPaths: string[];
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
@@ -369,6 +379,7 @@ interface ReaderState {
   setFocusSpotlight: (enabled: boolean) => void;
   setTypewriterScroll: (enabled: boolean) => void;
   setReadingRuler: (enabled: boolean) => void;
+  setReadNextEnabled: (enabled: boolean) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
   setTtsRate: (rate: number) => void;
@@ -453,6 +464,7 @@ export const useReaderStore = create<ReaderState>()(
         focusSpotlight: false,
         typewriterScroll: false,
         readingRuler: false,
+        readNextEnabled: true,
         expandedPaths: [],
         activeView: "reader",
         dailyGoalMinutes: 0,
@@ -686,6 +698,10 @@ export const useReaderStore = create<ReaderState>()(
           set({ readingRuler: enabled === true });
         },
 
+        setReadNextEnabled: (enabled) => {
+          set({ readNextEnabled: typeof enabled === "boolean" ? enabled : true });
+        },
+
         setActiveView: (view) => {
           set({ activeView: READER_VIEWS.has(view) ? view : "reader" });
         },
@@ -741,6 +757,7 @@ export const useReaderStore = create<ReaderState>()(
             focusSpotlight: false,
             typewriterScroll: false,
             readingRuler: false,
+            readNextEnabled: true,
           });
         },
 
@@ -773,6 +790,7 @@ export const useReaderStore = create<ReaderState>()(
         focusSpotlight: state.focusSpotlight,
         typewriterScroll: state.typewriterScroll,
         readingRuler: state.readingRuler,
+        readNextEnabled: state.readNextEnabled,
         ttsRate: state.ttsRate,
         ttsVoiceName: state.ttsVoiceName,
         reviewCardMode: state.reviewCardMode,
@@ -839,6 +857,10 @@ export const useReaderStore = create<ReaderState>()(
             typeof preferences.readingRuler === "boolean"
               ? preferences.readingRuler
               : current.readingRuler,
+          readNextEnabled:
+            typeof preferences.readNextEnabled === "boolean"
+              ? preferences.readNextEnabled
+              : current.readNextEnabled,
           ttsRate:
             typeof preferences.ttsRate === "number"
               ? clampTtsRate(preferences.ttsRate)

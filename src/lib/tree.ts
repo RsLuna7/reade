@@ -18,10 +18,16 @@ export interface FileTreeNode {
 
 export type DocumentTreeNode = DirectoryTreeNode | FileTreeNode;
 
-const pathCollator = new Intl.Collator(["zh-CN", "en"], {
+/**
+ * 文档树与"读完接着读"的同文件夹回落共用这一个 collator
+ * （plan-read-next §3.1），防止两处排序漂移。
+ */
+export const treePathCollator = new Intl.Collator(["zh-CN", "en"], {
   numeric: true,
   sensitivity: "base",
 });
+
+const pathCollator = treePathCollator;
 
 export function normalizeRelativePath(path: string): string {
   return path
@@ -35,6 +41,11 @@ function fallbackDocumentName(relativePath: string): string {
   const segments = normalizeRelativePath(relativePath).split("/");
   const fileName = segments[segments.length - 1] ?? relativePath;
   return fileName.replace(/\.md(?:own)?$/i, "");
+}
+
+/** 树节点显示名:标题优先,空标题回落文件名(与 buildDocumentTree 同源)。 */
+export function documentTreeName(document: DocumentInfo): string {
+  return document.title.trim() || fallbackDocumentName(document.relativePath);
 }
 
 function sortNodes(nodes: DocumentTreeNode[]): void {

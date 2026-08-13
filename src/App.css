@@ -3006,6 +3006,97 @@ a:focus-visible {
 }
 
 /* 朗读控制条(plan-read-aloud §3.6):阅读区底部浮动,与重定位确认条同位。 */
+/* ---- 读完接着读(plan-read-next):fixed 右下轻卡片,与朗读条同
+   区位但互斥渲染(RN-D3)。 ---- */
+.read-next-card {
+  position: fixed;
+  right: 24px;
+  bottom: 24px;
+  z-index: 44;
+  display: grid;
+  gap: 6px;
+  width: min(320px, calc(100vw - 48px));
+  padding: 12px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+}
+
+.read-next-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.read-next-reason {
+  padding: 2px 8px;
+  border: 1px solid color-mix(in srgb, var(--accent) 32%, var(--line));
+  border-radius: 999px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.read-next-lead {
+  margin: 0;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.read-next-open {
+  display: grid;
+  padding: 9px 11px;
+  gap: 6px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink);
+  background: var(--chrome);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.read-next-open:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line-strong));
+  background: var(--paper);
+}
+
+.read-next-title {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.read-next-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.read-next-meta svg {
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.read-next-format {
+  padding: 1px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+}
+
 .read-aloud-bar {
   position: fixed;
   right: 24px;

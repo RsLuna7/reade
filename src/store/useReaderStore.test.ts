@@ -538,6 +538,45 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().readingRuler).toBe(false);
   });
 
+  it("persists the read-next switch and defaults it on (plan-read-next)", async () => {
+    useReaderStore.setState({ readNextEnabled: true });
+
+    useReaderStore.getState().setReadNextEnabled(false);
+    expect(useReaderStore.getState().readNextEnabled).toBe(false);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ readNextEnabled: false });
+
+    // 关闭偏好在下次启动 rehydrate 后保留;坏值回默认开。
+    useReaderStore.setState({ readNextEnabled: true });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { readNextEnabled: false },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readNextEnabled).toBe(false);
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { readNextEnabled: "no" },
+      }),
+    );
+    useReaderStore.setState({ readNextEnabled: true });
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readNextEnabled).toBe(true);
+
+    // 恢复默认拨回默认开。
+    useReaderStore.getState().setReadNextEnabled(false);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().readNextEnabled).toBe(true);
+  });
+
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "金句",
