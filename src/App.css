@@ -41,6 +41,16 @@
   --focus-fade: 240ms;
 }
 
+/* 主题墨水扩散(plan-theme-ink-transition):扩散期间由 html class 圈定
+   关闭默认交叉淡入——新快照交给 WAAPI 的 clip-path 圆形揭示,旧快照
+   原样垫底;class 在 transition.finished 后移除,后续无 origin 的
+   full 档切换仍是默认交叉淡入。 */
+:root.theme-ink-reveal::view-transition-old(root),
+:root.theme-ink-reveal::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
 * {
   box-sizing: border-box;
 }

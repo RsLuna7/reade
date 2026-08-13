@@ -53,7 +53,13 @@ import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
 import { DocumentTree } from "./components/DocumentTree";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
-import { applyThemeMutation } from "./lib/themeTransition";
+// 主题墨水扩散(plan-theme-ink-transition):点击处理器写入一次性
+// origin,主题 effect 消费;full 档才会用到,其余档位照旧。
+import {
+  applyThemeMutation,
+  consumeThemeTransitionOrigin,
+  setNextThemeTransitionOrigin,
+} from "./lib/themeTransition";
 import {
   APP_RUNTIME,
   DEFAULT_LIBRARY_ROOT,
@@ -1093,8 +1099,17 @@ export function ThemeStylePicker({
     if (!open) setHint(null);
   }, [open]);
 
-  const pickSeries = (series: ThemeSeriesId) => {
+  const pickSeries = (series: ThemeSeriesId, anchor?: HTMLElement | null) => {
     if (series === activeSeries) return;
+    // 墨水扩散以色卡中心为圆心(TT-D3 定稿修订);等值早退在上一行,
+    // 不会留下陈旧 origin。
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      setNextThemeTransitionOrigin({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+    }
     setThemeSeries(series);
     setHint(
       SERIES_FONT_PRESET[series] === "serif"
@@ -1129,10 +1144,11 @@ export function ThemeStylePicker({
       nextIndex = (currentIndex + delta + THEME_SERIES.length) % THEME_SERIES.length;
     }
     const nextSeries = THEME_SERIES[nextIndex].id;
-    groupRef.current
-      ?.querySelector<HTMLButtonElement>(`.theme-style-tile[data-series="${nextSeries}"]`)
-      ?.focus();
-    pickSeries(nextSeries);
+    const tile = groupRef.current?.querySelector<HTMLButtonElement>(
+      `.theme-style-tile[data-series="${nextSeries}"]`,
+    );
+    tile?.focus();
+    pickSeries(nextSeries, tile);
   };
 
   return (
@@ -1170,7 +1186,7 @@ export function ThemeStylePicker({
               tabIndex={active ? 0 : -1}
               className={`theme-style-tile${active ? " active" : ""}`}
               aria-label={`${series.label}系列${active ? "（当前使用）" : ""}`}
-              onClick={() => pickSeries(series.id)}
+              onClick={(event) => pickSeries(series.id, event.currentTarget)}
             >
               <span className="theme-style-swatch" aria-hidden="true">
                 <i style={{ background: meta.swatch.paper }} />
@@ -3861,7 +3877,9 @@ function App() {
       applyTheme();
       return;
     }
-    applyThemeMutation(applyTheme, motionLevel);
+    // 真正的主题变更才消费扩散 origin;来自日/月按钮或风格色卡时
+    // full 档做圆形揭示,其余入口(命令面板等)保持交叉淡入。
+    applyThemeMutation(applyTheme, motionLevel, consumeThemeTransitionOrigin());
   }, [theme, motionLevel]);
 
   useLayoutEffect(() => {
@@ -4990,7 +5008,15 @@ function App() {
               type="button"
               aria-label={themeMode === "light" ? "切换到深色主题" : "切换到浅色主题"}
               title={themeMode === "light" ? "深色主题" : "浅色主题"}
-              onClick={toggleTheme}
+              onClick={(event) => {
+                // 墨水扩散从日/月按钮圆心晕开(plan-theme-ink-transition)。
+                const rect = event.currentTarget.getBoundingClientRect();
+                setNextThemeTransitionOrigin({
+                  x: rect.left + rect.width / 2,
+                  y: rect.top + rect.height / 2,
+                });
+                toggleTheme();
+              }}
             >
               <span className="theme-state-icon" aria-hidden="true">
                 <Moon className={themeMode === "light" ? "active" : undefined} size={16} />

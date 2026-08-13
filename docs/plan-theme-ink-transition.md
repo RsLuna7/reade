@@ -1,7 +1,7 @@
-# 方案草案：主题切换墨水扩散过渡
+# 方案定稿：主题切换墨水扩散过渡
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；定稿：2026-08-13（基线 `a58c566` 复核）
+- 状态：**定稿**
 - 定位：日/月切换主题时，从按钮位置做一次圆形揭示（"墨水在纸上晕开"），替代当前的全屏交叉淡入。只在"完整"动效档启用；不支持 View Transitions 的引擎优雅回落到现状。零依赖。
 - 关联：直接扩展 `src/lib/themeTransition.ts` 的 `applyThemeMutation`（已用 View Transitions API）；动效档语义沿 `motion.ts`；与主题体系（`themes.ts` 四系列×明暗）正交。
 
@@ -84,6 +84,16 @@ export function applyThemeMutation(
 | TT-D2 | subtle 档行为 | **保持默认交叉淡入**（subtle=低刺激，扩散属"完整"表达） | subtle 也扩散但缩短时长（档位语义模糊化，否） |
 | TT-D3 | 系列切换（非日月按钮） | **维持交叉淡入**（无自然圆心） | 从屏幕中心扩散（无来源感，动画显得随机） |
 | TT-D4 | 时长 | **450ms**（对角线扫过的感知下限） | 300ms（大屏上更像闪烁）；600ms（阻塞交互过久） |
+
+## 6.1 定稿落点（基线 `a58c566` 复核后）
+
+- **基线勘误（TT-D2 修正）**：仓库现状 `applyThemeMutation` 只有 full 档走 View Transitions 交叉淡入，subtle/off 都是同步瞬时切换（`themeTransition.test.ts` 与 USER_GUIDE 均如此表述），并非草案 §2 所写"subtle = 交叉淡入"。定稿按现状收敛：off/subtle 行为零变化；full 无 origin 保持既有交叉淡入；full + origin 才走圆形扩散。
+- **TT-D3 修订（按批次任务书）**：扩散源扩展为"日/月按钮 **和** 风格面板色卡"两个触发点；命令面板等无坐标入口不传 origin，维持交叉淡入。
+- origin 传递机制：`themeTransition.ts` 增加模块级一次性坐标（`setNextThemeTransitionOrigin` / `consumeThemeTransitionOrigin`，1.5s 保鲜期防陈旧），点击处理器写入、App 主题 effect 消费后传参——不改 store 契约、不给 React 状态添加一次性事件语义。
+- `startViewTransition` 返回类型本地宽化为 `{ ready?, finished?, skipTransition? }` 可选结构；`ready`/`finished` 缺失或 reject、`animate` 对伪元素抛错时全部静默清理回落（最坏 = 现状交叉淡入或瞬时）。
+- 默认淡入与 clip 动画不叠加：扩散期间 html 挂 `theme-ink-reveal` class 圈定 `::view-transition-old/new(root) { animation: none }`；用引用计数管理并在 `finished.finally` 移除，连点时前一次的清理不会误伤后一次（View Transitions 自身会跳过进行中的过渡，不另加锁）。
+- `prefers-reduced-motion` 沿既有档位语义（系统 reduce 令默认档为 off；用户显式选 full 视为明确意愿），不新增媒体查询——与 `runMotion`/既有主题过渡一致。
+- 时长 450ms `ease-in-out`（TT-D4）；半径 = origin 到视口四角最远距离（`revealRadius` 纯函数）。
 
 ## 7. 风险
 
