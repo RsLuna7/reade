@@ -5,7 +5,7 @@ Reade 是一款本地优先的长文阅读器：Windows 桌面版读取 Markdown
 ## 当前能力
 
 - 选择本地文件夹并递归发现 `.md`、`.markdown`、`.mdx`、`.pdf`、`.epub`
-- PDF 原版式连续滚动、文本层、Outline、50%–300% 缩放、适宽与按页阅读模式
+- PDF 原版式连续滚动、文本层、Outline、50%–300% 缩放、适宽与按页阅读模式；宽窗可切双页对开（封面独立、按对翻页、窄窗自动回落）
 - 可重排 EPUB 安全语义渲染、章节目录与 Reade 统一排版，不加载书内 HTML/CSS
 - 文件树、键盘导航、自动刷新、后台增量索引与 SQLite FTS5 全文检索
 - GFM、脚注、KaTeX 数学公式、Shiki 代码高亮、Mermaid 图表

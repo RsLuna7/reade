@@ -1481,6 +1481,36 @@ a:focus-visible {
 :root[data-motion="full"] .pdf-mode-toggle[data-mode="reading"] .pdf-mode-indicator { transform: translateX(calc(100% + 2px)); }
 :root[data-motion="full"] .pdf-mode-toggle button.active { background: transparent; }
 .pdf-pages { display: flex; align-items: center; flex-direction: column; gap: 22px; }
+
+/* ---- PDF 双页对开(plan-pdf-spread) ----
+   spread=false 保持原 flex 路径零扰动;并排布局全部隔离在
+   [data-spread] 下:两列 grid,每行一对 (2k, 2k+1),偶数页左列、
+   奇数页右列并向书脊对齐;第 1 页独立占右列(封面是右页)。 */
+.pdf-pages[data-spread="true"] {
+  display: grid;
+  align-items: start;
+  justify-content: center;
+  grid-template-columns: repeat(2, minmax(0, min(var(--pdf-page-width), calc(50% - 11px))));
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:nth-child(even) {
+  justify-self: end;
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:nth-child(odd) {
+  justify-self: start;
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:first-child {
+  grid-column: 2;
+  justify-self: start;
+}
+
+/* 单页文档:没有可配对的第 2 页,封面整行居中。 */
+.pdf-pages[data-spread="true"] .pdf-page:first-child:last-child {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
 /* pdf.js text layer contract: --total-scale-factor is set per page from JS
    (PdfPage), --scale-round-x/y are required by setLayerDimensions' round(). */
 .pdf-page { position: relative; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }

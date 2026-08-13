@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
 import { act, fireEvent, render, waitFor } from "@testing-library/react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pdfMocks = vi.hoisted(() => ({
   tasks: [] as Array<{
@@ -156,6 +156,8 @@ describe("PDF session lifecycle", () => {
     view.rerender(<PdfReader {...common} modified={2} />);
     await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(2));
     expect(pdfMocks.tasks[0].destroy).toHaveBeenCalledOnce();
+    // 不卸载会向后续测试泄漏一份挂载的工具栏(按钮名会撞车)。
+    act(() => view.unmount());
   });
 });
 
@@ -311,6 +313,141 @@ describe("PDF region capture mode (plan-pdf-region-card)", () => {
     act(() => readerRef.current!.setMode("original"));
     const toggle = await view.findByRole("button", { name: "截取引用" });
     expect(toggle).toHaveAttribute("aria-pressed", "false");
+    act(() => view.unmount());
+  });
+});
+
+describe("PDF spread mode (plan-pdf-spread)", () => {
+  /** 解析出带 getPage/getOutline 的最小 pdf 双身,渲染路径停在 getPage。 */
+  function fakePdf(numPages = 5) {
+    return {
+      numPages,
+      getOutline: vi.fn().mockResolvedValue(null),
+      getPage: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+  }
+
+  const common = {
+    size: 100,
+    modified: 1,
+    indexStatus: "ready" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  function setWindowWidth(width: number) {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: width });
+  }
+
+  function widenReader(view: ReturnType<typeof render>, width: number) {
+    const reader = view.container.querySelector<HTMLElement>(".pdf-reader");
+    expect(reader).not.toBeNull();
+    Object.defineProperty(reader, "clientWidth", {
+      configurable: true,
+      get: () => width,
+    });
+  }
+
+  /** 每个测试用独立文件名:双页意图是按 relativePath 的会话级记忆。 */
+  async function renderWideSpreadReader(relativePath: string, numPages = 5) {
+    setWindowWidth(1600);
+    const view = render(<PdfReader {...common} relativePath={relativePath} />);
+    await act(async () => {
+      pdfMocks.tasks[0].resolve(fakePdf(numPages));
+      await Promise.resolve();
+    });
+    widenReader(view, 1200);
+    // 容量监测走 window resize 通道(jsdom 无真实 ResizeObserver)。
+    act(() => {
+      fireEvent(window, new Event("resize"));
+    });
+    return view;
+  }
+
+  afterEach(() => {
+    setWindowWidth(1024);
+  });
+
+  it("enables the toggle in a wide window and lays pages out as spreads", async () => {
+    const view = await renderWideSpreadReader("spread-toggle.pdf");
+    const toggle = await view.findByRole("button", { name: "双页" });
+    expect(toggle).toBeEnabled();
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).not.toBeNull();
+
+    fireEvent.click(toggle);
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).toBeNull();
+    act(() => view.unmount());
+  });
+
+  it("steps the pager by pairs while spread and keeps single-page numbers", async () => {
+    const view = await renderWideSpreadReader("spread-pager.pdf");
+    fireEvent.click(await view.findByRole("button", { name: "双页" }));
+
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    expect(pageInput).toHaveValue("1");
+    // 封面边界 ±1,之后按对 ±2(PS-D4)。
+    fireEvent.click(view.getByRole("button", { name: "下一页" }));
+    expect(pageInput).toHaveValue("2");
+    fireEvent.click(view.getByRole("button", { name: "下一页" }));
+    expect(pageInput).toHaveValue("4");
+    fireEvent.click(view.getByRole("button", { name: "上一页" }));
+    expect(pageInput).toHaveValue("2");
+    fireEvent.click(view.getByRole("button", { name: "上一页" }));
+    expect(pageInput).toHaveValue("1");
+    act(() => view.unmount());
+  });
+
+  it("disables the toggle in a narrow window and auto-collapses while keeping intent", async () => {
+    const view = await renderWideSpreadReader("spread-collapse.pdf");
+    const toggle = await view.findByRole("button", { name: "双页" });
+    fireEvent.click(toggle);
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).not.toBeNull();
+
+    // 窗口拖窄(<1180):自动回单页,按钮禁用。
+    act(() => {
+      setWindowWidth(1000);
+      fireEvent(window, new Event("resize"));
+    });
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).toBeNull();
+    expect(toggle).toBeDisabled();
+
+    // 拖回宽窗:意图保留,自动恢复双页(PS-D3)。
+    act(() => {
+      setWindowWidth(1600);
+      fireEvent(window, new Event("resize"));
+    });
+    expect(view.container.querySelector('.pdf-pages[data-spread="true"]')).not.toBeNull();
+    expect(toggle).toBeEnabled();
+    act(() => view.unmount());
+  });
+
+  it("never offers the spread toggle in reading mode", async () => {
+    vi.mocked(readPdfReadingMode).mockReset();
+    vi.mocked(readPdfReadingMode).mockResolvedValue({
+      relativePath: "spread-reading.pdf",
+      status: "ready",
+      pages: [{ page: 1, markdown: "hello", needsOcr: false, ocrReason: null }],
+      missingPages: [],
+      warning: null,
+    });
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderWideSpreadReader("spread-reading.pdf");
+    view.rerender(
+      <PdfReader {...common} relativePath="spread-reading.pdf" readerRef={readerRef} />,
+    );
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+    await act(async () => readerRef.current!.setMode("reading"));
+    await waitFor(() =>
+      expect(view.queryByRole("button", { name: "双页" })).toBeNull(),
+    );
     act(() => view.unmount());
   });
 });

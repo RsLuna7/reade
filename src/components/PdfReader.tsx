@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns3, Crop, FileText, Minus, Plus, ScanSearch } from "lucide-react";
+import { BookOpen, ChevronLeft, ChevronRight, Columns3, Crop, FileText, Minus, Plus, ScanSearch } from "lucide-react";
 import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, getDocument, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { openExternalLink, readDocumentRange, readPdfReadingMode, type Annotation, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
@@ -23,6 +23,15 @@ import {
   type NormalizedRegionRect,
   type RegionPoint,
 } from "../lib/pdfRegion";
+// 双页对开(plan-pdf-spread):配对/步长/适宽/可用性纯函数在 lib。
+import {
+  SPREAD_RENDER_MARGIN,
+  canSpread,
+  nextSpreadPage,
+  previousSpreadPage,
+  singleFitScale,
+  spreadFitScale,
+} from "../lib/pdfSpread";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
@@ -30,6 +39,8 @@ const RANGE_CHUNK = 256 * 1024;
 const MAX_RANGE_CHUNK = 4 * 1024 * 1024;
 const PAGE_RENDER_MARGIN = "1200px 0px";
 const PAGE_REFERENCE_GAP = 8;
+/** 双页意图的会话级记忆(PS-D3):同 SecondaryPane scrollMemory 模式。 */
+const spreadMemory = new Map<string, boolean>();
 
 class ReadeRangeTransport extends PDFDataRangeTransport {
   private aborted = false;
@@ -265,6 +276,8 @@ interface PageProps {
   fuzzyAnchoring: boolean;
   /** "截取引用"模式(plan-pdf-region-card):已渲染页挂框选层。 */
   regionActive?: boolean;
+  /** 懒渲染窗口(plan-pdf-spread §3.3):双页时收紧到 800px。 */
+  renderMargin?: string;
   onRegionCapture?: (capture: PdfRegionCapture) => void;
   onRatioChange: (page: number, ratio: number) => void;
   onJump: (page: number) => void;
@@ -329,7 +342,7 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, onRegionCapture, onRatioChange, onJump }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump }: PageProps) {
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -354,10 +367,10 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     const root = findReadingRoot(host);
     const observer = new IntersectionObserver(([entry]) => {
       setRenderNearby(Boolean(entry?.isIntersecting));
-    }, { root, rootMargin: PAGE_RENDER_MARGIN });
+    }, { root, rootMargin: renderMargin });
     observer.observe(host);
     return () => observer.disconnect();
-  }, []);
+  }, [renderMargin]);
 
   useEffect(() => {
     const host = hostRef.current;
@@ -711,6 +724,10 @@ export function PdfReader({
   const [scale, setScale] = useState(1);
   const [nativePageWidth, setNativePageWidth] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  // 双页对开(plan-pdf-spread):intent 是用户意图(会话级记忆),
+  // capable 是宽窗判定;两者都成立且在原版式才真正并排。
+  const [spreadIntent, setSpreadIntent] = useState(() => spreadMemory.get(relativePath) ?? false);
+  const [spreadCapable, setSpreadCapable] = useState(false);
   // "截取引用"模式(plan-pdf-region-card):仅原版式;Esc 退出,换文档/
   // 切阅读模式自动退出;激活期间文本层 pointer-events 由 CSS 关闭。
   const [regionSelect, setRegionSelect] = useState(false);
@@ -785,7 +802,29 @@ export function PdfReader({
     setBoundReading(null);
     setReadingLoadingKey(null);
     setRegionSelect(false);
-  }, [sourceKey]);
+    // 换文档恢复该文档的双页意图(PS-D3 会话级记忆)。
+    setSpreadIntent(spreadMemory.get(relativePath) ?? false);
+  }, [relativePath, sourceKey]);
+
+  // 双页可用性监测(PS-D1 定稿):窗口断点 + 容器可读宽,ResizeObserver
+  // 与 window resize 双通道;越界自动回单页,意图保留、恢复自动回来。
+  useEffect(() => {
+    const reader = rootRef.current;
+    if (!reader) return;
+    const measure = () => {
+      setSpreadCapable(canSpread(window.innerWidth, reader.clientWidth));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(reader);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, []);
+
+  const spreadActive = spreadIntent && spreadCapable && mode === "original";
 
   // 阅读模式没有页位图可裁;Esc 只在模式激活时消费(不 preventDefault,
   // App 全局 Esc 链的收尾行为保持不变)。
@@ -888,15 +927,22 @@ export function PdfReader({
       if (!activeSession.lifecycle.isActive() || sourceKeyRef.current !== activeSession.sourceKey) return;
       const nativeWidth = firstPage.getViewport({ scale: 1 }).width;
       setNativePageWidth(nativeWidth);
-      setScale(Math.min(3, Math.max(.5, (reader.clientWidth - 18) / nativeWidth)));
+      // 适宽语义(plan-pdf-spread §2):双页 = 两页 + 列距填满容器。
+      const fitted = spreadActive
+        ? spreadFitScale(reader.clientWidth, nativeWidth)
+        : singleFitScale(reader.clientWidth, nativeWidth);
+      setScale(Math.min(3, Math.max(.5, fitted)));
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
     }
-  }, [session]);
+  }, [session, spreadActive]);
 
   useEffect(() => {
+    // 加载即适宽;spreadActive 改变 fitWidth 身份,切换双页/单页时
+    // 顺带重新适宽(定稿 §6.1 的已知取舍:手动缩放不跨切换保留)。
     if (session) void fitWidth();
   }, [fitWidth, session]);
+
 
   const pageSelector = mode === "original" ? ".pdf-page" : ".pdf-reading-page";
 
@@ -905,6 +951,19 @@ export function PdfReader({
     if (!reader) return { page: currentPageRef.current, offsetRatio: 0 };
     return captureCurrentPosition(reader, toolbarRef.current, currentPageRef.current, pageSelector);
   }, [pageSelector]);
+
+  /** 双页切换(plan-pdf-spread):先捕获位置,布局落定后由既有恢复 effect 回位。 */
+  const toggleSpread = useCallback(() => {
+    const position = capturePosition();
+    pendingPositionRef.current = position;
+    currentPageRef.current = position.page;
+    setCurrentPage(position.page);
+    setSpreadIntent((value) => {
+      const next = !value;
+      spreadMemory.set(relativePath, next);
+      return next;
+    });
+  }, [capturePosition, relativePath]);
 
   const lastReadingBrokenRef = useRef<string[]>([]);
   const lastReadingApproximateRef = useRef<string[]>([]);
@@ -1087,7 +1146,8 @@ export function PdfReader({
       }
     });
     return () => window.cancelAnimationFrame(frame);
-  }, [mode, reading, session, setActivePage]);
+    // spreadActive:双页/单页切换是一次布局重排,同样要回位(§3.2)。
+  }, [mode, reading, session, setActivePage, spreadActive]);
 
   useEffect(() => {
     if ((mode === "original" && !session) || (mode === "reading" && !reading)) return;
@@ -1134,15 +1194,31 @@ export function PdfReader({
       </div>
       {mode === "original" && <>
         <div className="pdf-toolbar-group">
-          <button type="button" aria-label="上一页" onClick={() => jump(currentPage - 1)}><ChevronLeft size={14} /></button>
+          <button type="button" aria-label="上一页" onClick={() => jump(spreadActive ? previousSpreadPage(currentPage) : currentPage - 1)}><ChevronLeft size={14} /></button>
           <label><input value={currentPage} onChange={(event) => jump(Number(event.target.value))} aria-label="当前页" /> / {session?.pdf.numPages ?? "…"}</label>
-          <button type="button" aria-label="下一页" onClick={() => jump(currentPage + 1)}><ChevronRight size={14} /></button>
+          <button type="button" aria-label="下一页" onClick={() => jump(spreadActive ? nextSpreadPage(currentPage, session?.pdf.numPages ?? currentPage + 2) : currentPage + 1)}><ChevronRight size={14} /></button>
         </div>
         <div className="pdf-toolbar-group">
           <button type="button" aria-label="缩小" onClick={() => setScale((value) => Math.max(.5, value - .1))}><Minus size={14} /></button>
           <button type="button" title="实际大小" onClick={() => setScale(1)}>{Math.round(scale * 100)}%</button>
           <button type="button" aria-label="放大" onClick={() => setScale((value) => Math.min(3, value + .1))}><Plus size={14} /></button>
           <button type="button" onClick={() => void fitWidth()}>适宽</button>
+        </div>
+        <div className="pdf-toolbar-group">
+          <button
+            type="button"
+            className={spreadActive ? "active" : ""}
+            aria-pressed={spreadActive}
+            disabled={!spreadCapable}
+            title={
+              spreadCapable
+                ? spreadActive
+                  ? "回到单页"
+                  : "双页并排（封面独立成行）"
+                : "窗口宽度不足，无法双页并排（需 ≥1180px 宽窗）"
+            }
+            onClick={toggleSpread}
+          ><BookOpen size={14} />双页</button>
         </div>
         {onRegionCard && <div className="pdf-toolbar-group">
           <button
@@ -1163,7 +1239,7 @@ export function PdfReader({
     )}
     {error && <div className="pdf-state pdf-state--error">{error}</div>}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
-    {mode === "original" && session && <div className="pdf-pages" style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
+    {mode === "original" && session && <div className="pdf-pages" data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
       {Array.from({ length: session.pdf.numPages }, (_, index) => {
         const page = index + 1;
         return <PdfPage
@@ -1173,6 +1249,7 @@ export function PdfReader({
           initialRatio={pageRatiosRef.current.get(page) ?? 1.414}
           fuzzyAnchoring={fuzzyAnchoring}
           regionActive={regionSelect}
+          renderMargin={spreadActive ? SPREAD_RENDER_MARGIN : undefined}
           onRegionCapture={onRegionCard}
           highlights={annotations.filter(
             (annotation) =>
