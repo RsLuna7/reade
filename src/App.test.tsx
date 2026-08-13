@@ -4,6 +4,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { MotionNotice, ReadingSettingsPanel, TocNavigation } from "./App";
 import {
+  chooseLibraryDirectory,
   deleteAnnotation,
   detectMovedDocuments,
   findRelatedPassages,
@@ -12,6 +13,8 @@ import {
   listDocumentLinks,
   listReadingSessions,
   listReviewQueue,
+  openLibrary,
+  probeLibraryPath,
   readDocument,
   rebindDocumentAnnotations,
   reviewSummary,
@@ -51,6 +54,10 @@ vi.mock("./lib/backend", async () => {
     readDocument: vi.fn(async () => {
       throw new Error("readDocument not mocked");
     }),
+    // 最近书库 MRU(plan-library-mru):打开/探测/目录对话框都走 mock。
+    openLibrary: vi.fn(async (rootPath: string) => ({ rootPath, documents: [] })),
+    probeLibraryPath: vi.fn(async () => true),
+    chooseLibraryDirectory: vi.fn(async () => null),
     // 阅读会话在 jsdom 里没有 Tauri sqlite 后端;主页与冷启动判定用它。
     listReadingSessions: vi.fn(async () => []),
     // 设置 snapshot 的用例会挂载库监听 effect;jsdom 里没有 Tauri 事件桥。
@@ -125,6 +132,11 @@ beforeEach(() => {
   vi.mocked(readDocument).mockReset().mockImplementation(async () => {
     throw new Error("readDocument not mocked");
   });
+  vi.mocked(openLibrary)
+    .mockReset()
+    .mockImplementation(async (rootPath: string) => ({ rootPath, documents: [] }));
+  vi.mocked(probeLibraryPath).mockReset().mockImplementation(async () => true);
+  vi.mocked(chooseLibraryDirectory).mockReset().mockImplementation(async () => null);
   vi.mocked(listReadingSessions).mockReset().mockImplementation(async () => []);
   useReaderStore.setState({
     snapshot: null,
@@ -1766,6 +1778,116 @@ describe("command palette (CP)", () => {
     await screen.findByRole("dialog", { name: "命令面板" });
     expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+});
+
+describe("library MRU (plan-library-mru)", () => {
+  function seedMru(entries: unknown[]): void {
+    localStorage.setItem(
+      "reade-library-mru",
+      JSON.stringify({ version: 1, entries }),
+    );
+  }
+
+  it("lists recent libraries on the welcome page, greys out missing paths and opens one", async () => {
+    vi.mocked(probeLibraryPath).mockImplementation(async (path: string) => !path.includes("gone"));
+    seedMru([
+      { path: "D:\\books", title: "books", documentCount: 12, lastOpenedAt: Date.now() },
+      { path: "E:\\gone-library", title: "gone-library", documentCount: 3, lastOpenedAt: Date.now() },
+    ]);
+
+    render(<App />);
+    const list = await screen.findByRole("list", { name: "最近打开" });
+    // 失效项由异步探测灰显,title 提示原因;移除钮保持可用。
+    await waitFor(() => {
+      expect(within(list).getByRole("button", { name: /^gone-library/ })).toBeDisabled();
+    });
+    expect(within(list).getByRole("button", { name: /^gone-library/ })).toHaveAttribute(
+      "title",
+      "路径不可访问",
+    );
+
+    // 有效项点击直达:完全走 store.openLibrary 的既有校验链。
+    fireEvent.click(within(list).getByRole("button", { name: /^books/ }));
+    await waitFor(() => {
+      expect(openLibrary).toHaveBeenCalledWith("D:\\books");
+    });
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:\\books");
+  });
+
+  it("removes an entry from the welcome list and persists the removal", async () => {
+    seedMru([
+      { path: "D:\\books", title: "books", documentCount: 12, lastOpenedAt: Date.now() },
+      { path: "E:\\notes", title: "notes", documentCount: 4, lastOpenedAt: Date.now() },
+    ]);
+
+    render(<App />);
+    const list = await screen.findByRole("list", { name: "最近打开" });
+    fireEvent.click(
+      within(list).getByRole("button", { name: "从最近书库中移除 notes" }),
+    );
+
+    expect(within(list).queryByRole("button", { name: /^notes/ })).not.toBeInTheDocument();
+    const raw = JSON.parse(localStorage.getItem("reade-library-mru") ?? "{}") as {
+      entries: Array<{ path: string }>;
+    };
+    expect(raw.entries.map((entry) => entry.path)).toEqual(["D:\\books"]);
+  });
+
+  it("opens the sidebar switcher, marks the current library and reaches the folder picker", async () => {
+    seedMru([
+      { path: HOME_ROOT, title: "library", documentCount: 2, lastOpenedAt: Date.now() },
+      { path: "E:\\notes", title: "notes", documentCount: 5, lastOpenedAt: Date.now() },
+    ]);
+    setLibraryReadingState();
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "library" }));
+    const dialog = await screen.findByRole("dialog", { name: "最近书库" });
+
+    // 当前库带"当前"徽标与 aria-current;点它只收起菜单,不重扫。
+    const current = within(dialog).getByRole("button", { name: /当前/ });
+    expect(current).toHaveAttribute("aria-current", "true");
+    fireEvent.click(current);
+    expect(openLibrary).not.toHaveBeenCalled();
+    expect(screen.queryByRole("dialog", { name: "最近书库" })).not.toBeInTheDocument();
+
+    // 重新打开,走"选择新文件夹…"直达原目录对话框。
+    fireEvent.click(screen.getByRole("button", { name: "library" }));
+    fireEvent.click(
+      within(await screen.findByRole("dialog", { name: "最近书库" })).getByRole("button", {
+        name: /选择新文件夹/,
+      }),
+    );
+    await waitFor(() => {
+      expect(chooseLibraryDirectory).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("dialog", { name: "最近书库" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the plain folder dialog when no recent libraries exist", async () => {
+    render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "选择文档库" }));
+    await waitFor(() => {
+      expect(chooseLibraryDirectory).toHaveBeenCalledTimes(1);
+    });
+    expect(screen.queryByRole("dialog", { name: "最近书库" })).not.toBeInTheDocument();
+  });
+
+  it("upserts the opened library into the MRU store", async () => {
+    setLibraryReadingState();
+    render(<App />);
+
+    await waitFor(() => {
+      const raw = JSON.parse(localStorage.getItem("reade-library-mru") ?? "{}") as {
+        entries?: Array<{ path: string; documentCount: number | null }>;
+      };
+      expect(raw.entries?.[0]).toMatchObject({ path: HOME_ROOT, documentCount: 1 });
+    });
   });
 });
 

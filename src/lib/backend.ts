@@ -281,6 +281,15 @@ export async function openLibrary(rootPath: string): Promise<LibrarySnapshot> {
   }
   return { rootPath, documents: await (await getTauriBackend()).openLibrary(rootPath) };
 }
+/**
+ * 最近书库列表的只读存在性探测（plan-library-mru §3.2）：仅回答"路径
+ * 是否为目录"，不返回内容；打开仍走 openLibrary 的完整校验边界。
+ * Web 无文件系统语义，恒 false（Web 端也不渲染 MRU UI）。
+ */
+export async function probeLibraryPath(path: string): Promise<boolean> {
+  if (APP_RUNTIME === "web") return false;
+  return (await getTauriBackend()).probeLibraryPath(path);
+}
 export async function refreshLibrary(rootPath: string): Promise<LibrarySnapshot> {
   if (APP_RUNTIME === "web") {
     const client = getWebLibrary();

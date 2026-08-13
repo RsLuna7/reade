@@ -184,10 +184,141 @@ a:focus-visible {
 }
 
 .library-row {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 8px;
   margin-top: 20px;
+}
+
+/* 最近书库菜单(plan-library-mru §2.3):挂 library-row,复用 popover 样式族。 */
+.library-switcher {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 8px;
+  max-height: min(430px, calc(100vh - 140px));
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.library-switcher .settings-heading {
+  margin: 0;
+}
+
+.library-switcher-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.library-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.library-switcher-open {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.library-switcher-open:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+}
+
+.library-switcher-open[aria-current="true"] {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+}
+
+.library-switcher-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.library-switcher-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.library-switcher-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.library-switcher-item--missing .library-switcher-open {
+  cursor: default;
+}
+
+.library-switcher-item--missing .library-switcher-name,
+.library-switcher-item--missing .library-switcher-meta {
+  color: var(--muted);
+  opacity: 0.62;
+}
+
+.library-switcher-remove {
+  width: 28px;
+  height: 28px;
+}
+
+.library-switcher-browse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+.library-switcher-browse:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-strong));
+  color: var(--ink);
 }
 
 .library-button {
@@ -3885,6 +4016,100 @@ button.links-panel-entry:focus-visible {
 .secondary-button:hover {
   color: var(--ink);
   border-color: color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+}
+
+/* 欢迎页最近书库(plan-library-mru §2.2):主按钮下方的直达列表。 */
+.welcome-recent {
+  margin-top: 26px;
+}
+
+.welcome-recent-title {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.welcome-recent-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 6px;
+  list-style: none;
+}
+
+.welcome-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.welcome-recent-open {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 2px;
+  padding: 9px 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  text-align: left;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--paper-raised) 62%, transparent);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.welcome-recent-open:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent) 32%, var(--line-strong));
+  background: var(--paper-raised);
+  transform: translateY(-1px);
+}
+
+.welcome-recent-open:disabled {
+  cursor: default;
+  opacity: 0.55;
+}
+
+.welcome-recent-name {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.welcome-recent-item--missing .welcome-recent-name {
+  color: var(--muted);
+}
+
+.welcome-recent-path {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.welcome-recent-meta {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.welcome-recent-remove {
+  width: 30px;
+  height: 30px;
+  opacity: 0.55;
+}
+
+.welcome-recent-item:hover .welcome-recent-remove,
+.welcome-recent-remove:focus-visible {
+  opacity: 1;
 }
 
 .welcome-features {

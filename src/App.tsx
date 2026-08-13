@@ -72,6 +72,7 @@ import {
   onLibraryIndexProgress,
   openExternalLink,
   pickAnnotationImportFile,
+  probeLibraryPath,
   readAsset,
   readDocument,
   readPdfReadingMode,
@@ -91,6 +92,16 @@ import {
 import { CommandPalette } from "./components/CommandPalette";
 import type { PaletteEntry } from "./lib/commandPalette";
 import { canNavBack, canNavForward, type NavLocation } from "./lib/navHistory";
+// 最近书库 MRU(plan-library-mru):localStorage 纯函数,打开动作仍走
+// openLibrary 的完整校验边界。
+import {
+  formatLastOpened,
+  migrateLibraryMru,
+  normalizeLibraryPathKey,
+  removeLibraryMru,
+  upsertLibraryMru,
+  type LibraryMruEntry,
+} from "./lib/libraryMru";
 import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
 import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
@@ -308,16 +319,88 @@ function collectRelocationRoots(
   return entries.map((entry) => entry.root);
 }
 
+/** 欢迎页"最近打开"列表（plan-library-mru §2.2）：桌面专属。 */
+function WelcomeRecentLibraries({
+  entries,
+  unavailableKeys,
+  onOpen,
+  onRemove,
+}: {
+  entries: LibraryMruEntry[];
+  unavailableKeys: ReadonlySet<string>;
+  onOpen: (entry: LibraryMruEntry) => void;
+  onRemove: (path: string) => void;
+}) {
+  if (entries.length === 0) return null;
+  return (
+    <div className="welcome-recent">
+      <p className="welcome-recent-title" id="welcome-recent-title">
+        最近打开
+      </p>
+      <ul className="welcome-recent-list" aria-labelledby="welcome-recent-title">
+        {entries.map((entry) => {
+          const missing = unavailableKeys.has(normalizeLibraryPathKey(entry.path));
+          const meta = [
+            entry.documentCount !== null ? `${entry.documentCount.toLocaleString()} 篇` : null,
+            formatLastOpened(entry.lastOpenedAt),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <li
+              className={`welcome-recent-item${missing ? " welcome-recent-item--missing" : ""}`}
+              key={normalizeLibraryPathKey(entry.path)}
+            >
+              <button
+                className="welcome-recent-open"
+                type="button"
+                disabled={missing}
+                title={missing ? "路径不可访问" : entry.path}
+                onClick={() => onOpen(entry)}
+              >
+                <span className="welcome-recent-name">{entry.title}</span>
+                <span className="welcome-recent-path">{entry.path}</span>
+                {(missing || meta) && (
+                  <span className="welcome-recent-meta">
+                    {missing ? "路径不可访问" : meta}
+                  </span>
+                )}
+              </button>
+              <button
+                className="icon-button welcome-recent-remove"
+                type="button"
+                aria-label={`从最近书库中移除 ${entry.title}`}
+                title="从列表中移除"
+                onClick={() => onRemove(entry.path)}
+              >
+                <X size={14} aria-hidden="true" />
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
 function Welcome({
   hasLibrary,
   documentCount,
   onOpen,
   isWeb,
+  recentLibraries = [],
+  unavailableKeys = new Set<string>(),
+  onOpenRecent,
+  onRemoveRecent,
 }: {
   hasLibrary: boolean;
   documentCount: number;
   onOpen: () => void;
   isWeb: boolean;
+  recentLibraries?: LibraryMruEntry[];
+  unavailableKeys?: ReadonlySet<string>;
+  onOpenRecent?: (entry: LibraryMruEntry) => void;
+  onRemoveRecent?: (path: string) => void;
 }) {
   return (
     <section className="welcome" aria-labelledby="welcome-title">
@@ -357,6 +440,14 @@ function Welcome({
             {isWeb ? "GitHub Pages" : "Ctrl + O"}
           </span>
         </div>
+        {!isWeb && onOpenRecent && onRemoveRecent && (
+          <WelcomeRecentLibraries
+            entries={recentLibraries}
+            unavailableKeys={unavailableKeys}
+            onOpen={onOpenRecent}
+            onRemove={onRemoveRecent}
+          />
+        )}
         <div className="welcome-features" aria-label="核心能力">
           <div className="welcome-feature">
             <span className="welcome-feature-icon">
@@ -386,6 +477,100 @@ function Welcome({
         </div>
       </div>
     </section>
+  );
+}
+
+/**
+ * 侧栏书库名点击弹出的最近书库菜单（plan-library-mru §2.3，MR-D3）。
+ * 打开动作复用 openLibrary 的全部校验；"选择新文件夹…"直达原对话框。
+ */
+function LibrarySwitcherPopover({
+  entries,
+  currentKey,
+  unavailableKeys,
+  onOpen,
+  onRemove,
+  onBrowse,
+  onClose,
+}: {
+  entries: LibraryMruEntry[];
+  currentKey: string | null;
+  unavailableKeys: ReadonlySet<string>;
+  onOpen: (entry: LibraryMruEntry) => void;
+  onRemove: (path: string) => void;
+  onBrowse: () => void;
+  onClose: () => void;
+}) {
+  return (
+    <div
+      className="library-switcher reade-motion-panel"
+      role="dialog"
+      aria-label="最近书库"
+    >
+      <div className="settings-heading">
+        <span>最近书库</span>
+        <button
+          className="icon-button"
+          type="button"
+          onClick={onClose}
+          aria-label="关闭最近书库"
+        >
+          <X size={15} aria-hidden="true" />
+        </button>
+      </div>
+      <ul className="library-switcher-list">
+        {entries.map((entry) => {
+          const key = normalizeLibraryPathKey(entry.path);
+          const missing = unavailableKeys.has(key);
+          const isCurrent = currentKey === key;
+          const meta = [
+            entry.documentCount !== null ? `${entry.documentCount.toLocaleString()} 篇` : null,
+            formatLastOpened(entry.lastOpenedAt),
+          ]
+            .filter(Boolean)
+            .join(" · ");
+          return (
+            <li
+              className={`library-switcher-item${missing ? " library-switcher-item--missing" : ""}`}
+              key={key}
+            >
+              <button
+                className="library-switcher-open"
+                type="button"
+                disabled={missing}
+                aria-current={isCurrent ? "true" : undefined}
+                title={missing ? "路径不可访问" : entry.path}
+                // 点当前库无需重扫,关掉菜单即可。
+                onClick={() => (isCurrent ? onClose() : onOpen(entry))}
+              >
+                <span className="library-switcher-name">
+                  {entry.title}
+                  {isCurrent && <span className="library-switcher-badge">当前</span>}
+                </span>
+                <span className="library-switcher-meta">
+                  {missing ? "路径不可访问" : meta || entry.path}
+                </span>
+              </button>
+              {!isCurrent && (
+                <button
+                  className="icon-button library-switcher-remove"
+                  type="button"
+                  aria-label={`从最近书库中移除 ${entry.title}`}
+                  title="从列表中移除"
+                  onClick={() => onRemove(entry.path)}
+                >
+                  <X size={14} aria-hidden="true" />
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+      <button className="library-switcher-browse" type="button" onClick={onBrowse}>
+        <FolderOpen size={14} aria-hidden="true" />
+        选择新文件夹…
+      </button>
+    </div>
   );
 }
 
@@ -1113,6 +1298,13 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
   const [annotationPanelOpen, setAnnotationPanelOpen] = useState(false);
+  // 最近书库 MRU(plan-library-mru):列表、失效探测结果与侧栏菜单开关。
+  // 挂载时做一次旧单值键播种迁移;Web 端无文件系统语义,恒空。
+  const [libraryMru, setLibraryMru] = useState<LibraryMruEntry[]>(() =>
+    IS_WEB_RUNTIME ? [] : migrateLibraryMru(),
+  );
+  const [mruUnavailable, setMruUnavailable] = useState<ReadonlySet<string>>(new Set());
+  const [librarySwitcherOpen, setLibrarySwitcherOpen] = useState(false);
   // 合集(CO-D2):topbar popover 开关;写操作后 version 递增驱动分区重拉。
   const [collectionsPopoverOpen, setCollectionsPopoverOpen] = useState(false);
   const [collectionsVersion, setCollectionsVersion] = useState(0);
@@ -3271,9 +3463,83 @@ function App() {
   }, [openLibrary]);
 
   useEffect(() => {
-    if (IS_WEB_RUNTIME) return;
-    if (snapshot?.rootPath) localStorage.setItem(LAST_LIBRARY_KEY, snapshot.rootPath);
+    if (IS_WEB_RUNTIME || !snapshot?.rootPath) return;
+    // 旧单值键继续双写(启动自动重开仍读它,plan-library-mru §3.1)。
+    localStorage.setItem(LAST_LIBRARY_KEY, snapshot.rootPath);
+    // 打开成功即 upsert 置顶;documentCount 取打开时刻的扫描结果。
+    setLibraryMru(
+      upsertLibraryMru({
+        path: snapshot.rootPath,
+        title: fileName(snapshot.rootPath),
+        documentCount: useReaderStore.getState().documents.length,
+        lastOpenedAt: Date.now(),
+      }),
+    );
   }, [snapshot?.rootPath]);
+
+  /** 失效探测:异步逐项;未返回/探测失败视为未知(保持可点,MR-D2)。 */
+  const probeMruEntries = useCallback((entries: LibraryMruEntry[]) => {
+    if (IS_WEB_RUNTIME) return;
+    for (const entry of entries) {
+      const key = normalizeLibraryPathKey(entry.path);
+      void probeLibraryPath(entry.path)
+        .then((exists) => {
+          setMruUnavailable((current) => {
+            if (current.has(key) === !exists) return current;
+            const next = new Set(current);
+            if (exists) next.delete(key);
+            else next.add(key);
+            return next;
+          });
+        })
+        .catch(() => undefined);
+    }
+  }, []);
+
+  // 列表变化(挂载/迁移/upsert/移除)后重探,欢迎页与菜单共用结果。
+  useEffect(() => {
+    if (libraryMru.length > 0) probeMruEntries(libraryMru);
+  }, [libraryMru, probeMruEntries]);
+
+  const handleOpenMruLibrary = useCallback(
+    (entry: LibraryMruEntry) => {
+      setLibrarySwitcherOpen(false);
+      setMobileLibraryOpen(false);
+      // 打开完全复用既有 openLibrary 校验;失败走 error 通道展示,
+      // 并把该项就地标记失效(探测通过但打开失败,如权限)。
+      void openLibrary(entry.path).then(() => {
+        const opened = useReaderStore.getState().snapshot?.rootPath;
+        const key = normalizeLibraryPathKey(entry.path);
+        if (!opened || normalizeLibraryPathKey(opened) !== key) {
+          setMruUnavailable((current) => {
+            if (current.has(key)) return current;
+            const next = new Set(current);
+            next.add(key);
+            return next;
+          });
+        }
+      });
+    },
+    [openLibrary],
+  );
+
+  const handleRemoveMruLibrary = useCallback((path: string) => {
+    setLibraryMru(removeLibraryMru(path));
+  }, []);
+
+  /** 侧栏书库名点击:Web 刷新;桌面无 MRU 保持直弹对话框(MR-D3)。 */
+  const handleLibraryButton = useCallback(() => {
+    if (IS_WEB_RUNTIME) {
+      void refreshLibrary();
+      return;
+    }
+    if (libraryMru.length === 0) {
+      void chooseAndOpenLibrary();
+      return;
+    }
+    if (!librarySwitcherOpen) probeMruEntries(libraryMru);
+    setLibrarySwitcherOpen((open) => !open);
+  }, [chooseAndOpenLibrary, libraryMru, librarySwitcherOpen, probeMruEntries, refreshLibrary]);
 
   useEffect(() => {
     if (!snapshot || IS_WEB_RUNTIME) return;
@@ -3528,6 +3794,7 @@ function App() {
           setStylePickerOpen(false);
           setAnnotationPanelOpen(false);
           setCollectionsPopoverOpen(false);
+          setLibrarySwitcherOpen(false);
           setCommandPaletteOpen(false);
           setCompactTocOpen(false);
           setMobileLibraryOpen(false);
@@ -3901,13 +4168,17 @@ function App() {
             <button
               className="library-button"
               type="button"
-              onClick={() =>
-                void (IS_WEB_RUNTIME ? refreshLibrary() : chooseAndOpenLibrary())
+              onClick={handleLibraryButton}
+              aria-haspopup={!IS_WEB_RUNTIME && libraryMru.length > 0 ? "dialog" : undefined}
+              aria-expanded={
+                !IS_WEB_RUNTIME && libraryMru.length > 0 ? librarySwitcherOpen : undefined
               }
               title={
                 IS_WEB_RUNTIME
                   ? "重新加载在线文档"
-                  : snapshot?.rootPath ?? "选择文档文件夹"
+                  : snapshot?.rootPath
+                    ? `${snapshot.rootPath}（点击切换最近书库）`
+                    : "选择文档文件夹"
               }
             >
               {IS_WEB_RUNTIME ? (
@@ -3927,6 +4198,22 @@ function App() {
             >
               <RefreshCw size={15} className={loading ? "spin-icon" : undefined} aria-hidden="true" />
             </button>
+            {librarySwitcherOpen && !IS_WEB_RUNTIME && (
+              <LibrarySwitcherPopover
+                entries={libraryMru}
+                currentKey={
+                  snapshot ? normalizeLibraryPathKey(snapshot.rootPath) : null
+                }
+                unavailableKeys={mruUnavailable}
+                onOpen={handleOpenMruLibrary}
+                onRemove={handleRemoveMruLibrary}
+                onBrowse={() => {
+                  setLibrarySwitcherOpen(false);
+                  void chooseAndOpenLibrary();
+                }}
+                onClose={() => setLibrarySwitcherOpen(false)}
+              />
+            )}
           </div>
 
           <div className="search-box">
@@ -4405,6 +4692,10 @@ function App() {
                 void (IS_WEB_RUNTIME ? refreshLibrary() : chooseAndOpenLibrary())
               }
               isWeb={IS_WEB_RUNTIME}
+              recentLibraries={libraryMru}
+              unavailableKeys={mruUnavailable}
+              onOpenRecent={handleOpenMruLibrary}
+              onRemoveRecent={handleRemoveMruLibrary}
             />
           )
         )}

@@ -7,8 +7,8 @@ mod user_store;
 
 use library::{
     clear_conversion_cache, find_related_passages, list_document_links, open_document,
-    open_library, read_asset, read_document_range, read_epub_asset, read_pdf_reading_mode,
-    refresh_library, retry_document_index, search_documents, AppState,
+    open_library, probe_library_path, read_asset, read_document_range, read_epub_asset,
+    read_pdf_reading_mode, refresh_library, retry_document_index, search_documents, AppState,
 };
 use stats::{list_reading_sessions, record_reading_session, StatsState};
 use tauri::Manager;
@@ -47,6 +47,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             open_library,
+            probe_library_path,
             refresh_library,
             open_document,
             read_document_range,

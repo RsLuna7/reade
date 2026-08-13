@@ -301,6 +301,20 @@ pub async fn open_library(
     Ok(snapshot)
 }
 
+/// Read-only existence probe for the recent-libraries list
+/// (plan-library-mru §3.2): reports only whether the path is a directory,
+/// never its contents. Opening still goes through `open_library` with the
+/// full canonicalize + scan boundary. Runs on the blocking pool because a
+/// disconnected network drive can stall the metadata call for seconds.
+#[tauri::command]
+pub async fn probe_library_path(path: String) -> CommandResult<bool> {
+    run_blocking(move || Ok(probe_path_is_directory(&path))).await
+}
+
+fn probe_path_is_directory(path: &str) -> bool {
+    Path::new(path).is_dir()
+}
+
 #[tauri::command]
 pub async fn refresh_library(
     app: AppHandle,
@@ -2431,6 +2445,25 @@ mod tests {
         document.trailer.set("Root", catalog_id);
         document.compress();
         document.save(path).expect("save PDF fixture");
+    }
+
+    #[test]
+    fn probe_reports_directories_but_not_files_or_ghosts() {
+        let library = tempdir().expect("temp library");
+        let file_path = library.path().join("doc.md");
+        fs::write(&file_path, "# Doc").expect("write fixture");
+
+        assert!(probe_path_is_directory(
+            library.path().to_string_lossy().as_ref()
+        ));
+        assert!(!probe_path_is_directory(file_path.to_string_lossy().as_ref()));
+        assert!(!probe_path_is_directory(
+            library
+                .path()
+                .join("missing-library")
+                .to_string_lossy()
+                .as_ref()
+        ));
     }
 
     #[test]
