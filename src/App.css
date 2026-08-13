@@ -2269,15 +2269,30 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* 颜色语义命名(plan-annotation-color-names):圆点 + 语义名的通用件。 */
+.annotation-color-dot {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+}
+
+.annotation-color-dot--yellow { background: #ffe650; }
+.annotation-color-dot--green { background: #78dc8c; }
+.annotation-color-dot--blue { background: #78b4ff; }
+.annotation-color-dot--pink { background: #ff8cbe; }
+
+.annotation-filter-chip--color {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
 .annotation-filter-chip.active {
   border-color: var(--line-strong);
   color: var(--accent-ink);
   background: color-mix(in srgb, var(--accent) 12%, var(--paper));
-}
-
-.annotation-filter-colors {
-  margin-left: auto;
-  justify-content: flex-start;
 }
 
 .annotation-library-collapse {
@@ -3876,6 +3891,47 @@ button.links-panel-entry:focus-visible {
   border-color: var(--line-strong);
   color: var(--accent-ink);
   background: var(--paper-raised);
+}
+
+/* 标注颜色命名输入组(plan-annotation-color-names §3.2)。 */
+.color-names-setting .color-name-grid {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.color-name-row {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 9px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--paper-raised) 62%, transparent);
+  transition: border-color var(--motion-fast) var(--motion-ease);
+}
+
+.color-name-row:focus-within {
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--line-strong));
+}
+
+.color-name-input {
+  min-width: 0;
+  flex: 1;
+  border: 0;
+  padding: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+}
+
+.color-name-input:focus {
+  outline: none;
+}
+
+.settings-reset.color-names-reset {
+  margin-top: 8px;
+  height: 30px;
 }
 
 .settings-reset {
@@ -5686,6 +5742,37 @@ button.review-primary {
   flex-direction: column;
   gap: 14px;
   overflow-y: auto;
+}
+
+/* 颜色语义图例(plan-annotation-color-names §2.2):中枢左列常显。 */
+.annotation-hub-legend {
+  display: grid;
+  gap: 6px;
+}
+
+.annotation-hub-legend h3 {
+  margin: 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.annotation-hub-legend ul {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.annotation-hub-legend li {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--ink-soft);
+  font-size: 12px;
 }
 
 .annotation-hub-nav {

@@ -122,6 +122,9 @@ import {
 } from "./components/CollectionsSection";
 import { createReadingTracker, type ReadingTracker } from "./lib/readingTracker";
 import {
+  ANNOTATION_COLORS,
+  ANNOTATION_COLOR_NAME_MAX_CHARS,
+  ANNOTATION_COLOR_WORDS,
   clearAnnotationMarks,
   collectElementText,
   findTextQuote,
@@ -695,9 +698,19 @@ export function ReadingSettingsPanel({
   const setFuzzyAnnotationAnchoring = useReaderStore(
     (state) => state.setFuzzyAnnotationAnchoring,
   );
+  const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
+  const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
+  const resetAnnotationColorNames = useReaderStore(
+    (state) => state.resetAnnotationColorNames,
+  );
   const resetReaderPreferences = useReaderStore((state) => state.resetReaderPreferences);
   const clearDocumentCache = useReaderStore((state) => state.clearDocumentCache);
   const [clearingCache, setClearingCache] = useState(false);
+  // 命名输入草稿:空值回落默认只在提交(blur/Enter)时发生,而非每个键击。
+  const [colorNameDrafts, setColorNameDrafts] = useState(annotationColorNames);
+  useEffect(() => {
+    setColorNameDrafts(annotationColorNames);
+  }, [annotationColorNames]);
 
   const numericSetting =
     (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing") =>
@@ -842,6 +855,48 @@ export function ReadingSettingsPanel({
         <p className="setting-hint">
           文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
         </p>
+      </fieldset>
+
+      <fieldset className="setting-row color-names-setting">
+        <legend className="setting-label">标注颜色命名</legend>
+        <div className="color-name-grid">
+          {ANNOTATION_COLORS.map((color) => (
+            <label className="color-name-row" key={color}>
+              <span
+                className={`annotation-color-dot annotation-color-dot--${color}`}
+                aria-hidden="true"
+              />
+              <input
+                type="text"
+                className="color-name-input"
+                value={colorNameDrafts[color]}
+                maxLength={ANNOTATION_COLOR_NAME_MAX_CHARS}
+                aria-label={`${ANNOTATION_COLOR_WORDS[color]}色的语义名`}
+                onChange={(event) =>
+                  setColorNameDrafts((drafts) => ({
+                    ...drafts,
+                    [color]: event.target.value,
+                  }))
+                }
+                onBlur={(event) => setAnnotationColorName(color, event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") event.currentTarget.blur();
+                }}
+              />
+            </label>
+          ))}
+        </div>
+        <p className="setting-hint">
+          命名显示在颜色选择、筛选与图例中；清空某项则恢复该色默认名。
+        </p>
+        <button
+          className="settings-reset color-names-reset"
+          type="button"
+          onClick={resetAnnotationColorNames}
+        >
+          <RotateCcw size={13} aria-hidden="true" />
+          恢复默认命名
+        </button>
       </fieldset>
 
       <button

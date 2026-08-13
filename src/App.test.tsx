@@ -150,6 +150,7 @@ beforeEach(() => {
     theme: "paper-light",
     readingSettings: { ...DEFAULT_READING_SETTINGS },
     motionLevel: "subtle",
+    annotationColorNames: { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" },
     fuzzyAnnotationAnchoring: false,
     expandedPaths: [],
     activeView: "reader",
@@ -450,7 +451,7 @@ describe("annotation mark editing (B1)", () => {
     const bubble = await screen.findByRole("dialog", { name: "编辑标注" });
     expect(bubble).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为蓝色" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为行动（蓝色）" }));
     await waitFor(() => {
       expect(upsertAnnotation).toHaveBeenCalledWith(
         expect.objectContaining({ id: "ann-body", color: "blue" }),
@@ -544,7 +545,7 @@ describe("selection capture upgrade (B2/B3)", () => {
     fireEvent.pointerUp(document);
     await screen.findByRole("toolbar", { name: "标注工具条" });
 
-    fireEvent.click(screen.getByRole("button", { name: "以绿色高亮" }));
+    fireEvent.click(screen.getByRole("button", { name: "以疑问（绿色）高亮" }));
     await waitFor(() => {
       expect(upsertAnnotation).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "highlight", color: "green" }),
@@ -1106,6 +1107,37 @@ describe("lost documents rebind (§5.6 C)", () => {
       expect(rebindDocumentAnnotations).toHaveBeenCalledWith("ghost.md", "copy-a.md");
     });
     expect(await screen.findByText("已迁移 1 条标注记录")).toBeInTheDocument();
+  });
+});
+
+describe("annotation color naming (plan-annotation-color-names)", () => {
+  it("commits a rename on blur, truncates it and resets from the panel", () => {
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+
+    const input = screen.getByRole("textbox", { name: "黄色的语义名" });
+    fireEvent.change(input, { target: { value: "灵感摘录" } });
+    // 输入过程不提交:store 仍是默认名。
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
+    fireEvent.blur(input);
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("灵感摘录");
+
+    // 清空后失焦回落默认名,输入框同步显示回落结果。
+    fireEvent.change(input, { target: { value: "" } });
+    fireEvent.blur(input);
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
+    expect(input).toHaveValue("金句");
+
+    fireEvent.change(input, { target: { value: "临时名" } });
+    fireEvent.blur(input);
+    fireEvent.click(screen.getByRole("button", { name: "恢复默认命名" }));
+    expect(useReaderStore.getState().annotationColorNames).toMatchObject({
+      yellow: "金句",
+      green: "疑问",
+    });
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: { annotationColorNames?: Record<string, string> } };
+    expect(stored.state.annotationColorNames).toMatchObject({ yellow: "金句" });
   });
 });
 

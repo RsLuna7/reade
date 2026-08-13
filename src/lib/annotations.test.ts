@@ -3,8 +3,13 @@ import { describe, expect, it } from "vitest";
 import type { AnnotationLocator } from "./backend";
 import {
   BROKEN_SORT_INDEX,
+  DEFAULT_ANNOTATION_COLOR_NAMES,
   annotationKindLabel,
   buildTextIndex,
+  colorAccessibleLabel,
+  colorDisplayName,
+  normalizeAnnotationColorName,
+  normalizeAnnotationColorNames,
   clampSelectionText,
   collectElementText,
   createBookmarkAnnotation,
@@ -21,6 +26,37 @@ import {
   serializeTextQuote,
   type TextQuoteMarkInput,
 } from "./annotations";
+
+describe("annotation color names (plan-annotation-color-names)", () => {
+  it("falls back to the default name for empty or non-string input", () => {
+    expect(normalizeAnnotationColorName("yellow", "")).toBe("金句");
+    expect(normalizeAnnotationColorName("green", "   ")).toBe("疑问");
+    expect(normalizeAnnotationColorName("blue", 42)).toBe("行动");
+    expect(normalizeAnnotationColorName("pink", undefined)).toBe("术语");
+  });
+
+  it("trims and truncates custom names to six characters", () => {
+    expect(normalizeAnnotationColorName("yellow", "  灵感  ")).toBe("灵感");
+    expect(normalizeAnnotationColorName("yellow", "一二三四五六七八")).toBe("一二三四五六");
+  });
+
+  it("normalizes untrusted maps into a complete four-key table", () => {
+    expect(normalizeAnnotationColorNames(null)).toEqual(DEFAULT_ANNOTATION_COLOR_NAMES);
+    expect(normalizeAnnotationColorNames({ yellow: "灵感", blue: 42, extra: "x" })).toEqual({
+      yellow: "灵感",
+      green: "疑问",
+      blue: "行动",
+      pink: "术语",
+    });
+  });
+
+  it("keeps the base color word in the accessible label", () => {
+    expect(colorDisplayName("yellow")).toBe("金句");
+    expect(colorDisplayName("yellow", { yellow: "灵感" })).toBe("灵感");
+    expect(colorAccessibleLabel("yellow")).toBe("金句（黄色）");
+    expect(colorAccessibleLabel("pink", { pink: "生词" })).toBe("生词（粉色）");
+  });
+});
 
 describe("annotations helpers", () => {
   it("serializes and finds text quotes with surrounding context", () => {

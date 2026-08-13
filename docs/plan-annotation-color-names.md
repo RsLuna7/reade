@@ -1,7 +1,7 @@
-# 方案草案：标注颜色语义命名
+# 方案定稿：标注颜色语义命名
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（批次 2 实施）**
 - 定位：给黄/绿/蓝/粉四色赋予可改的语义名（默认"金句/疑问/行动/术语"），显示在颜色选择器 tooltip、全库筛选器与图例中。让四色从"随手挑的颜色"变成个人标注体系。**纯展示层，不改标注数据结构。**
 - 关联：四色常量与筛选来自标注体系现状（`annotations.ts`/`annotationSearch.ts`/`AnnotationUi.tsx`）；持久化走 `useReaderStore` 阅读偏好（localStorage，双端同构）。
 
@@ -9,14 +9,16 @@
 
 ---
 
-## 1. 现状基线（已核实于 2026-08-13，行号允许漂移）
+## 1. 现状基线（定稿复核于 2026-08-13，行号允许漂移）
 
 | 事实 | 位置 |
 |------|------|
 | 四色字面量：`AnnotationColor = "yellow"|"green"|"blue"|"pink"`（backend 类型）+ `ANNOTATION_COLORS` 运行时数组 | `src/lib/backend.ts` L105；`src/lib/annotations.ts` L11 |
-| Rust 侧枚举同构（DB 存小写色名，Highlight/Underline 必须带色）——**存储层完全不动** | `src-tauri/src/user_store.rs` L115-120、L2101-2115、L2222-2224 |
-| 选区工具条色块：仅有 `aria-label`（"以黄色高亮"式中文色名），**无 title tooltip**——命名后两者都要接 | `src/components/AnnotationUi.tsx` L81-82 |
-| 编辑气泡改色组、列表条目改色 swatch、全库筛选四色圆点（`annotation-color-swatch--*`）——三处消费点 | `src/components/AnnotationUi.tsx` L172-216、L378-424、L545-576 |
+| Rust 侧枚举同构（DB 存小写色名，Highlight/Underline 必须带色）——**存储层完全不动** | `src-tauri/src/user_store.rs`（AnnotationColor 枚举与校验） |
+| 选区工具条色块：仅有 `aria-label`（"以黄色高亮"式中文色名），**无 title tooltip**——命名后两者都要接 | `src/components/AnnotationUi.tsx` L77-87 |
+| 编辑气泡改色组、列表条目改色 swatch、全库筛选四色圆点（`annotation-color-swatch--*`）——三处消费点 | `src/components/AnnotationUi.tsx` L181-193、L385-397、L562-576 |
+| 标注工具面板（AnnotationToolsPanel）另有一组"选择 X 色"swatch——第四处消费点，草案漏计 | `src/components/AnnotationUi.tsx` L278-288 |
+| 标注中枢左列（annotation-hub-filters）现只有筛选与文档导航，无图例 | `src/components/AnnotationHubView.tsx` L142-159 |
 | 筛选模型 `AnnotationFilterOptions { query?, kinds?, colors? }`（按色过滤已存在，只差把 chip 文案换成色名） | `src/lib/annotationSearch.ts` L48-55、L63-77 |
 | persist 白名单与版本迁移机制（`partialize`/migrate，key `reade-reader-preferences`）——**偏好放这里，双端天然同构** | `src/store/useReaderStore.ts` L612-623 |
 | Rust user DB 无 preferences 表（后端不存偏好，本方案维持该边界） | `src-tauri/src/user_store.rs`（schema v1-v5 全览） |
@@ -45,19 +47,24 @@
 
 ```ts
 // useReaderStore 新增
-annotationColorNames: Record<AnnotationColor, string>;   // persist, migrate 补默认
-setAnnotationColorName(color, name): void;               // trim + slice(0,6) + 空回落
+annotationColorNames: Record<AnnotationColor, string>;   // persist, merge 补默认（版本号不变）
+setAnnotationColorName(color, name): void;               // trim + slice(0,6) + 空回落默认
+resetAnnotationColorNames(): void;                       // 一键回默认；全局"恢复默认"也一并重置
 // src/lib/annotations.ts 新增
-export const DEFAULT_COLOR_NAMES = { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" } as const;
-export function colorDisplayName(color, names): string;          // "金句"
-export function colorAccessibleLabel(color, names): string;      // "金句（黄色）"
+export const DEFAULT_ANNOTATION_COLOR_NAMES = { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" };
+export const ANNOTATION_COLOR_WORDS = { yellow: "黄", green: "绿", blue: "蓝", pink: "粉" };  // 原 AnnotationUi.ANNOTATION_COLOR_LABELS 上移
+export function normalizeAnnotationColorName(color, value): string;      // 归一单个名
+export function normalizeAnnotationColorNames(value): Record<...>;       // 不可信输入 → 完整四键
+export function colorDisplayName(color, names?): string;                 // "金句"
+export function colorAccessibleLabel(color, names?): string;             // "金句（黄色）"，无障碍不丢色词
 ```
 
 ### 3.2 消费点改造
 
-- `SelectionToolbar` / `AnnotationEditBubble` / 列表 swatch：`aria-label` 与 `title` 换 `colorAccessibleLabel`（保留颜色词，无障碍不丢信息）。
-- 筛选 chip：圆点 + 色名文本；图例：标注中枢 filters 列一个小节四行"● 金句（黄）"。
-- 设置面板：四行 `input`（前置色点），onBlur 提交；"恢复默认"按钮。
+- `SelectionToolbar` / `AnnotationEditBubble` / `AnnotationToolsPanel` / 列表 swatch：`aria-label` 与 `title` 换 `colorAccessibleLabel`（保留颜色词，无障碍不丢信息）。
+- 筛选色点升级为 chip：圆点 + 色名文本（`annotation-filter-chip--color`）。
+- 图例：标注中枢 filters 列新增"颜色语义"小节，四行"● 金句（黄色）"。
+- 设置面板：「标注颜色命名」fieldset，四行 `input`（前置色点，maxLength 6），onBlur/Enter 提交，空值回落默认；"恢复默认命名"按钮；全局"恢复默认"一并重置。
 
 ### 3.3 双端
 
@@ -73,22 +80,23 @@ export function colorAccessibleLabel(color, names): string;      // "金句（�
 | 4 | `src/App.tsx` | 设置面板输入组 | S-M |
 | 5 | `src/App.css`、`docs/USER_GUIDE.md` | 图例/输入样式 + 文档 | S |
 
-## 5. 验收标准（草案级）
+## 5. 验收标准（定稿）
 
-- [ ] 纯函数测试：默认回落、6 字符截断、accessible label 含色词。
-- [ ] store 测试：migrate 旧版本偏好补默认名；persist 往返。
-- [ ] 组件测：工具条色块 title/aria-label、筛选 chip 文案、改名后即时反映。
-- [ ] 运行时双端：改名 → 工具条/气泡/筛选/图例四处同步；重置恢复；明/暗截图。
-- [ ] 回归：标注四动作与筛选行为零变化；`pnpm test`、`tsc --noEmit`。
+- [x] 纯函数测试：默认回落、6 字符截断、accessible label 含色词、不可信输入归一。
+- [x] store 测试：merge 旧偏好补默认名；persist 往返；重置。
+- [x] 组件测：工具条色块 title/aria-label、筛选 chip 文案、改名后即时反映。
+- [x] 回归：标注四动作与筛选行为零变化；`pnpm test`、`tsc --noEmit`。
+- [ ] 运行时双端（人工）：改名 → 工具条/气泡/筛选/图例同步；重置恢复；明/暗截图。
 
-## 6. 决策点
+## 6. 决策点（已定）
 
-| # | 决策 | 推荐 | 备选 |
-|---|------|------|------|
-| CN-D1 | 默认命名 | **金句/疑问/行动/术语**（阅读场景最常见四分法，与产品"金句卡片"词汇呼应） | 重点/问题/待办/概念（"待办"暗示任务管理，超出阅读器语义） |
-| CN-D2 | 存放位置 | **阅读偏好（localStorage，跨库全局）** | Rust user DB 新 preferences 表（为纯展示偏好开 schema 迁移，不成比例，否） |
-| CN-D3 | 导出 Markdown | **本期不带色名**（导出是数据出口，掺入易变的展示名会让重复导出 diff 噪音大） | 条目行追加"·金句"（可读性好；若用户反馈强烈再加，作为导出选项） |
-| CN-D4 | 名字长度 | **≤6 字符**（chip/tooltip 排版可控） | 不限（长名撑爆筛选行） |
+| # | 决策 | 结论 |
+|---|------|------|
+| CN-D1 | 默认命名 | **金句/疑问/行动/术语**（黄/绿/蓝/粉；已拍板，可改可恢复默认） |
+| CN-D2 | 存放位置 | **阅读偏好（localStorage，跨库全局，双端同构）**；Rust user DB 不动 |
+| CN-D3 | 导出 Markdown | **本期不带色名**（导出是数据出口，展示名易变会放大重复导出 diff 噪音） |
+| CN-D4 | 名字长度 | **≤6 字符**（input maxLength + 归一函数双重约束） |
+| CN-D5 | 组件取名方式 | **组件内直接读 store**（AnnotationUi 组件树多层，逐层传 props 噪音大；ThemeStylePicker/DocumentTree 已有同先例） |
 
 ## 7. 风险
 

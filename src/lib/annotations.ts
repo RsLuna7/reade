@@ -12,6 +12,64 @@ export const ANNOTATION_COLORS: AnnotationColor[] = ["yellow", "green", "blue", 
 export const MAX_SELECTION_CHARS = 2000;
 export const TEXT_QUOTE_CONTEXT = 32;
 
+// ---- 颜色语义命名（plan-annotation-color-names §3.1）----
+// 纯展示层:名字只住在阅读偏好里,标注数据结构与导出格式不带它。
+
+/** 颜色本名（"黄"），无障碍标签保底信息，不随用户命名变化。 */
+export const ANNOTATION_COLOR_WORDS: Record<AnnotationColor, string> = {
+  yellow: "黄",
+  green: "绿",
+  blue: "蓝",
+  pink: "粉",
+};
+
+/** 默认语义名（CN-D1）：与"金句卡片"等产品词汇呼应的阅读四分法。 */
+export const DEFAULT_ANNOTATION_COLOR_NAMES: Record<AnnotationColor, string> = {
+  yellow: "金句",
+  green: "疑问",
+  blue: "行动",
+  pink: "术语",
+};
+
+/** 名字长度上限（CN-D4）：chip/tooltip 排版可控。 */
+export const ANNOTATION_COLOR_NAME_MAX_CHARS = 6;
+
+/** 单色名归一：trim + 截断；空值回落该色默认名。 */
+export function normalizeAnnotationColorName(color: AnnotationColor, value: unknown): string {
+  if (typeof value !== "string") return DEFAULT_ANNOTATION_COLOR_NAMES[color];
+  const trimmed = value.trim().slice(0, ANNOTATION_COLOR_NAME_MAX_CHARS);
+  return trimmed || DEFAULT_ANNOTATION_COLOR_NAMES[color];
+}
+
+/** 不可信输入（persist 迁移等）→ 完整四键命名表。 */
+export function normalizeAnnotationColorNames(
+  value: unknown,
+): Record<AnnotationColor, string> {
+  const source =
+    value && typeof value === "object" ? (value as Record<string, unknown>) : {};
+  const names = {} as Record<AnnotationColor, string>;
+  for (const color of ANNOTATION_COLORS) {
+    names[color] = normalizeAnnotationColorName(color, source[color]);
+  }
+  return names;
+}
+
+/** 展示名："金句"；未提供命名表时用默认表。 */
+export function colorDisplayName(
+  color: AnnotationColor,
+  names?: Partial<Record<AnnotationColor, string>>,
+): string {
+  return normalizeAnnotationColorName(color, names?.[color]);
+}
+
+/** 无障碍/tooltip 标签："金句（黄色）"——保留颜色词，改名不丢底色信息。 */
+export function colorAccessibleLabel(
+  color: AnnotationColor,
+  names?: Partial<Record<AnnotationColor, string>>,
+): string {
+  return `${colorDisplayName(color, names)}（${ANNOTATION_COLOR_WORDS[color]}色）`;
+}
+
 export type AnnotationMarkKind = "highlight" | "underline";
 
 export function isAnnotationMarkKind(kind: AnnotationKind): kind is AnnotationMarkKind {

@@ -11,8 +11,13 @@ import {
   LostDocumentsSection,
   SelectionToolbar,
 } from "./AnnotationUi";
+import { useReaderStore } from "../store/useReaderStore";
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  // 颜色语义命名走 store:防止改名用例污染后续标签断言。
+  useReaderStore.getState().resetAnnotationColorNames();
+});
 
 function highlight(overrides: Partial<Annotation> = {}): Annotation {
   return {
@@ -59,15 +64,32 @@ describe("SelectionToolbar", () => {
   it("applies a highlight directly when a color swatch is clicked", () => {
     const onPickColor = vi.fn();
     render(<SelectionToolbar {...baseProps} onPickColor={onPickColor} />);
-    fireEvent.click(screen.getByRole("button", { name: "以绿色高亮" }));
+    fireEvent.click(screen.getByRole("button", { name: "以疑问（绿色）高亮" }));
     expect(onPickColor).toHaveBeenCalledWith("green");
   });
 
-  it("uses Chinese color names for every swatch", () => {
+  it("labels every swatch with its semantic name plus the base color word", () => {
     render(<SelectionToolbar {...baseProps} />);
-    for (const name of ["以黄色高亮", "以绿色高亮", "以蓝色高亮", "以粉色高亮"]) {
+    for (const name of [
+      "以金句（黄色）高亮",
+      "以疑问（绿色）高亮",
+      "以行动（蓝色）高亮",
+      "以术语（粉色）高亮",
+    ]) {
       expect(screen.getByRole("button", { name })).toBeInTheDocument();
     }
+    // 色块同时携带 tooltip(title),鼠标悬停可见语义名。
+    expect(screen.getByRole("button", { name: "以金句（黄色）高亮" })).toHaveAttribute(
+      "title",
+      "金句（黄色）",
+    );
+  });
+
+  it("reflects renamed colors immediately (store-driven labels)", () => {
+    useReaderStore.getState().setAnnotationColorName("green", "灵感");
+    render(<SelectionToolbar {...baseProps} />);
+    expect(screen.getByRole("button", { name: "以灵感（绿色）高亮" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "以疑问（绿色）高亮" })).not.toBeInTheDocument();
   });
 
   it("renders the quote-card action only when a handler is wired (QC)", () => {
@@ -119,7 +141,7 @@ describe("AnnotationEditBubble", () => {
     render(<AnnotationEditBubble {...baseProps} onChangeColor={onChangeColor} onDelete={onDelete} />);
     expect(screen.getByRole("dialog", { name: "编辑标注" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为蓝色" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为行动（蓝色）" }));
     expect(onChangeColor).toHaveBeenCalledWith(baseProps.annotation, "blue");
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
@@ -183,7 +205,7 @@ describe("AnnotationList", () => {
     render(<AnnotationList {...baseProps} onExport={onExport} />);
     fireEvent.click(screen.getByRole("button", { name: "导出本文档" }));
     expect(onExport).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "改为粉色" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改为术语（粉色）" })).toBeInTheDocument();
   });
 
   it("offers the quote-card action only for marks with an excerpt (QC-D3 M2)", () => {
@@ -531,8 +553,21 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
       colors: [],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "筛选蓝色标注" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选行动（蓝色）标注" }));
     expect(onFiltersChange).toHaveBeenCalledWith({ query: "", kinds: [], colors: ["blue"] });
+  });
+
+  it("shows the semantic name as the face of each color chip", () => {
+    render(
+      <AnnotationLibraryPanel
+        {...baseProps}
+        filters={emptyFilters}
+        onFiltersChange={vi.fn()}
+      />,
+    );
+    const chip = screen.getByRole("button", { name: "筛选金句（黄色）标注" });
+    expect(chip).toHaveTextContent("金句");
+    expect(chip).toHaveAttribute("title", "金句（黄色）");
   });
 
   it("switches the count line and export label while filtering", () => {

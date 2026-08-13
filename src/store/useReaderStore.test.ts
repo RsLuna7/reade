@@ -58,6 +58,7 @@ describe("reading settings", () => {
       annotationTool: "view",
       highlightColor: "yellow",
       underlineColor: "blue",
+      annotationColorNames: { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" },
       fuzzyAnnotationAnchoring: false,
       expandedPaths: [],
       activeView: "reader",
@@ -415,6 +416,62 @@ describe("reading settings", () => {
     useReaderStore.getState().setFuzzyAnnotationAnchoring(true);
     useReaderStore.getState().resetReaderPreferences();
     expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+  });
+
+  it("persists annotation color names and normalizes them on write", () => {
+    expect(useReaderStore.getState().annotationColorNames).toEqual({
+      yellow: "金句",
+      green: "疑问",
+      blue: "行动",
+      pink: "术语",
+    });
+
+    useReaderStore.getState().setAnnotationColorName("yellow", "  重点摘录截断  ");
+    // trim + 6 字符截断。
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("重点摘录截断");
+    // 空值回落该色默认名。
+    useReaderStore.getState().setAnnotationColorName("green", "   ");
+    expect(useReaderStore.getState().annotationColorNames.green).toBe("疑问");
+
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: { annotationColorNames: Record<string, string> } };
+    expect(stored.state.annotationColorNames).toMatchObject({ yellow: "重点摘录截断" });
+  });
+
+  it("rehydrates color names and fills defaults for missing or corrupt keys", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { annotationColorNames: { yellow: "灵感", blue: 42 } },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().annotationColorNames).toEqual({
+      yellow: "灵感",
+      green: "疑问",
+      blue: "行动",
+      pink: "术语",
+    });
+
+    // 旧持久化数据完全没有该键 → 全默认。
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({ version: READER_PREFERENCES_VERSION, state: {} }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().annotationColorNames.pink).toBe("术语");
+  });
+
+  it("resets color names alone and with the other reader preferences", () => {
+    useReaderStore.getState().setAnnotationColorName("pink", "生词");
+    useReaderStore.getState().resetAnnotationColorNames();
+    expect(useReaderStore.getState().annotationColorNames.pink).toBe("术语");
+
+    useReaderStore.getState().setAnnotationColorName("yellow", "灵感");
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
   });
 
   it("persists and clamps the daily reading goal", () => {

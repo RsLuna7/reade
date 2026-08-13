@@ -10,22 +10,25 @@ import {
   APPROXIMATE_ANCHOR_LABEL,
   annotationKindLabel,
   annotationListTitle,
+  colorAccessibleLabel,
+  colorDisplayName,
   isAnnotationMarkKind,
   type AnnotationMarkKind,
 } from "../lib/annotations";
 import { previewGroupAnnotations } from "../lib/annotationHub";
 import { isRelocatableAnnotation } from "../lib/annotationRelocate";
 import type { RebindDryRunReport } from "../lib/rebindDryRun";
+import { useReaderStore } from "../store/useReaderStore";
 
 export type AnnotationTool = "view" | AnnotationMarkKind;
 
-/** 标注颜色的中文名,供 aria-label 与文案统一使用。 */
-export const ANNOTATION_COLOR_LABELS: Record<AnnotationColor, string> = {
-  yellow: "黄",
-  green: "绿",
-  blue: "蓝",
-  pink: "粉",
-};
+/**
+ * 颜色语义命名(plan-annotation-color-names CN-D5):组件直接读 store,
+ * 改名即时反映到所有色块;label 恒带颜色词("金句（黄色）"),无障碍不丢底色。
+ */
+function useAnnotationColorNames(): Record<AnnotationColor, string> {
+  return useReaderStore((state) => state.annotationColorNames);
+}
 
 interface SelectionToolbarProps {
   open: boolean;
@@ -64,6 +67,7 @@ export function SelectionToolbar({
   onClose,
   canHighlight,
 }: SelectionToolbarProps) {
+  const colorNames = useAnnotationColorNames();
   if (!open) return null;
   return (
     <div
@@ -79,7 +83,8 @@ export function SelectionToolbar({
             key={item}
             type="button"
             className={`annotation-color-swatch annotation-color-swatch--${item}${color === item ? " active" : ""}`}
-            aria-label={`以${ANNOTATION_COLOR_LABELS[item]}色高亮`}
+            aria-label={`以${colorAccessibleLabel(item, colorNames)}高亮`}
+            title={colorAccessibleLabel(item, colorNames)}
             aria-pressed={color === item}
             disabled={!canHighlight}
             onClick={() => onPickColor(item)}
@@ -149,6 +154,7 @@ export function AnnotationEditBubble({
   onClose,
 }: AnnotationEditBubbleProps) {
   const ref = useRef<HTMLDivElement>(null);
+  const colorNames = useAnnotationColorNames();
 
   useEffect(() => {
     const onPointerDown = (event: Event) => {
@@ -185,7 +191,8 @@ export function AnnotationEditBubble({
               className={`annotation-color-swatch annotation-color-swatch--${item}${
                 annotation.color === item ? " active" : ""
               }`}
-              aria-label={`改为${ANNOTATION_COLOR_LABELS[item]}色`}
+              aria-label={`改为${colorAccessibleLabel(item, colorNames)}`}
+              title={colorAccessibleLabel(item, colorNames)}
               aria-pressed={annotation.color === item}
               onClick={() => onChangeColor(annotation, item)}
             />
@@ -240,6 +247,7 @@ export function AnnotationToolsPanel({
   onUndo,
   onClear,
 }: AnnotationToolsPanelProps) {
+  const colorNames = useAnnotationColorNames();
   const showColors = tool === "highlight" || tool === "underline";
   return (
     <div
@@ -280,7 +288,8 @@ export function AnnotationToolsPanel({
               key={item}
               type="button"
               className={`annotation-color-swatch annotation-color-swatch--${item}${color === item ? " active" : ""}`}
-              aria-label={`选择${ANNOTATION_COLOR_LABELS[item]}色`}
+              aria-label={`选择${colorAccessibleLabel(item, colorNames)}`}
+              title={colorAccessibleLabel(item, colorNames)}
               aria-pressed={color === item}
               onClick={() => onColorChange(item)}
             />
@@ -340,6 +349,7 @@ export function AnnotationList({
   onGenerateCard,
   onClearAll,
 }: AnnotationListProps) {
+  const colorNames = useAnnotationColorNames();
   if (loading) {
     return <p className="toc-empty">获取标注中…</p>;
   }
@@ -389,7 +399,8 @@ export function AnnotationList({
                 className={`annotation-color-swatch annotation-color-swatch--${item}${
                   annotation.color === item ? " active" : ""
                 }`}
-                aria-label={`改为${ANNOTATION_COLOR_LABELS[item]}色`}
+                aria-label={`改为${colorAccessibleLabel(item, colorNames)}`}
+                title={colorAccessibleLabel(item, colorNames)}
                 aria-pressed={annotation.color === item}
                 onClick={() => onChangeColor?.(annotation, item)}
               />
@@ -530,6 +541,7 @@ export function AnnotationFilterControls({
   filters: AnnotationLibraryFilters;
   onChange: (filters: AnnotationLibraryFilters) => void;
 }) {
+  const colorNames = useAnnotationColorNames();
   return (
     <div className="annotation-filter-controls">
       <div className="annotation-library-search">
@@ -554,26 +566,28 @@ export function AnnotationFilterControls({
             {label}
           </button>
         ))}
-        <div
-          className="annotation-toolbar-colors annotation-filter-colors"
-          role="group"
-          aria-label="筛选标注颜色"
-        >
-          {ANNOTATION_COLORS.map((color) => (
-            <button
-              key={color}
-              type="button"
-              className={`annotation-color-swatch annotation-color-swatch--${color}${
-                filters.colors.includes(color) ? " active" : ""
-              }`}
-              aria-label={`筛选${ANNOTATION_COLOR_LABELS[color]}色标注`}
-              aria-pressed={filters.colors.includes(color)}
-              onClick={() =>
-                onChange({ ...filters, colors: toggleFilterValue(filters.colors, color) })
-              }
+        {/* 色点升级为「圆点 + 语义名」chip:名字是 chip 的脸,筛选值仍是色键。 */}
+        {ANNOTATION_COLORS.map((color) => (
+          <button
+            key={color}
+            type="button"
+            className={`annotation-filter-chip annotation-filter-chip--color${
+              filters.colors.includes(color) ? " active" : ""
+            }`}
+            aria-label={`筛选${colorAccessibleLabel(color, colorNames)}标注`}
+            title={colorAccessibleLabel(color, colorNames)}
+            aria-pressed={filters.colors.includes(color)}
+            onClick={() =>
+              onChange({ ...filters, colors: toggleFilterValue(filters.colors, color) })
+            }
+          >
+            <span
+              className={`annotation-color-dot annotation-color-dot--${color}`}
+              aria-hidden="true"
             />
-          ))}
-        </div>
+            {colorDisplayName(color, colorNames)}
+          </button>
+        ))}
       </div>
     </div>
   );

@@ -16,6 +16,11 @@ import {
   type SearchLocator,
   type SearchResult,
 } from "../lib/backend";
+import {
+  DEFAULT_ANNOTATION_COLOR_NAMES,
+  normalizeAnnotationColorName,
+  normalizeAnnotationColorNames,
+} from "../lib/annotations";
 import type { ReaderMotionLevel } from "../lib/motion";
 import {
   EMPTY_NAV_HISTORY,
@@ -196,6 +201,7 @@ type PersistedReaderPreferences = Partial<
     | "motionLevel"
     | "highlightColor"
     | "underlineColor"
+    | "annotationColorNames"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
     | "ttsRate"
@@ -235,6 +241,10 @@ export function migrateReaderPreferences(
     ...(ANNOTATION_COLORS.has(state.underlineColor as AnnotationColorPreference)
       ? { underlineColor: state.underlineColor }
       : {}),
+    // 颜色语义命名(plan-annotation-color-names):缺键/坏值逐色回落默认。
+    ...(state.annotationColorNames && typeof state.annotationColorNames === "object"
+      ? { annotationColorNames: normalizeAnnotationColorNames(state.annotationColorNames) }
+      : {}),
     ...(typeof state.dailyGoalMinutes === "number"
       ? { dailyGoalMinutes: state.dailyGoalMinutes }
       : {}),
@@ -266,6 +276,11 @@ interface ReaderState {
   annotationTool: AnnotationToolPreference;
   highlightColor: AnnotationColorPreference;
   underlineColor: AnnotationColorPreference;
+  /**
+   * 四色语义命名(plan-annotation-color-names):纯展示偏好,持久化、
+   * 双端同构;不写入任何标注数据或导出格式。
+   */
+  annotationColorNames: Record<AnnotationColorPreference, string>;
   /**
    * Global switch for the fuzzy last-resort anchoring step (§5.6 D). Off by
    * default: fuzzy may anchor a mark to similar but different text. Persisted.
@@ -305,6 +320,9 @@ interface ReaderState {
   setAnnotationTool: (tool: AnnotationToolPreference) => void;
   setHighlightColor: (color: AnnotationColorPreference) => void;
   setUnderlineColor: (color: AnnotationColorPreference) => void;
+  /** trim + ≤6 字符;空值回落该色默认名。 */
+  setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
+  resetAnnotationColorNames: () => void;
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
@@ -383,6 +401,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationTool: "view",
         highlightColor: "yellow",
         underlineColor: "blue",
+        annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
         fuzzyAnnotationAnchoring: false,
         expandedPaths: [],
         activeView: "reader",
@@ -582,6 +601,20 @@ export const useReaderStore = create<ReaderState>()(
           set({ underlineColor: normalizeAnnotationColor(color, "blue") });
         },
 
+        setAnnotationColorName: (color, name) => {
+          const key = normalizeAnnotationColor(color);
+          set((state) => ({
+            annotationColorNames: {
+              ...state.annotationColorNames,
+              [key]: normalizeAnnotationColorName(key, name),
+            },
+          }));
+        },
+
+        resetAnnotationColorNames: () => {
+          set({ annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES } });
+        },
+
         setFuzzyAnnotationAnchoring: (enabled) => {
           set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
         },
@@ -629,6 +662,7 @@ export const useReaderStore = create<ReaderState>()(
             annotationTool: "view",
             highlightColor: "yellow",
             underlineColor: "blue",
+            annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
             fuzzyAnnotationAnchoring: false,
           });
         },
@@ -655,6 +689,7 @@ export const useReaderStore = create<ReaderState>()(
         expandedPaths: state.expandedPaths,
         highlightColor: state.highlightColor,
         underlineColor: state.underlineColor,
+        annotationColorNames: state.annotationColorNames,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
         ttsRate: state.ttsRate,
@@ -688,6 +723,10 @@ export const useReaderStore = create<ReaderState>()(
           underlineColor: normalizeAnnotationColor(
             preferences.underlineColor,
             current.underlineColor,
+          ),
+          // 旧持久化数据没有该键时,归一函数补齐全部默认名。
+          annotationColorNames: normalizeAnnotationColorNames(
+            preferences.annotationColorNames,
           ),
           expandedPaths: Array.isArray(preferences.expandedPaths)
             ? preferences.expandedPaths.filter(
