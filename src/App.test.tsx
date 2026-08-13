@@ -2182,3 +2182,25 @@ describe("navigation history (NH)", () => {
     expect(screen.getByRole("button", { name: "前进" })).toBeEnabled();
   });
 });
+
+describe("topbar breadcrumb", () => {
+  it("exposes the full path through the title, since long segments render truncated", async () => {
+    const folder = "使用-claude.md-文件-根据您的代码库需求定制-claude-代码";
+    const file = `${folder}-using-claude.md-file.md`;
+    const relativePath = `${folder}/${file}`;
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/长文档库-根目录名字同样很长", documents: [] },
+      documents: [markdownDocument(relativePath, "长路径文档")],
+      currentPath: relativePath,
+      currentContent: { kind: "markdown", relativePath, markdown: "# 长路径文档\n\n正文" },
+      motionLevel: "off",
+    });
+
+    render(<App />);
+
+    expect(await screen.findByLabelText("当前文档路径")).toHaveAttribute(
+      "title",
+      `长文档库-根目录名字同样很长 / ${folder} / ${file}`,
+    );
+  });
+});

@@ -5507,7 +5507,11 @@ function App() {
 
       <main className="workspace">
         <header className="topbar">
-          <div className="breadcrumb" aria-label="当前文档路径">
+          <div
+            className="breadcrumb"
+            aria-label="当前文档路径"
+            title={[libraryName, ...pathParts].join(" / ")}
+          >
             {IS_WEB_RUNTIME ? (
               <Globe2 size={14} aria-hidden="true" />
             ) : (

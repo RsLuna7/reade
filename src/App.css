@@ -1155,7 +1155,8 @@ a:focus-visible {
   min-height: 58px;
   align-items: center;
   gap: 16px;
-  padding: 0 22px 0 var(--reader-gutter-inline);
+  /* 右内边距 = 工具条到窗口右缘的间距(工具条在流内,不再自行绝对定位)。 */
+  padding: 0 17px 0 var(--reader-gutter-inline);
   border-bottom: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 93%, transparent);
   backdrop-filter: blur(14px);
@@ -1167,9 +1168,13 @@ a:focus-visible {
   flex: 1;
   align-items: center;
   gap: 7px;
+  overflow: hidden;
   color: var(--muted);
   font-size: 12px;
-  padding-right: 92px;
+}
+
+.breadcrumb > svg {
+  flex: none;
 }
 
 .breadcrumb span {
@@ -1178,16 +1183,29 @@ a:focus-visible {
   white-space: nowrap;
 }
 
+/* 库名与中间目录各自限宽,长路径不会挤掉末段(有文档时即当前文档名);
+   末段吃掉剩余宽度,不够时先压到可读下限,再让前面各段继续收缩。
+   任何一段截断后,完整路径仍可由容器 title 悬停读到。 */
+.breadcrumb > span:not(:last-child) {
+  flex: 0 1 auto;
+  max-width: 16ch;
+}
+
+.breadcrumb > span:last-child {
+  flex: 0 100 auto;
+  min-width: 10ch;
+}
+
 .breadcrumb .current {
   color: var(--ink-soft);
   font-weight: 600;
 }
 
 .topbar-actions {
-  position: absolute;
-  top: 11px;
-  right: 17px;
+  /* 留作 popover 定位锚;宽度参与顶栏布局,面包屑才知道该让出多少。 */
+  position: relative;
   display: flex;
+  flex: none;
   align-items: center;
   gap: 5px;
 }
@@ -5503,10 +5521,6 @@ button.links-panel-entry:focus-visible {
     display: grid;
   }
 
-  .breadcrumb {
-    padding-right: 132px;
-  }
-
   .breadcrumb > span:not(.current) {
     display: none;
   }
@@ -5583,10 +5597,6 @@ button.links-panel-entry:focus-visible {
   /* 顶栏收敛为标题行:核心动作已迁至底部工具条,其余进「更多」。 */
   :root[data-runtime="web"] .topbar-actions {
     display: none;
-  }
-
-  :root[data-runtime="web"] .breadcrumb {
-    padding-right: 16px;
   }
 
   /* 正文与浮层为底部工具条让位。 */
