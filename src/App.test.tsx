@@ -27,6 +27,7 @@ import {
 import { buildAnnotationsMarkdown } from "./lib/annotationExport";
 import { readHomeBaseline } from "./lib/homeData";
 import { readReadingPosition, writeReadingPosition } from "./lib/readingPositions";
+import { readVerticalPreference } from "./lib/verticalWriting";
 import {
   DEFAULT_READING_SETTINGS,
   READER_PREFERENCES_STORAGE_KEY,
@@ -158,6 +159,7 @@ beforeEach(() => {
     fuzzyAnnotationAnchoring: false,
     expandedPaths: [],
     activeView: "reader",
+    verticalWriting: false,
     loading: false,
     error: null,
   });
@@ -1669,6 +1671,91 @@ describe("split view (SP)", () => {
       expect(view.container.querySelector(".markdown-body")).not.toBeNull();
     });
     expect(screen.getByRole("button", { name: "开启分栏对照" })).toBeDisabled();
+  });
+});
+
+describe("vertical writing mode (plan-vertical-writing)", () => {
+  it("toggles per-document vertical writing from the settings panel and persists it", () => {
+    setLibraryReadingState();
+    render(
+      <ReadingSettingsPanel
+        open
+        onClose={() => undefined}
+        onNotice={() => undefined}
+        verticalUnavailableReason={null}
+      />,
+    );
+
+    const group = screen.getByRole("group", { name: "竖排模式开关" });
+    fireEvent.click(within(group).getByRole("button", { name: "开启" }));
+    expect(useReaderStore.getState().verticalWriting).toBe(true);
+    // 每文档记忆走独立 localStorage 键(VW-D1)。
+    expect(readVerticalPreference(HOME_ROOT, "guide.md")).toBe(true);
+
+    fireEvent.click(within(group).getByRole("button", { name: "关闭" }));
+    expect(useReaderStore.getState().verticalWriting).toBe(false);
+    expect(readVerticalPreference(HOME_ROOT, "guide.md")).toBe(false);
+  });
+
+  it("greys the switch out with a reason for out-of-scope formats", () => {
+    render(
+      <ReadingSettingsPanel
+        open
+        onClose={() => undefined}
+        onNotice={() => undefined}
+        verticalUnavailableReason="MDX 文档不在竖排实验范围内。"
+      />,
+    );
+    const group = screen.getByRole("group", { name: "竖排模式开关" });
+    expect(within(group).getByRole("button", { name: "开启" })).toBeDisabled();
+    expect(within(group).getByRole("button", { name: "关闭" })).toBeDisabled();
+    expect(screen.getByText("MDX 文档不在竖排实验范围内。")).toBeInTheDocument();
+  });
+
+  it("flips the reading axis, disables vertical-hostile features and recovers on exit", async () => {
+    setLibraryReadingState();
+    useReaderStore.setState({ verticalWriting: true, showScrollMap: true });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    expect(reader).toHaveAttribute("data-writing", "vertical");
+    // 文档地图刻度层在竖排下不渲染(定稿矩阵 ⛔;jsdom 零几何下横排
+    // 基线本就无刻度,恢复断言以聚焦提示与轴属性为准)。
+    expect(view.container.querySelector(".scroll-map")).toBeNull();
+    // 聚焦模式置灰并提示原因。
+    expect(screen.getByText(/竖排模式下聚焦功能暂停/)).toBeInTheDocument();
+
+    // 退出竖排:轴属性移除、聚焦提示回默认文案。
+    useReaderStore.getState().setVerticalWriting(false);
+    await waitFor(() => {
+      expect(reader).not.toHaveAttribute("data-writing");
+    });
+    expect(screen.queryByText(/竖排模式下聚焦功能暂停/)).not.toBeInTheDocument();
+    expect(screen.getByText(/段落聚焦淡化当前段落以外的内容/)).toBeInTheDocument();
+  });
+
+  it("delegates TOC jumps to scrollIntoView while vertical", async () => {
+    setMarkdownState();
+    useReaderStore.setState({ verticalWriting: true });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(screen.getAllByRole("link", { name: "Target section" }).length).toBeGreaterThan(0);
+    });
+    expect(view.container.querySelector(".reading-scroll")).toHaveAttribute(
+      "data-writing",
+      "vertical",
+    );
+
+    fireEvent.click(screen.getAllByRole("link", { name: "Target section" })[0]);
+    // 竖排容器的跳转走 scrollIntoView 轴分支(VW-D5)。
+    expect(HTMLElement.prototype.scrollIntoView).toHaveBeenCalledWith(
+      expect.objectContaining({ block: "start", inline: "nearest" }),
+    );
   });
 });
 

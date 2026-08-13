@@ -274,6 +274,11 @@ export interface UseReadAloudOptions {
   onSentenceEnd?: () => void;
   /** Playback problems surface through the app notice channel. */
   onNotice?: (message: string) => void;
+  /**
+   * 暂停句级跟随滚动(竖排模式,plan-vertical-writing §8):跟随计算基于
+   * 纵向 scrollTop,竖排横轴下让位;播放与句级高亮不受影响。
+   */
+  followSuspended?: boolean;
   /** Injected speech engine; omit for `window.speechSynthesis`, null = unsupported. */
   speech?: ReadAloudSpeech | null;
 }
@@ -360,6 +365,7 @@ export function useReadAloud(options: UseReadAloudOptions): ReadAloudControls {
     // playing with scroll-follow only — never the DOM-wrapping fallback.
     applySentenceHighlight(TTS_ACTIVE_ID, range);
     activeRangeRef.current = range;
+    if (latest.current.followSuspended) return;
     const reader = latest.current.readerRef.current;
     if (!reader) return;
     const rect = rangeFirstRect(range);

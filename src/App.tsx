@@ -158,6 +158,13 @@ import {
   shouldCaptureOnLeave,
 } from "./lib/reread";
 import { RereadBanner } from "./components/RereadBanner";
+// 竖排模式(plan-vertical-writing §8):每文档记忆与纯判定在 lib,
+// App 负责激活条件、滚轮换轴与禁用矩阵接线。
+import {
+  VERTICAL_DISABLED_FEATURES,
+  verticalScrollRatio,
+  verticalWritingUnavailableReason,
+} from "./lib/verticalWriting";
 import {
   ANNOTATION_COLORS,
   ANNOTATION_COLOR_NAME_MAX_CHARS,
@@ -774,12 +781,15 @@ export function ReadingSettingsPanel({
   onClose,
   onNotice,
   focusUnavailableReason = null,
+  verticalUnavailableReason = null,
 }: {
   open: boolean;
   onClose: () => void;
   onNotice: (message: string) => void;
   /** 聚焦模式在当前内容不适用的原因(如 PDF 原版式);null = 可用。 */
   focusUnavailableReason?: string | null;
+  /** 竖排开关对当前文档不可用的原因(如 PDF/mdx);null = 可用。 */
+  verticalUnavailableReason?: string | null;
 }) {
   const settings = useReaderStore((state) => state.readingSettings);
   const update = useReaderStore((state) => state.updateReadingSettings);
@@ -799,6 +809,8 @@ export function ReadingSettingsPanel({
   const setReadingRuler = useReaderStore((state) => state.setReadingRuler);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
   const setReadNextEnabled = useReaderStore((state) => state.setReadNextEnabled);
+  const verticalWriting = useReaderStore((state) => state.verticalWriting);
+  const setVerticalWriting = useReaderStore((state) => state.setVerticalWriting);
   const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
   const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
   const resetAnnotationColorNames = useReaderStore(
@@ -1039,6 +1051,34 @@ export function ReadingSettingsPanel({
         <p className="setting-hint">
           {focusUnavailableReason ??
             "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带。"}
+        </p>
+      </fieldset>
+
+      {/* 竖排模式(plan-vertical-writing VW-D1):每文档开关,实验档。 */}
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">
+          竖排模式<span className="setting-badge">实验</span>
+        </legend>
+        <div className="motion-level-control" role="group" aria-label="竖排模式开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={verticalWriting === enabled}
+              className={verticalWriting === enabled ? "active" : undefined}
+              disabled={verticalUnavailableReason !== null}
+              onClick={() => setVerticalWriting(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          {verticalUnavailableReason ??
+            `当前文档改为竖排（从右往左）阅读，逐文档记忆。竖排下暂停：${VERTICAL_DISABLED_FEATURES}；关闭后完全恢复。`}
         </p>
       </fieldset>
 
@@ -1758,6 +1798,31 @@ function App() {
     () => documents.find((document) => document.relativePath === currentPath) ?? null,
     [currentPath, documents],
   );
+
+  // ---- 竖排模式(plan-vertical-writing §8) ----
+  // store 持有当前文档的开关镜像;激活还要求格式在实验范围内
+  // (markdown/epub)。verticalActive 是所有禁用矩阵接线的唯一判据。
+  const verticalWriting = useReaderStore((state) => state.verticalWriting);
+  const verticalUnavailableReason = verticalWritingUnavailableReason(
+    currentDocument?.format ?? null,
+  );
+  const verticalActive = verticalWriting && verticalUnavailableReason === null;
+
+  // 滚轮换轴(VW-D5):竖排容器的滚动轴是横向,把主导的 deltaY 映射为
+  // scrollLeft 递减(vertical-rl 前进方向向左);触控板横向手势走原生。
+  useEffect(() => {
+    if (!verticalActive) return;
+    const reader = readerRef.current;
+    if (!reader) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey) return;
+      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
+      event.preventDefault();
+      reader.scrollLeft -= event.deltaY;
+    };
+    reader.addEventListener("wheel", onWheel, { passive: false });
+    return () => reader.removeEventListener("wheel", onWheel);
+  }, [verticalActive, currentPath]);
   const statsOpen = !IS_WEB_RUNTIME && activeView === "stats";
   const homeOpen = activeView === "home";
   const reviewOpen = activeView === "review";
@@ -1963,7 +2028,13 @@ function App() {
     return () => clearRereadMarks(root);
   }, [reread, currentPath, renderedMarkdown, currentContent, annotations]);
   const toc = tocState?.path === currentPath ? tocState.items : [];
-  const activeHeading = activeHeadingState?.path === currentPath ? activeHeadingState.id : null;
+  // 竖排(§8):目录跟随高亮暂停(markdown 参考线扫描在滚动分支已停,
+  // EPUB 章节跟踪的纵向几何在横轴下失真,此处统一压平);点击跳转保留。
+  const activeHeading = verticalActive
+    ? null
+    : activeHeadingState?.path === currentPath
+      ? activeHeadingState.id
+      : null;
   const handleTocChange = useCallback((items: TocItem[]) => {
     if (currentPath) setTocState({ path: currentPath, items });
   }, [currentPath]);
@@ -2046,6 +2117,9 @@ function App() {
     setHeadingRatios(null);
     if (!currentPath || !toc.length) return;
     if (!currentContent || currentContent.kind === "pdf") return;
+    // 竖排(§8):offsetTop/scrollHeight 测量在横向滚动轴上失真,
+    // 已读覆盖随位置记忆一并暂停。
+    if (verticalActive) return;
     const path = currentPath;
     const ids = toc.map((item) => item.id);
     let cancelled = false;
@@ -2068,7 +2142,7 @@ function App() {
       cancelled = true;
       window.clearTimeout(handle);
     };
-  }, [currentContent, currentPath, readingSettings, toc]);
+  }, [currentContent, currentPath, readingSettings, toc, verticalActive]);
 
   const tocReachedIds = useMemo<ReadonlySet<string> | null>(() => {
     if (!currentPath || !readingHighWater || readingHighWater.path !== currentPath) {
@@ -2180,6 +2254,8 @@ function App() {
       ? undefined
       : () => trackerRef.current?.recordActivity(),
     onNotice: showNotice,
+    // 竖排(§8):朗读继续,自动跟随滚动暂停(定稿矩阵)。
+    followSuspended: verticalActive,
   });
 
   // Esc 分支与控制条的稳定引用(hook 返回的回调都是 identity-stable)。
@@ -2327,14 +2403,15 @@ function App() {
         : pdfViewMode === "reading"
           ? "pdf-reading"
           : null;
-  const focusUnavailableReason =
-    currentContent?.kind === "pdf" && pdfViewMode === "original"
+  const focusUnavailableReason = verticalActive
+    ? "竖排模式下聚焦功能暂停（段落聚焦/打字机滚动/阅读标尺都是横排纵轴假设）；关闭竖排后恢复。"
+    : currentContent?.kind === "pdf" && pdfViewMode === "original"
       ? "PDF 原版式没有段落结构，聚焦模式不适用；切换到阅读模式后可用。"
       : null;
   useFocusMode({
     readerRef,
     articleRef,
-    enabledKind: activeView === "reader" ? focusContentKind : null,
+    enabledKind: activeView === "reader" && !verticalActive ? focusContentKind : null,
     contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
     spotlight: focusSpotlight,
     typewriter: typewriterScroll,
@@ -3057,7 +3134,8 @@ function App() {
   // 重算一次;滚动本身不参与(§3.2)。ResizeObserver 盯正文壳,Shiki/
   // Mermaid/图片异步落地引起的高度变化都会经它触发重测。
   useEffect(() => {
-    if (!showScrollMap || overlayViewOpen || !currentPath || !currentContent) {
+    // 竖排(§8)下刻度层禁用:纵向 ratio 测量在横向滚动轴上没有意义。
+    if (!showScrollMap || overlayViewOpen || verticalActive || !currentPath || !currentContent) {
       setScrollMapMarks([]);
       return;
     }
@@ -3104,6 +3182,7 @@ function App() {
     searchResults,
     showScrollMap,
     splitActive,
+    verticalActive,
   ]);
 
   // 朗读刻度:sentenceIndex 变化只更新这一枚(RS-D8),不重测全量。
@@ -4355,6 +4434,12 @@ function App() {
     if (!reader || !article) return;
     if (!readNextEnabled || !currentPath || !currentContent) return;
     if (activeView !== "reader" || readAloudBarOpen) return;
+    if (verticalActive) {
+      // 竖排(plan-vertical-writing §8):读完接着读不触发(定稿矩阵 ⛔)。
+      // 横排下 scrollHeight 采样天然失效,这里显式挡住并收起已浮出的卡。
+      setReadNextCard((current) => (current?.path === currentPath ? null : current));
+      return;
+    }
     if (readNextDismissed.current.has(currentPath)) return;
     const sentinel = article.querySelector("[data-read-next-sentinel]");
     if (!sentinel) return;
@@ -4826,6 +4911,18 @@ function App() {
   useLayoutEffect(() => {
     const reader = readerRef.current;
     if (!reader || !currentPath) return;
+    if (verticalActive) {
+      // 竖排(§8):位置记忆暂停——不恢复会话 scrollTop 与持久化 ratio,
+      // 固定落在右缘阅读起点(vertical-rl 坐标系里 scrollLeft = 0);
+      // 横排存值原样保留,退出竖排立即恢复生效。
+      reader.scrollLeft = 0;
+      reader.scrollTop = 0;
+      progressBarRef.current?.style.setProperty("--reading-progress", "0");
+      mobileScrollAnchor.current = 0;
+      mobileScrollSuppressUntil.current = performance.now() + 1200;
+      setMobileToolbarHidden(false);
+      return;
+    }
     const sessionTop = scrollPositions.current.get(currentPath);
     reader.scrollTop = sessionTop ?? 0;
     // H0 恢复支路:会话内 Map 未命中时查持久化位置。显式导航目标
@@ -4860,7 +4957,7 @@ function App() {
     mobileScrollAnchor.current = reader.scrollTop;
     mobileScrollSuppressUntil.current = performance.now() + 1200;
     setMobileToolbarHidden(false);
-  }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath]);
+  }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath, verticalActive]);
 
   useEffect(() => {
     if (!IS_WEB_RUNTIME || !currentPath) return;
@@ -4971,6 +5068,16 @@ function App() {
       const reader = readerRef.current;
       const article = articleRef.current;
       if (!reader || !article) return;
+      if (verticalActive) {
+        // 竖排(§8):进度条换轴只读展示;位置采样、目录跟随参考线与
+        // 移动工具条方向感知全部暂停(定稿矩阵 ⛔ 行)。
+        const verticalRange = reader.scrollWidth - reader.clientWidth;
+        progressBarRef.current?.style.setProperty(
+          "--reading-progress",
+          String(verticalScrollRatio(reader.scrollLeft, verticalRange)),
+        );
+        return;
+      }
       if (currentPath) scrollPositions.current.set(currentPath, reader.scrollTop);
 
       const range = reader.scrollHeight - reader.clientHeight;
@@ -5030,7 +5137,7 @@ function App() {
         return { path: currentPath, id: nextActive };
       });
     });
-  }, [currentContent?.kind, currentPath, flushPendingPosition, mobileReadingContext]);
+  }, [currentContent?.kind, currentPath, flushPendingPosition, mobileReadingContext, verticalActive]);
 
   useEffect(
     () => () => {
@@ -5573,6 +5680,7 @@ function App() {
               onClose={() => setSettingsOpen(false)}
               onNotice={showNotice}
               focusUnavailableReason={focusUnavailableReason}
+              verticalUnavailableReason={verticalUnavailableReason}
             />
           </div>
           <div className="reading-progress" aria-hidden="true">
@@ -5607,7 +5715,12 @@ function App() {
                 onAcknowledge={handleRereadAcknowledge}
               />
             )}
-            <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
+            <div
+              className="reading-scroll"
+              ref={readerRef}
+              onScroll={handleReaderScroll}
+              data-writing={verticalActive ? "vertical" : undefined}
+            >
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,
                     不再把整个应用打成白屏(chrome、面板、侧栏都在边界外)。 */}
@@ -5690,7 +5803,7 @@ function App() {
                 <div data-read-next-sentinel aria-hidden="true" />
               </div>
             </div>
-            {showScrollMap && (
+            {showScrollMap && !verticalActive && (
               <ScrollMap
                 marks={scrollMapMarks}
                 ttsRatio={ttsMapRatio}
@@ -5698,7 +5811,7 @@ function App() {
                 onSelectTts={handleScrollMapSelectTts}
               />
             )}
-            {readingRuler && hoverCapable && focusContentKind && (
+            {readingRuler && hoverCapable && focusContentKind && !verticalActive && (
               <ReadingRuler
                 readerRef={readerRef}
                 fontSize={readingSettings.fontSize}

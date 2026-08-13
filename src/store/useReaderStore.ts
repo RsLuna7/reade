@@ -44,6 +44,9 @@ import {
   toggleThemeMode,
 } from "../lib/themes";
 import { buildDocumentTree, reconcileExpandedPaths } from "../lib/tree";
+// 竖排模式（plan-vertical-writing VW-D1）：每文档记忆的读写在 lib，
+// store 只持有"当前文档是否竖排"的会话镜像。
+import { readVerticalPreference, writeVerticalPreference } from "../lib/verticalWriting";
 
 export type { ReaderMotionLevel } from "../lib/motion";
 export type { ReaderTheme, ThemeSeriesId } from "../lib/themes";
@@ -375,6 +378,12 @@ interface ReaderState {
    * Session-only,不进 persisted preferences;切换书库时清空。
    */
   navHistory: NavHistory;
+  /**
+   * 竖排模式（plan-vertical-writing VW-D1）：当前文档的竖排开关镜像。
+   * Session-only（每文档记忆持久化在 `reade-vertical-writing` 独立键），
+   * selectDocument 时从记忆同步。
+   */
+  verticalWriting: boolean;
   loading: boolean;
   error: string | null;
   chooseAndOpenLibrary: () => Promise<void>;
@@ -410,6 +419,8 @@ interface ReaderState {
   setTtsRate: (rate: number) => void;
   setTtsVoiceName: (name: string | null) => void;
   setReviewCardMode: (mode: ReviewCardMode) => void;
+  /** 更新当前文档的竖排开关并写入每文档记忆；无当前文档时忽略。 */
+  setVerticalWriting: (enabled: boolean) => void;
   /** 跳转前记录出发点(捕获由 App 完成,见 plan-nav-history NH-D1)。 */
   recordNavLocation: (location: NavLocation) => void;
   /** 后退/前进:弹出目标并把当前位置压入对侧栈;返回 null 表示栈空。 */
@@ -460,6 +471,8 @@ export const useReaderStore = create<ReaderState>()(
             expandedPaths,
             // 切换书库清空跳转历史:栈里的相对路径只对旧库有意义。
             navHistory: EMPTY_NAV_HISTORY,
+            // 当前文档被清空,竖排镜像随之复位。
+            verticalWriting: false,
           });
         } catch (error) {
           set({ error: errorMessage(error) });
@@ -498,6 +511,7 @@ export const useReaderStore = create<ReaderState>()(
         ttsVoiceName: null,
         reviewCardMode: "excerpt",
         navHistory: EMPTY_NAV_HISTORY,
+        verticalWriting: false,
         loading: false,
         error: null,
 
@@ -531,7 +545,12 @@ export const useReaderStore = create<ReaderState>()(
               expandedPaths: reconcileExpandedPaths(get().expandedPaths, tree),
               ...(currentStillExists
                 ? {}
-                : { currentPath: null, currentContent: null, currentLocator: null }),
+                : {
+                    currentPath: null,
+                    currentContent: null,
+                    currentLocator: null,
+                    verticalWriting: false,
+                  }),
             });
           } catch (error) {
             set({ error: errorMessage(error) });
@@ -546,10 +565,15 @@ export const useReaderStore = create<ReaderState>()(
           try {
             const content = await readDocument(relativePath);
             if (request === documentRequest) {
+              const rootPath = get().snapshot?.rootPath;
               set({
                 currentPath: relativePath,
                 currentContent: content,
                 currentLocator: locator ? { ...locator } : null,
+                // 竖排开关随文档切换从每文档记忆同步（VW-D1）。
+                verticalWriting: rootPath
+                  ? readVerticalPreference(rootPath, relativePath)
+                  : false,
                 // Opening a document always returns to the reading surface,
                 // e.g. from the statistics ranking or search results.
                 activeView: "reader",
@@ -756,6 +780,13 @@ export const useReaderStore = create<ReaderState>()(
           set((state) => ({
             reviewCardMode: normalizeReviewCardMode(mode, state.reviewCardMode),
           }));
+        },
+
+        setVerticalWriting: (enabled) => {
+          const { snapshot, currentPath } = get();
+          if (!snapshot?.rootPath || !currentPath) return;
+          writeVerticalPreference(snapshot.rootPath, currentPath, enabled);
+          set({ verticalWriting: enabled });
         },
 
         recordNavLocation: (location) => {

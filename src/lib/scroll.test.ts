@@ -1,7 +1,11 @@
 // @vitest-environment jsdom
 
-import { describe, expect, it } from "vitest";
-import { scrollContainerByRatio, scrollToOffsetWithinElement } from "./scroll";
+import { describe, expect, it, vi } from "vitest";
+import {
+  scrollContainerByRatio,
+  scrollElementWithinContainer,
+  scrollToOffsetWithinElement,
+} from "./scroll";
 
 describe("scroll annotation helpers", () => {
   it("scrolls a container by ratio", () => {
@@ -35,6 +39,62 @@ describe("scroll annotation helpers", () => {
     target.getBoundingClientRect = () => targetRect as DOMRect;
     expect(scrollToOffsetWithinElement(container, target, 0.25)).toBe(true);
     expect(container.scrollTop).toBe(200);
+    container.remove();
+  });
+});
+
+describe("vertical writing axis branch (plan-vertical-writing VW-D5)", () => {
+  it("maps the ratio onto a negative scrollLeft for vertical containers", () => {
+    const container = document.createElement("div");
+    container.dataset.writing = "vertical";
+    Object.defineProperty(container, "scrollWidth", { value: 1200 });
+    Object.defineProperty(container, "clientWidth", { value: 200 });
+    let scrollLeft = 0;
+    Object.defineProperty(container, "scrollLeft", {
+      get: () => scrollLeft,
+      set: (value: number) => {
+        scrollLeft = value;
+      },
+    });
+    // vertical-rl 容器的规范 scrollLeft 范围是 [-max, 0]。
+    expect(scrollContainerByRatio(container, 0.5)).toBe(true);
+    expect(scrollLeft).toBe(-500);
+    expect(scrollContainerByRatio(container, 0)).toBe(true);
+    expect(scrollLeft).toBe(-0);
+  });
+
+  it("delegates element jumps to scrollIntoView in vertical containers", () => {
+    const container = document.createElement("div");
+    container.dataset.writing = "vertical";
+    const target = document.createElement("h2");
+    container.append(target);
+    document.body.append(container);
+    const scrollIntoView = vi.fn();
+    target.scrollIntoView = scrollIntoView;
+    expect(scrollElementWithinContainer(container, target, "smooth")).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      inline: "nearest",
+      behavior: "smooth",
+    });
+    container.remove();
+  });
+
+  it("keeps the scrollTop path for horizontal containers", () => {
+    const container = document.createElement("div");
+    const target = document.createElement("h2");
+    container.append(target);
+    document.body.append(container);
+    Object.defineProperty(container, "scrollTop", { value: 40, writable: true });
+    const scrollIntoView = vi.fn();
+    target.scrollIntoView = scrollIntoView;
+    container.getBoundingClientRect = () =>
+      ({ top: 58 }) as DOMRect;
+    target.getBoundingClientRect = () =>
+      ({ top: 358 }) as DOMRect;
+    expect(scrollElementWithinContainer(container, target)).toBe(true);
+    expect(container.scrollTop).toBe(340);
+    expect(scrollIntoView).not.toHaveBeenCalled();
     container.remove();
   });
 });

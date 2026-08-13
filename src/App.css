@@ -1387,6 +1387,57 @@ a:focus-visible {
   scrollbar-gutter: stable;
 }
 
+/* ---- 竖排模式(plan-vertical-writing §8,实验档) ----
+   writing-mode 加在滚动容器上(VW-D5):滚动坐标系随之翻转成 RTL 横向,
+   scrollLeft = 0 即右缘阅读起点,打开文档天然落在开头。 */
+.reading-scroll[data-writing="vertical"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  writing-mode: vertical-rl;
+}
+
+/* 列高恒为视口高(VW-D7):解除横排的 measure 限宽,壳随内容横向生长。 */
+.reading-scroll[data-writing="vertical"] .article-shell {
+  width: max-content;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  padding: 48px 56px;
+  box-sizing: border-box;
+}
+
+/* 横排孤岛(§3.2):代码/公式/表格/Mermaid 在竖排流中保持 horizontal-tb
+   正交流排版,内部滚动行为不变;限制物理尺寸防孤岛撑破列高。 */
+.reading-scroll[data-writing="vertical"] .markdown-body pre,
+.reading-scroll[data-writing="vertical"] .markdown-code-block,
+.reading-scroll[data-writing="vertical"] .markdown-mermaid,
+.reading-scroll[data-writing="vertical"] .katex-display,
+.reading-scroll[data-writing="vertical"] .markdown-body table,
+.reading-scroll[data-writing="vertical"] .epub-table-scroll {
+  writing-mode: horizontal-tb;
+  max-width: min(72vw, 680px);
+  max-height: 100%;
+  overflow: auto;
+}
+
+.reading-scroll[data-writing="vertical"] .markdown-body img {
+  max-width: min(72vw, 640px);
+  max-height: 80vh;
+}
+
+/* 实验档徽标(设置面板的竖排分组)。 */
+.setting-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
 /* ---- 增量重读(plan-incremental-reread IR-D7) ----
    驻留式横幅:浮在 reading-frame 顶部居中,不占滚动布局;
    区别于 4.2s 瞬态 notice toast。 */
@@ -4672,6 +4723,10 @@ button.links-panel-entry:focus-visible {
   right: 0;
   z-index: 10;
   width: 286px;
+  /* 面板项目增多后总高可超视口(如竖排/聚焦分组齐备时>1300px);
+     视口内截断 + 内部滚动,沿 collections-popover 先例。 */
+  max-height: calc(100vh - 128px);
+  overflow-y: auto;
   padding: 17px;
   border: 1px solid var(--line-strong);
   border-radius: 14px;
@@ -5570,6 +5625,11 @@ button.links-panel-entry:focus-visible {
      (判定成功前不 preventDefault,pan-y 保证纵向滚动零损耗)。 */
   :root[data-runtime="web"] .reading-scroll {
     touch-action: pan-y pinch-zoom;
+  }
+
+  /* 竖排(plan-vertical-writing §8):滚动轴换横向,触控手势随之换轴。 */
+  :root[data-runtime="web"] .reading-scroll[data-writing="vertical"] {
+    touch-action: pan-x pinch-zoom;
   }
 }
 
