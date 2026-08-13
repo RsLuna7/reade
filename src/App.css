@@ -1388,9 +1388,13 @@ a:focus-visible {
 }
 
 /* reading-frame(plan-rich-scrollbar RS-D5):单格 grid 让 reading-scroll
-   填满原轨道,同时给右缘刻度层一个定位锚。 */
+   填满原轨道,同时给右缘刻度层一个定位锚。
+   isolation 建层叠上下文:刻度层(5)、阅读标尺(6)、重读横幅(14)的 z-index
+   只在正文区内部比较;否则它们会与 .topbar(3)同处根层叠上下文,数值更大
+   就盖住顶栏里的阅读设置 popover(其 z-index: 10 被限制在顶栏上下文内)。 */
 .reading-frame {
   position: relative;
+  isolation: isolate;
   display: grid;
   min-width: 0;
   min-height: 0;

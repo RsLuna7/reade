@@ -51,6 +51,14 @@ describe("application CSS isolation", () => {
     expect(css).toContain(':root[data-motion="full"]');
   });
 
+  it("keeps reading-frame overlays from painting over top bar popovers", () => {
+    // 回归:刻度层(5)、阅读标尺(6)、重读横幅(14)的祖先链上没有任何层叠
+    // 上下文,z-index 直接与 .topbar(3)在根上下文比较,于是盖住了顶栏的
+    // 阅读设置 popover。isolation 把它们关回正文区内部。
+    expect(css).toMatch(/\.reading-frame\s*\{[^}]*isolation:\s*isolate/s);
+    expect(css).toMatch(/\.topbar\s*\{[^}]*z-index:\s*3/s);
+  });
+
   it("keeps the library sidebar scrollable above a pinned theme footer", () => {
     expect(css).toMatch(/\.library-sidebar\s*\{[^}]*min-height:\s*0/s);
     expect(css).toMatch(/\.library-sidebar\s*\{[^}]*overflow:\s*hidden/s);
