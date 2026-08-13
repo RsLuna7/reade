@@ -1204,6 +1204,15 @@ a:focus-visible {
   padding-bottom: 48px;
 }
 
+/* reading-frame(plan-rich-scrollbar RS-D5):单格 grid 让 reading-scroll
+   填满原轨道,同时给右缘刻度层一个定位锚。 */
+.reading-frame {
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+}
+
 .reading-scroll {
   min-width: 0;
   min-height: 0;
@@ -1211,6 +1220,67 @@ a:focus-visible {
   overscroll-behavior: contain;
   scroll-behavior: smooth;
   scrollbar-gutter: stable;
+}
+
+/* 刻度层:叠加物而非滚动条替代品;条本身指针穿透,只有刻度点可点,
+   right 让开 11px 原生滚动条(§2 目标 4)。 */
+.scroll-map {
+  position: absolute;
+  top: 8px;
+  right: 13px;
+  bottom: 8px;
+  z-index: 5;
+  width: 12px;
+  pointer-events: none;
+}
+
+.scroll-map-tick {
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--ink) 30%, var(--paper));
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.scroll-map-tick:hover,
+.scroll-map-tick:focus-visible {
+  z-index: 1;
+  transform: translate(-50%, -50%) scale(1.4);
+  outline: none;
+}
+
+/* 标注四色:与 .annotation-color-dot--* 同一组不随主题变化的色值。 */
+.scroll-map-tick--yellow { background: #ffe650; }
+.scroll-map-tick--green { background: #78dc8c; }
+.scroll-map-tick--blue { background: #78b4ff; }
+.scroll-map-tick--pink { background: #ff8cbe; }
+
+.scroll-map-tick--bookmark {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.scroll-map-tick--search {
+  border: 2px solid var(--accent);
+  background: transparent;
+}
+
+/* 朗读当前句:横线而非圆点(§3.1),随句号实时移动。 */
+.scroll-map-tick--tts {
+  width: 12px;
+  height: 3px;
+  border: none;
+  border-radius: 2px;
+  background: var(--ink);
 }
 
 .article-shell {

@@ -1154,7 +1154,12 @@ describe("fuzzy anchoring preference (§5.6 D)", () => {
       screen.getByText("文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。"),
     ).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "开启" }));
+    // 「文档地图」开关加入后,面板里有两组「开启/关闭」;按分组名限定。
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "标注模糊定位开关" })).getByRole("button", {
+        name: "开启",
+      }),
+    );
     expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(true);
     const stored = JSON.parse(
       localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
@@ -1611,7 +1616,10 @@ describe("split view (SP)", () => {
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);
-    fireEvent.pointerDown(view.container.querySelector(".content-grid > .reading-scroll")!);
+    // 主栏滚动根现在包在 reading-frame 里(plan-rich-scrollbar RS-D5)。
+    fireEvent.pointerDown(
+      view.container.querySelector(".content-grid > .reading-frame > .reading-scroll")!,
+    );
     fireEvent.pointerUp(document);
     await new Promise((resolve) => setTimeout(resolve, 40));
     expect(screen.queryByRole("toolbar", { name: "标注工具条" })).not.toBeInTheDocument();

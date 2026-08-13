@@ -110,6 +110,15 @@ import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components
 // 条件(触屏/浮层竞争)与「打开」回放。
 import { HoverPreviewCard } from "./components/HoverPreviewCard";
 import { useHoverPreview } from "./lib/useHoverPreview";
+// 富滚动条刻度层(plan-rich-scrollbar):纯映射在 lib,测量与点击语义在此。
+import { ScrollMap } from "./components/ScrollMap";
+import {
+  buildScrollMapMarks,
+  collectAnnotationScrollPoints,
+  collectSearchScrollPoints,
+  ttsRatioFromRect,
+  type ScrollMapMark,
+} from "./lib/scrollMap";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
@@ -719,6 +728,8 @@ export function ReadingSettingsPanel({
   const setFuzzyAnnotationAnchoring = useReaderStore(
     (state) => state.setFuzzyAnnotationAnchoring,
   );
+  const showScrollMap = useReaderStore((state) => state.showScrollMap);
+  const setShowScrollMap = useReaderStore((state) => state.setShowScrollMap);
   const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
   const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
   const resetAnnotationColorNames = useReaderStore(
@@ -875,6 +886,29 @@ export function ReadingSettingsPanel({
         </div>
         <p className="setting-hint">
           文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
+        </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">文档地图</legend>
+        <div className="motion-level-control" role="group" aria-label="文档地图开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={showScrollMap === enabled}
+              className={showScrollMap === enabled ? "active" : undefined}
+              onClick={() => setShowScrollMap(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          正文右缘的刻度层：标出标注四色、书签、搜索命中与朗读位置，点击可跳转。
         </p>
       </fieldset>
 
@@ -1367,6 +1401,7 @@ function App() {
   const highlightColor = useReaderStore((state) => state.highlightColor);
   const underlineColor = useReaderStore((state) => state.underlineColor);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
+  const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -2002,6 +2037,10 @@ function App() {
     },
     [hoverPreviewTarget],
   );
+
+  // ---- 富滚动条刻度层(plan-rich-scrollbar) ----
+  const [scrollMapMarks, setScrollMapMarks] = useState<ScrollMapMark[]>([]);
+  const [ttsMapRatio, setTtsMapRatio] = useState<number | null>(null);
 
   // ---- 分栏对照(plan-split-view) ----
   // 副栏的会话记忆由 App 持有:窄窗退化会卸载副栏组件,恢复分栏后仍能回位。
@@ -2711,6 +2750,107 @@ function App() {
       if (!done) scheduleAnnotationJump(annotation);
     },
     [ensurePdfViewForAnnotation, performAnnotationJump, recordNavDeparture, scheduleAnnotationJump],
+  );
+
+  // 刻度测量:布局变化(内容/字号/窗口/标注增删/搜索会话)时 rAF 合并
+  // 重算一次;滚动本身不参与(§3.2)。ResizeObserver 盯正文壳,Shiki/
+  // Mermaid/图片异步落地引起的高度变化都会经它触发重测。
+  useEffect(() => {
+    if (!showScrollMap || overlayViewOpen || !currentPath || !currentContent) {
+      setScrollMapMarks([]);
+      return;
+    }
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const reader = readerRef.current;
+      const article = articleRef.current;
+      if (!reader || !article) return;
+      const hits = searchQuery.trim()
+        ? searchResults.filter(
+            (result) => result.relativePath === currentPath && result.locator,
+          )
+        : [];
+      setScrollMapMarks(
+        buildScrollMapMarks(
+          [
+            ...collectAnnotationScrollPoints(reader, article, annotations),
+            ...collectSearchScrollPoints(reader, article, hits),
+          ],
+          reader.scrollHeight,
+        ),
+      );
+    };
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(measure);
+    };
+    schedule();
+    const article = articleRef.current;
+    const observer =
+      typeof ResizeObserver === "function" && article ? new ResizeObserver(schedule) : null;
+    if (article && observer) observer.observe(article);
+    return () => {
+      if (frame !== null) cancelAnimationFrame(frame);
+      observer?.disconnect();
+    };
+  }, [
+    annotations,
+    currentContent,
+    currentPath,
+    overlayViewOpen,
+    readingSettings,
+    searchQuery,
+    searchResults,
+    showScrollMap,
+    splitActive,
+  ]);
+
+  // 朗读刻度:sentenceIndex 变化只更新这一枚(RS-D8),不重测全量。
+  const {
+    sentenceIndex: ttsSentenceIndex,
+    barOpen: ttsBarOpen,
+    getActiveSentenceRect,
+  } = readAloud;
+  useEffect(() => {
+    if (!showScrollMap || !ttsBarOpen || ttsSentenceIndex === null) {
+      setTtsMapRatio(null);
+      return;
+    }
+    const reader = readerRef.current;
+    if (!reader) return;
+    setTtsMapRatio(ttsRatioFromRect(reader, getActiveSentenceRect()));
+  }, [getActiveSentenceRect, showScrollMap, ttsBarOpen, ttsSentenceIndex]);
+
+  /** 刻度点击(RS-D7):标注/书签走既有跳转链,其余按比例滚动。 */
+  const handleScrollMapSelect = useCallback(
+    (mark: ScrollMapMark) => {
+      if (mark.kind === "annotation" || mark.kind === "bookmark") {
+        const annotation = annotations.find((candidate) => candidate.id === mark.targetId);
+        if (annotation) {
+          jumpToAnnotation(annotation);
+          return;
+        }
+      }
+      recordNavDeparture();
+      scrollContainerByRatio(
+        readerRef.current,
+        mark.ratio,
+        motionLevel === "off" ? "auto" : "smooth",
+      );
+    },
+    [annotations, jumpToAnnotation, motionLevel, recordNavDeparture],
+  );
+
+  const handleScrollMapSelectTts = useCallback(
+    (ratio: number) => {
+      recordNavDeparture();
+      scrollContainerByRatio(
+        readerRef.current,
+        ratio,
+        motionLevel === "off" ? "auto" : "smooth",
+      );
+    },
+    [motionLevel, recordNavDeparture],
   );
 
   const handleDeleteAnnotation = useCallback(
@@ -4766,6 +4906,9 @@ function App() {
                 }
               : {})}
           >
+            {/* reading-frame(RS-D5):替 reading-scroll 占据原 grid 轨道,
+                为右缘刻度层提供定位锚;副栏不挂刻度层。 */}
+            <div className="reading-frame">
             <div className="reading-scroll" ref={readerRef} onScroll={handleReaderScroll}>
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,
@@ -4836,6 +4979,15 @@ function App() {
                 />}
                 </ArticleErrorBoundary>
               </div>
+            </div>
+            {showScrollMap && (
+              <ScrollMap
+                marks={scrollMapMarks}
+                ttsRatio={ttsMapRatio}
+                onSelect={handleScrollMapSelect}
+                onSelectTts={handleScrollMapSelectTts}
+              />
+            )}
             </div>
 
             {splitActive && splitState && (

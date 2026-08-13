@@ -291,6 +291,11 @@ export interface ReadAloudControls {
   barOpen: boolean;
   sentenceIndex: number | null;
   sentenceCount: number;
+  /**
+   * First line box of the currently highlighted sentence, or null when
+   * idle / the range went stale — the scroll-map tick anchor (RS-D8).
+   */
+  getActiveSentenceRect: () => DOMRect | null;
   /** Starts from the sentence nearest the viewport and opens the bar. */
   start: () => void;
   /** Starts from the first sentence. */
@@ -325,10 +330,13 @@ export function useReadAloud(options: UseReadAloudOptions): ReadAloudControls {
   const [sentenceCount, setSentenceCount] = useState(0);
 
   const queueRef = useRef<ReadAloudQueue | null>(null);
+  /** Last painted sentence range, for the scroll-map tick (RS-D8). */
+  const activeRangeRef = useRef<Range | null>(null);
 
   /** Clears the previous sentence highlight and paints/scrolls the new one. */
   const applyHighlight = useCallback((index: number | null) => {
     clearSentenceHighlight(TTS_ACTIVE_ID);
+    activeRangeRef.current = null;
     if (index === null) return;
     const queue = queueRef.current;
     const sentence = queue?.sentences[index];
@@ -351,6 +359,7 @@ export function useReadAloud(options: UseReadAloudOptions): ReadAloudControls {
     // conflict with the highlight. Runtimes without the Highlight API keep
     // playing with scroll-follow only — never the DOM-wrapping fallback.
     applySentenceHighlight(TTS_ACTIVE_ID, range);
+    activeRangeRef.current = range;
     const reader = latest.current.readerRef.current;
     if (!reader) return;
     const rect = rangeFirstRect(range);
@@ -469,6 +478,12 @@ export function useReadAloud(options: UseReadAloudOptions): ReadAloudControls {
   const next = useCallback(() => playerRef.current?.next(), []);
   const previous = useCallback(() => playerRef.current?.previous(), []);
 
+  const getActiveSentenceRect = useCallback((): DOMRect | null => {
+    const range = activeRangeRef.current;
+    if (!range || !range.startContainer.isConnected) return null;
+    return rangeFirstRect(range);
+  }, []);
+
   // Document switch, library switch or leaving the reader view stop playback.
   useEffect(() => {
     if (playerRef.current?.getStatus() !== "idle") stop();
@@ -494,6 +509,7 @@ export function useReadAloud(options: UseReadAloudOptions): ReadAloudControls {
     barOpen,
     sentenceIndex,
     sentenceCount,
+    getActiveSentenceRect,
     start,
     startFromTop,
     toggle,

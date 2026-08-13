@@ -1,7 +1,7 @@
-# 方案草案：富滚动条 / minimap
+# 方案定稿：富滚动条 / minimap
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核定稿）
+- 状态：**定稿（基线已复核，决策见 §6 与 §8）**
 - 定位：在正文滚动区右缘叠加一条"刻度层"：标注四色点、搜索命中、书签、朗读当前句的纵向位置一目了然。不做像素级缩略图（minimap 渲染成本高、信息密度低），做的是"文档地图刻度条"。
 - 关联：数据源全部来自既有体系——标注 locator（`docs/plan-*` 无前置依赖）、库搜索结果、TTS cursor（`docs/plan-read-aloud.md`）；色阶语义与目录热力（`--stats-scale-*`）及标注四色一致。
 
@@ -101,3 +101,17 @@ buildScrollMapMarks(inputs): ScrollMapMark[]   // 排序、去重（同 ratio±0
 - 万字长文 + 数百标注时刻度重算的 rAF 帧预算：封顶 200 刻度 + 增量更新（TTS 只动一个），预计可控；定稿时补性能验收数字。
 - PDF 远页懒渲染下 `offsetTop` 依赖 aspectRatio 占位的准确性：占位高度与实渲染高度一致（同 ratio 计算），已核实骨架先例；若发现漂移，刻度按页号/总页数折算兜底。
 - 与既有右缘元素（朗读条 fixed 右下、related 浮层）的视觉拥挤：刻度条 z-index 放最低层并在浮层打开时保持穿透，截图验收把关。
+
+## 8. 定稿补记（2026-08-13 复核）
+
+基线复核结论：§1 全部事实成立（`.reading-scroll` 现位于 App.css L1207-1214、标注 mark 与 `data-annotation-id` 先例、`useReadAloud` 只暴露 `sentenceIndex`、搜索 markdown 命中无偏移；行号以 HEAD 为准）。落定与补充：
+
+| # | 决策 | 结论 |
+|---|------|------|
+| RS-D1..D4 | 均按推荐执行 | 刻度层 / DOM mark 优先 / markdown 搜索命中不显示（诚实降级）/ 开关默认开 |
+| RS-D5（新） | 布局宿主 | 主栏 `.reading-scroll` 外包一层 `.reading-frame`（相对定位，替它占据 content-grid 的原轨道），刻度层 absolute 挂 frame 右缘、`right` 让开 11px 原生滚动条；副栏不挂（纯净参考面） |
+| RS-D6（新） | 封顶策略 | ±0.002 同 kind+color 合并后仍超 200 时按索引均匀抽稀（确定性、保持分布），不做首 200 截断 |
+| RS-D7（新） | 点击语义 | annotation/bookmark 刻度按 id 回查标注走既有 `jumpToAnnotation`（含回退栈与强调语义）；search 与 TTS 刻度 `recordNavDeparture()` 后按 ratio 滚动容器 |
+| RS-D8（新） | TTS 位置来源 | 扩展 `useReadAloud` 暴露 `getActiveSentenceRect()`（内部保存最近一次句高亮 Range），刻度层不读 CSS Highlight 注册表；`sentenceIndex` 变化只更新这一枚刻度 |
+| RS-D9（新） | 三格式适配范围 | markdown：标注+书签+TTS；EPUB：标注+书签+搜索（章节）+TTS；PDF：标注（mark 缺失退页内 rects 折算）+书签+搜索（页）；PDF 原版式无 TTS（朗读本身不支持原版式） |
+| RS-D10（新） | 持久化 | `useReaderStore` 增 `showScrollMap`（默认 true），进 partialize，merge 归一坏值；不升 persist 版本（缺键回默认的既有加法模式） |

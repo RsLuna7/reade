@@ -204,6 +204,7 @@ type PersistedReaderPreferences = Partial<
     | "annotationColorNames"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
+    | "showScrollMap"
     | "ttsRate"
     | "ttsVoiceName"
   >
@@ -251,6 +252,10 @@ export function migrateReaderPreferences(
     ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
       ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
       : {}),
+    // 文档地图开关(plan-rich-scrollbar RS-D10):缺键/坏值回默认开。
+    ...(typeof state.showScrollMap === "boolean"
+      ? { showScrollMap: state.showScrollMap }
+      : {}),
     ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
     ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
   };
@@ -286,6 +291,11 @@ interface ReaderState {
    * default: fuzzy may anchor a mark to similar but different text. Persisted.
    */
   fuzzyAnnotationAnchoring: boolean;
+  /**
+   * 文档地图刻度层开关(plan-rich-scrollbar RS-D4/RS-D10):默认开,
+   * 持久化;关掉后不做任何刻度测量。
+   */
+  showScrollMap: boolean;
   expandedPaths: string[];
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
@@ -324,6 +334,7 @@ interface ReaderState {
   setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
   resetAnnotationColorNames: () => void;
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
+  setShowScrollMap: (enabled: boolean) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
   setTtsRate: (rate: number) => void;
@@ -403,6 +414,7 @@ export const useReaderStore = create<ReaderState>()(
         underlineColor: "blue",
         annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
         fuzzyAnnotationAnchoring: false,
+        showScrollMap: true,
         expandedPaths: [],
         activeView: "reader",
         dailyGoalMinutes: 0,
@@ -619,6 +631,10 @@ export const useReaderStore = create<ReaderState>()(
           set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
         },
 
+        setShowScrollMap: (enabled) => {
+          set({ showScrollMap: typeof enabled === "boolean" ? enabled : true });
+        },
+
         setActiveView: (view) => {
           set({ activeView: READER_VIEWS.has(view) ? view : "reader" });
         },
@@ -664,6 +680,7 @@ export const useReaderStore = create<ReaderState>()(
             underlineColor: "blue",
             annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
             fuzzyAnnotationAnchoring: false,
+            showScrollMap: true,
           });
         },
 
@@ -692,6 +709,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationColorNames: state.annotationColorNames,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
+        showScrollMap: state.showScrollMap,
         ttsRate: state.ttsRate,
         ttsVoiceName: state.ttsVoiceName,
       }),
@@ -741,6 +759,10 @@ export const useReaderStore = create<ReaderState>()(
             preferences.fuzzyAnnotationAnchoring,
             current.fuzzyAnnotationAnchoring,
           ),
+          showScrollMap:
+            typeof preferences.showScrollMap === "boolean"
+              ? preferences.showScrollMap
+              : current.showScrollMap,
           ttsRate:
             typeof preferences.ttsRate === "number"
               ? clampTtsRate(preferences.ttsRate)

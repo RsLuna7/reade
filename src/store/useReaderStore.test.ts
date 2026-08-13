@@ -418,6 +418,53 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
   });
 
+  it("persists the scroll-map switch and defaults it on (plan-rich-scrollbar RS-D10)", async () => {
+    useReaderStore.setState({ showScrollMap: true });
+
+    useReaderStore.getState().setShowScrollMap(false);
+    expect(useReaderStore.getState().showScrollMap).toBe(false);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ showScrollMap: false });
+
+    // A persisted opt-out survives rehydration on the next launch.
+    // (setState 会触发 persist 写入,必须先改内存态再覆写存储。)
+    useReaderStore.setState({ showScrollMap: true });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { showScrollMap: false },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().showScrollMap).toBe(false);
+  });
+
+  it("collapses corrupt scroll-map values to the default-on state", async () => {
+    useReaderStore.setState({ showScrollMap: true });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { showScrollMap: "no" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().showScrollMap).toBe(true);
+
+    // Older persisted payloads without the field never emit the key.
+    expect(
+      migrateReaderPreferences({ theme: "paper-light" }, READER_PREFERENCES_VERSION),
+    ).not.toHaveProperty("showScrollMap");
+
+    // 恢复默认把开关拨回默认开。
+    useReaderStore.getState().setShowScrollMap(false);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().showScrollMap).toBe(true);
+  });
+
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "金句",
