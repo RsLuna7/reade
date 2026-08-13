@@ -1441,6 +1441,48 @@ a:focus-visible {
 .pdf-page { position: relative; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
 .pdf-page canvas, .pdf-annotation-layer, .pdf-user-highlight-layer { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
 .pdf-page canvas { display: block; }
+
+/* "截取引用"框选层(plan-pdf-region-card):十字光标 + 半透明选框;
+   模式激活时临时关闭文本层指针事件防选字冲突,退出即恢复。 */
+.pdf-region-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pdf-region-rect {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+
+.pdf-region-select-active .pdf-text-layer {
+  user-select: none;
+  pointer-events: none;
+}
+
+.pdf-region-select-active .pdf-annotation-layer {
+  pointer-events: none;
+}
+
+.pdf-region-hint {
+  position: sticky;
+  z-index: 4;
+  top: 58px;
+  width: fit-content;
+  max-width: 100%;
+  margin: -12px auto 16px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
 /* No width/height override here: pdf.js setLayerDimensions sizes the text
    layer from --total-scale-factor and rotates it via [data-main-rotation]. */
 .pdf-text-layer { line-height: 1; opacity: 1; z-index: 1; }

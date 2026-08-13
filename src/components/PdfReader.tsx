@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import { ChevronLeft, ChevronRight, Columns3, FileText, Minus, Plus, ScanSearch } from "lucide-react";
+import { ChevronLeft, ChevronRight, Columns3, Crop, FileText, Minus, Plus, ScanSearch } from "lucide-react";
 import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, getDocument, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
 import { openExternalLink, readDocumentRange, readPdfReadingMode, type Annotation, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
@@ -15,6 +15,14 @@ import {
 } from "../lib/annotations";
 import type { TocItem } from "../lib/markdown";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
+import {
+  cropRegionFromSource,
+  normalizeRegionRect,
+  planRegionUpscale,
+  regionSourceRect,
+  type NormalizedRegionRect,
+  type RegionPoint,
+} from "../lib/pdfRegion";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
@@ -216,6 +224,8 @@ interface PdfReaderProps {
   /** Enables the fuzzy last-resort anchoring step (global preference). */
   fuzzyAnchoring?: boolean;
   readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
+  /** 区域引用出卡回调(plan-pdf-region-card):不传则不渲染"截取引用"钮。 */
+  onRegionCard?: (capture: PdfRegionCapture) => void;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
   onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
@@ -238,6 +248,12 @@ interface BoundError {
   message: string;
 }
 
+/** 框选结果:裁剪位图 + 页号(出处行"第 N 页"),即用即走不落库(RG-D2)。 */
+export interface PdfRegionCapture {
+  canvas: HTMLCanvasElement;
+  page: number;
+}
+
 interface PageProps {
   session: LoadedPdfSession;
   pageNumber: number;
@@ -245,6 +261,9 @@ interface PageProps {
   initialRatio: number;
   highlights: Annotation[];
   fuzzyAnchoring: boolean;
+  /** "截取引用"模式(plan-pdf-region-card):已渲染页挂框选层。 */
+  regionActive?: boolean;
+  onRegionCapture?: (capture: PdfRegionCapture) => void;
   onRatioChange: (page: number, ratio: number) => void;
   onJump: (page: number) => void;
 }
@@ -308,7 +327,7 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, onRatioChange, onJump }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, onRegionCapture, onRatioChange, onJump }: PageProps) {
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -500,6 +519,116 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     }
   }, [fuzzyAnchoring, highlights, pageNumber, renderNearby, textLayerRevision]);
 
+  // ---- "截取引用"框选层(plan-pdf-region-card §3.1–§3.2) ----
+  // 页内逻辑坐标 → 归一化矩形 → 位图整数裁剪;位图坐标一律按
+  // "归一化 × canvas 实际尺寸"换算,不读 devicePixelRatio(RG-D1)。
+  const [regionDrag, setRegionDrag] = useState<{ start: RegionPoint; end: RegionPoint } | null>(null);
+  const regionBusyRef = useRef(false);
+
+  useEffect(() => {
+    if (!regionActive) setRegionDrag(null);
+  }, [regionActive]);
+
+  const layerPoint = (event: React.PointerEvent<HTMLDivElement>): RegionPoint => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    return { x: event.clientX - rect.left, y: event.clientY - rect.top };
+  };
+
+  const finishRegionCapture = useCallback(
+    async (normRect: NormalizedRegionRect) => {
+      const canvas = canvasRef.current;
+      if (!canvas || canvas.width <= 0 || canvas.height <= 0 || regionBusyRef.current) return;
+      regionBusyRef.current = true;
+      try {
+        let source: HTMLCanvasElement = canvas;
+        const { sw, sh } = regionSourceRect(normRect, canvas.width, canvas.height);
+        const multiplier = planRegionUpscale({
+          cropWidth: sw,
+          cropHeight: sh,
+          bitmapWidth: canvas.width,
+          bitmapHeight: canvas.height,
+        });
+        if (multiplier !== null && session.lifecycle.isActive()) {
+          // 低清提质:对该页离屏重渲一次(一次性、按需);失败回落直接裁。
+          try {
+            const page = await session.pdf.getPage(pageNumber);
+            if (!session.lifecycle.isActive()) return;
+            const baseWidth = page.getViewport({ scale: 1 }).width;
+            const totalScale = baseWidth > 0 ? (canvas.width / baseWidth) * multiplier : 0;
+            if (totalScale > 0) {
+              const viewport = page.getViewport({ scale: totalScale });
+              const offscreen = globalThis.document.createElement("canvas");
+              offscreen.width = Math.floor(viewport.width);
+              offscreen.height = Math.floor(viewport.height);
+              const context = offscreen.getContext("2d");
+              if (context) {
+                await page.render({
+                  canvas: offscreen,
+                  canvasContext: context,
+                  viewport,
+                  annotationMode: AnnotationMode.DISABLE,
+                }).promise;
+                if (!session.lifecycle.isActive()) return;
+                source = offscreen;
+              }
+            }
+          } catch {
+            source = canvas;
+          }
+        }
+        const crop = cropRegionFromSource(source, source.width, source.height, normRect, (width, height) => {
+          const target = globalThis.document.createElement("canvas");
+          target.width = width;
+          target.height = height;
+          return target;
+        });
+        if (crop) onRegionCapture?.({ canvas: crop, page: pageNumber });
+      } finally {
+        regionBusyRef.current = false;
+      }
+    },
+    [onRegionCapture, pageNumber, session],
+  );
+
+  const handleRegionPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.currentTarget.setPointerCapture?.(event.pointerId);
+    const point = layerPoint(event);
+    setRegionDrag({ start: point, end: point });
+  };
+
+  const handleRegionPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!regionDrag) return;
+    const point = layerPoint(event);
+    setRegionDrag({ start: regionDrag.start, end: point });
+  };
+
+  const handleRegionPointerUp = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!regionDrag) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const normRect = normalizeRegionRect(
+      regionDrag.start,
+      { x: event.clientX - rect.left, y: event.clientY - rect.top },
+      rect.width,
+      rect.height,
+    );
+    setRegionDrag(null);
+    // 过小视为误触(§2 目标 4);位图裁剪异步进行,不阻塞指针交互。
+    if (normRect) void finishRegionCapture(normRect);
+  };
+
+  const regionRectStyle = (drag: { start: RegionPoint; end: RegionPoint }) => {
+    const left = Math.min(drag.start.x, drag.end.x);
+    const top = Math.min(drag.start.y, drag.end.y);
+    return {
+      left: `${left}px`,
+      top: `${top}px`,
+      width: `${Math.abs(drag.end.x - drag.start.x)}px`,
+      height: `${Math.abs(drag.end.y - drag.start.y)}px`,
+    };
+  };
+
   return <section
     className="pdf-page"
     id={`pdf-page-${pageNumber}`}
@@ -513,6 +642,18 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
       <div className="textLayer pdf-text-layer" ref={textRef} />
       <div className="pdf-user-highlight-layer" ref={highlightRef} />
       <div className="pdf-annotation-layer" ref={annotationRef} />
+      {regionActive && (
+        <div
+          className="pdf-region-layer"
+          data-testid={`pdf-region-layer-${pageNumber}`}
+          onPointerDown={handleRegionPointerDown}
+          onPointerMove={handleRegionPointerMove}
+          onPointerUp={handleRegionPointerUp}
+          onPointerCancel={() => setRegionDrag(null)}
+        >
+          {regionDrag && <div className="pdf-region-rect" style={regionRectStyle(regionDrag)} />}
+        </div>
+      )}
     </>}
     <span className="reade-motion-locator-highlight" aria-hidden="true" />
     <span className="pdf-page-number">{pageNumber}</span>
@@ -547,6 +688,7 @@ export function PdfReader({
   annotations = [],
   fuzzyAnchoring = false,
   readerRef,
+  onRegionCard,
   onBrokenAnnotationsChange,
   onApproximateAnnotationsChange,
   onTocChange,
@@ -566,6 +708,9 @@ export function PdfReader({
   const [scale, setScale] = useState(1);
   const [nativePageWidth, setNativePageWidth] = useState<number | null>(null);
   const [currentPage, setCurrentPage] = useState(1);
+  // "截取引用"模式(plan-pdf-region-card):仅原版式;Esc 退出,换文档/
+  // 切阅读模式自动退出;激活期间文本层 pointer-events 由 CSS 关闭。
+  const [regionSelect, setRegionSelect] = useState(false);
   const [boundReading, setBoundReading] = useState<BoundReadingMode | null>(null);
   const [readingLoadingKey, setReadingLoadingKey] = useState<string | null>(null);
   const sourceKey = sourceIdentity(relativePath, size, modified);
@@ -636,7 +781,23 @@ export function PdfReader({
     setNativePageWidth(null);
     setBoundReading(null);
     setReadingLoadingKey(null);
+    setRegionSelect(false);
   }, [sourceKey]);
+
+  // 阅读模式没有页位图可裁;Esc 只在模式激活时消费(不 preventDefault,
+  // App 全局 Esc 链的收尾行为保持不变)。
+  useEffect(() => {
+    if (mode !== "original") setRegionSelect(false);
+  }, [mode]);
+
+  useEffect(() => {
+    if (!regionSelect) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setRegionSelect(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [regionSelect]);
 
   useEffect(() => {
     onTocChange([]);
@@ -957,7 +1118,7 @@ export function PdfReader({
     };
   }, [mode, pageSelector, reading, session, setActivePage]);
 
-  return <div className="pdf-reader" ref={rootRef}>
+  return <div className={`pdf-reader${regionSelect ? " pdf-region-select-active" : ""}`} ref={rootRef}>
     <div className="pdf-toolbar" role="toolbar" aria-label="PDF 阅读工具" ref={toolbarRef}>
       <div className="pdf-toolbar-group pdf-mode-toggle" data-mode={mode}>
         <span className="pdf-mode-indicator" aria-hidden="true" />
@@ -976,8 +1137,23 @@ export function PdfReader({
           <button type="button" aria-label="放大" onClick={() => setScale((value) => Math.min(3, value + .1))}><Plus size={14} /></button>
           <button type="button" onClick={() => void fitWidth()}>适宽</button>
         </div>
+        {onRegionCard && <div className="pdf-toolbar-group">
+          <button
+            type="button"
+            className={regionSelect ? "active" : ""}
+            aria-pressed={regionSelect}
+            disabled={!session}
+            title={regionSelect ? "退出截取引用（Esc）" : "框选页面区域生成引用卡片"}
+            onClick={() => setRegionSelect((active) => !active)}
+          ><Crop size={14} />截取引用</button>
+        </div>}
       </>}
     </div>
+    {regionSelect && mode === "original" && (
+      <div className="pdf-region-hint" role="status">
+        在页面上拖出一个矩形即可生成引用卡片；按 Esc 退出。
+      </div>
+    )}
     {error && <div className="pdf-state pdf-state--error">{error}</div>}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
     {mode === "original" && session && <div className="pdf-pages" style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
@@ -989,6 +1165,8 @@ export function PdfReader({
           scale={scale}
           initialRatio={pageRatiosRef.current.get(page) ?? 1.414}
           fuzzyAnchoring={fuzzyAnchoring}
+          regionActive={regionSelect}
+          onRegionCapture={onRegionCard}
           highlights={annotations.filter(
             (annotation) =>
               isAnnotationMarkKind(annotation.kind) &&

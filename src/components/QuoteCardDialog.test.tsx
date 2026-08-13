@@ -16,15 +16,21 @@ vi.mock("../lib/quoteCard", async (importOriginal) => {
     downloadBlobFile: vi.fn(),
   };
 });
+vi.mock("../lib/regionCard", async (importOriginal) => {
+  const original = await importOriginal<typeof import("../lib/regionCard")>();
+  return { ...original, renderRegionCard: vi.fn() };
+});
 
 import {
   copyImageToClipboard,
   downloadBlobFile,
   renderQuoteCardDetailed,
 } from "../lib/quoteCard";
+import { renderRegionCard, type RegionImageSource } from "../lib/regionCard";
 import { QuoteCardDialog } from "./QuoteCardDialog";
 
 const renderCardMock = vi.mocked(renderQuoteCardDetailed);
+const renderRegionMock = vi.mocked(renderRegionCard);
 const copyMock = vi.mocked(copyImageToClipboard);
 const downloadMock = vi.mocked(downloadBlobFile);
 
@@ -66,6 +72,33 @@ beforeEach(() => {
     blob: new Blob([styleId], { type: "image/png" }),
     layout: fakeLayout(styleId),
   }));
+  renderRegionMock.mockReset().mockResolvedValue({
+    blob: new Blob(["region"], { type: "image/png" }),
+    layout: {
+      width: 720,
+      height: 480,
+      image: { x: 56, y: 56, width: 608, height: 300 },
+      divider: { x1: 56, x2: 664, y: 400 },
+      attribution: {
+        lines: ["《书》 · 第 3 页"],
+        x: 56,
+        y: 418,
+        font: { sizePx: 15, family: "sans" },
+        lineHeightPx: 22,
+        align: "left",
+        color: "muted",
+      },
+      brand: {
+        lines: ["Reade"],
+        x: 620,
+        y: 418,
+        font: { sizePx: 16, family: "serif", weight: 600 },
+        lineHeightPx: 22,
+        align: "left",
+        color: "accent",
+      },
+    },
+  });
   copyMock.mockReset().mockResolvedValue(true);
   downloadMock.mockReset();
   vi.stubGlobal("URL", {
@@ -155,5 +188,40 @@ describe("QuoteCardDialog", () => {
     );
     expect(await screen.findByRole("alert")).toHaveTextContent("canvas 不可用");
     expect(screen.getByRole("button", { name: "复制图片" })).toBeDisabled();
+  });
+});
+
+describe("QuoteCardDialog region variant (plan-pdf-region-card RG-D3)", () => {
+  const image = { width: 800, height: 400 } as unknown as RegionImageSource;
+  const regionSource = {
+    kind: "region" as const,
+    image,
+    sourceTitle: "矩阵分析",
+    page: 12,
+  };
+
+  it("renders through renderRegionCard, retitles the dialog and hides the style toggle", async () => {
+    render(
+      <QuoteCardDialog source={regionSource} onClose={() => undefined} onNotice={() => undefined} />,
+    );
+    expect(screen.getByRole("dialog", { name: "引用卡片" })).toBeInTheDocument();
+    await screen.findByRole("img", { name: "引用卡片预览" });
+    expect(renderRegionMock).toHaveBeenCalledTimes(1);
+    expect(renderRegionMock.mock.calls[0][0]).toBe(image);
+    expect(renderRegionMock.mock.calls[0][1]).toMatchObject({ sourceTitle: "矩阵分析", page: 12 });
+    expect(renderCardMock).not.toHaveBeenCalled();
+    expect(screen.queryByRole("group", { name: "卡片版式" })).not.toBeInTheDocument();
+  });
+
+  it("downloads with the region file name and copies through the shared exit", async () => {
+    render(
+      <QuoteCardDialog source={regionSource} onClose={() => undefined} onNotice={() => undefined} />,
+    );
+    await screen.findByRole("img", { name: "引用卡片预览" });
+    fireEvent.click(screen.getByRole("button", { name: "下载 PNG" }));
+    expect(downloadMock.mock.calls[0][0]).toBe("reade-引用-矩阵分析-p12.png");
+
+    fireEvent.click(screen.getByRole("button", { name: "复制图片" }));
+    await waitFor(() => expect(copyMock).toHaveBeenCalledTimes(1));
   });
 });

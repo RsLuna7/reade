@@ -1,7 +1,7 @@
-# 方案草案：PDF 区域引用卡片
+# 方案定稿：PDF 区域引用卡片
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（实施中）**
 - 定位：原版式 PDF 下框选一个矩形区域 → 裁剪该区域位图 + 自动出处（文档名 · 第 N 页）→ 走金句卡片的预览/复制/下载既有出口。对无法选中文字的扫描版 PDF 尤其有用（图表、公式、影印段落都能"摘"下来）。
 - 关联：位图来自 `PdfReader` 已渲染的页 canvas（DPR 语义必须对齐）；出卡管线复用 `quoteCard.ts` 的主题取色与 `QuoteCardDialog` 出口（`docs/plan-quote-cards.md`）；与 PDF 双页对开（`docs/plan-pdf-spread.md`）正交但共享页宿主结构。
 
@@ -71,21 +71,30 @@ cropPdfRegion(canvas: HTMLCanvasElement, normRect, renderedPixelRatio): Promise<
 | 4 | `src/components/QuoteCardDialog.tsx` | image source 变体 | S-M |
 | 5 | `src/App.css`、`docs/USER_GUIDE.md` | 选框/光标样式 + 文档 | S |
 
-## 5. 验收标准（草案级）
+## 5. 验收标准（实施回填）
 
-- [ ] 纯函数测试：逻辑→归一化→位图坐标往返、pixelRatio 1/1.5/2 三档、最小门槛、边缘钳制。
-- [ ] 运行时：扫描版 PDF 框选图表出卡——出处页号正确、清晰度合格（100% 与 50% 缩放各一次，验证提质重渲）；复制到剪贴板可粘贴、下载文件可打开。
-- [ ] 交互：Esc 退出模式；框选期间不触发文本选择与既有选区工具条；文本层功能退出模式后恢复。
-- [ ] 四主题 × 明暗抽查取色；`pnpm test`、`tsc --noEmit` 回归。
+- [x] 纯函数测试：任意方向拖拽归一化、越界钳制、最小门槛（双轴）、同一归一化矩形在 ratio 1/1.5/2 位图上的换算、边缘取整钳制、提质重渲触发/目标/4096 封顶/无收益跳过、1:1 裁剪参数、文件名清洗——`pdfRegion.test.ts` 15 例。
+- [x] 卡片合成测试：横/竖位图适配与超高钳制、标题省略保页号后缀、绘制顺序与取色、2× 渲染——`regionCard.test.ts` 7 例。
+- [x] 组件测试：无回调不渲染入口、模式开关挂层/根类名/Esc 退出、拖拽选框绘制、切阅读模式自动退出——`PdfReader.test.tsx` 新增 4 例；对话框 region 变体（渲染管线切换、隐藏版式切换、文件名/复制出口）——`QuoteCardDialog.test.tsx` 新增 2 例。
+- [x] 受控 harness 视觉：合成位图喂真实 QuoteCardDialog region 变体，浅色/青瓷深色两张（`output/playwright/roadmap-batch5/region-card-*.png`）——暗色下 PDF 位图保持白底浮于暗纸面、细线框与出处行取色正确。
+- [x] `pnpm test`、`tsc --noEmit` 全绿；CSP/capability/Rust 零改动。
+- [ ] **桌面真机待验收**（Web 无 PDF、纯浏览器无 Tauri IPC，无法在本环境端到端验证）：真实 PDF 上的框选手感与选框视觉、50% 缩放下提质重渲的实际清晰度、跨屏 DPR 变化后裁剪对位、剪贴板 PNG 粘贴到外部应用。裁剪/重渲/合成逻辑均有单测锚定，风险集中在交互手感而非坐标正确性。
 
 ## 6. 决策点
 
-| # | 决策 | 推荐 | 备选 |
+| # | 决策 | 定稿 | 备选 |
 |---|------|------|------|
-| RG-D1 | 位图来源 | **已渲染页 canvas 直接裁 + 低清时按需离屏重渲**（成本与质量平衡） | 永远重渲高清（每次框选都付整页渲染成本）；只裁现有（50% 缩放下卡片糊） |
+| RG-D1 | 位图来源 | **已渲染页 canvas 直接裁 + 低清时按需离屏重渲**；裁剪坐标一律按"归一化 × 实际位图尺寸"换算（对位图本身归一,天然免疫 DPR 漂移）；重渲阈值=裁剪短边 <480px,目标短边 960px,页位图长边封顶 4096px,失败回落直接裁 | 永远重渲高清（每次框选都付整页渲染成本）；只裁现有（50% 缩放下卡片糊） |
 | RG-D2 | 是否存为标注 | **不存（即用即走）**——rects-only 无文本标注会污染回顾/导出/检索的全部文本假设 | 存为新 kind（跨层改动大，需独立方案，远期） |
-| RG-D3 | 预览容器 | **扩展 QuoteCardDialog 变体**（出口/快捷键/样式全复用） | 新独立 dialog（重复三套出口逻辑，否） |
-| RG-D4 | 跨页框选 | **钳制到起始页**（跨页位图拼接涉及页间距/边框，复杂且少用） | 支持跨页拼合（否） |
+| RG-D3 | 预览容器 | **扩展 QuoteCardDialog 为 source 判别联合**（`kind:"region"` 变体：隐藏版式切换、标题改"引用卡片"、文件名走 `regionCardFileName`；复制/下载/错误态全复用） | 新独立 dialog（重复三套出口逻辑，否） |
+| RG-D4 | 跨页框选 | **钳制到起始页**（框选层挂在每页宿主内,坐标天然页内相对） | 支持跨页拼合（否） |
+
+**定稿补充决策**
+
+- 框选层实现为 `PdfPage` 内的 pointer 捕获覆盖层（仅 `regionActive && renderNearby` 时挂载,未渲染页无层即不可选）；模式激活时根元素挂 `pdf-region-select-active`,CSS 关闭文本层 pointer-events 防选字冲突,退出即恢复。
+- Esc 退出模式由 PdfReader 自己的 window 监听处理（不 preventDefault,App 全局 Esc 链的收尾行为保持不变）；切换文档/切到阅读模式自动退出。
+- 裁剪与合成走纯函数：`normalizeRegionRect`/`regionSourceRect`/`planRegionUpscale`/`cropRegionFromSource`（pdfRegion.ts,注入 canvas 工厂可测）+ `layoutRegionCard`/`renderRegionCard`（regionCard.ts,注入 measure/canvas）。
+- 视觉验收现实约束照草案：Web 无 PDF、纯浏览器无 Tauri IPC——卡片合成用受控 harness（对话框喂合成 canvas）截图,框选交互的真实 PDF 端到端列入"桌面真机待验收",不伪造。
 
 ## 7. 风险
 

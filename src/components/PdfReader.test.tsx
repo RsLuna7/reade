@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, render, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const pdfMocks = vi.hoisted(() => ({
@@ -201,6 +201,116 @@ describe("PdfReaderHandle mode switching", () => {
     expect(readerRef.current!.getMode()).toBe("original");
     expect(view.container.querySelector(".pdf-reading-mode")).toBeNull();
 
+    act(() => view.unmount());
+  });
+});
+
+describe("PDF region capture mode (plan-pdf-region-card)", () => {
+  /** 解析出带 getPage/getOutline 的最小 pdf 双身,让 PdfPage 挂载。 */
+  function fakePdf(numPages = 1) {
+    return {
+      numPages,
+      getOutline: vi.fn().mockResolvedValue(null),
+      // getViewport 永不 resolve 的渲染路径:renderNearby 页停在 getPage,
+      // 不触发 canvas 渲染(jsdom 无 2d 上下文)。
+      getPage: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+  }
+
+  const common = {
+    relativePath: "A.pdf",
+    size: 100,
+    modified: 1,
+    indexStatus: "ready" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  it("stays hidden without the onRegionCard callback", async () => {
+    const view = render(<PdfReader {...common} />);
+    await act(async () => {
+      pdfMocks.tasks[0].resolve(fakePdf());
+      await Promise.resolve();
+    });
+    expect(view.queryByRole("button", { name: /截取引用/ })).toBeNull();
+    act(() => view.unmount());
+  });
+
+  it("toggles the crosshair mode, mounts per-page layers and exits on Escape", async () => {
+    const view = render(<PdfReader {...common} onRegionCard={vi.fn()} />);
+    await act(async () => {
+      pdfMocks.tasks[0].resolve(fakePdf(2));
+      await Promise.resolve();
+    });
+    const toggle = await view.findByRole("button", { name: "截取引用" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
+    expect(view.container.querySelector(".pdf-region-layer")).toBeNull();
+
+    fireEvent.click(toggle);
+    expect(toggle).toHaveAttribute("aria-pressed", "true");
+    expect(view.container.querySelector(".pdf-reader")).toHaveClass("pdf-region-select-active");
+    // 初始 renderNearby 只覆盖前两页,两页各挂一层。
+    expect(view.container.querySelectorAll(".pdf-region-layer")).toHaveLength(2);
+    expect(view.getByRole("status")).toHaveTextContent("拖出一个矩形");
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    await waitFor(() => expect(toggle).toHaveAttribute("aria-pressed", "false"));
+    expect(view.container.querySelector(".pdf-region-layer")).toBeNull();
+    expect(view.container.querySelector(".pdf-region-select-active")).toBeNull();
+    act(() => view.unmount());
+  });
+
+  it("draws the drag rectangle while selecting", async () => {
+    const view = render(<PdfReader {...common} onRegionCard={vi.fn()} />);
+    await act(async () => {
+      pdfMocks.tasks[0].resolve(fakePdf(1));
+      await Promise.resolve();
+    });
+    fireEvent.click(await view.findByRole("button", { name: "截取引用" }));
+    const layer = view.getByTestId("pdf-region-layer-1");
+    vi.spyOn(layer, "getBoundingClientRect").mockReturnValue({
+      x: 0, y: 0, left: 0, top: 0, right: 600, bottom: 800, width: 600, height: 800,
+      toJSON: () => ({}),
+    } as DOMRect);
+
+    fireEvent.pointerDown(layer, { button: 0, clientX: 100, clientY: 120, pointerId: 1 });
+    fireEvent.pointerMove(layer, { clientX: 300, clientY: 360, pointerId: 1 });
+    const rect = view.container.querySelector<HTMLElement>(".pdf-region-rect");
+    expect(rect).not.toBeNull();
+    expect(rect!.style.left).toBe("100px");
+    expect(rect!.style.width).toBe("200px");
+    expect(rect!.style.height).toBe("240px");
+
+    fireEvent.pointerUp(layer, { clientX: 300, clientY: 360, pointerId: 1 });
+    expect(view.container.querySelector(".pdf-region-rect")).toBeNull();
+    act(() => view.unmount());
+  });
+
+  it("leaves the mode when switching to reading view", async () => {
+    vi.mocked(readPdfReadingMode).mockReset();
+    vi.mocked(readPdfReadingMode).mockResolvedValue({
+      relativePath: "A.pdf",
+      status: "ready",
+      pages: [{ page: 1, markdown: "hello", needsOcr: false, ocrReason: null }],
+      missingPages: [],
+      warning: null,
+    });
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = render(<PdfReader {...common} onRegionCard={vi.fn()} readerRef={readerRef} />);
+    await act(async () => {
+      pdfMocks.tasks[0].resolve(fakePdf(1));
+      await Promise.resolve();
+    });
+    fireEvent.click(await view.findByRole("button", { name: "截取引用" }));
+    await act(async () => readerRef.current!.setMode("reading"));
+    expect(view.queryByRole("button", { name: "截取引用" })).toBeNull();
+
+    act(() => readerRef.current!.setMode("original"));
+    const toggle = await view.findByRole("button", { name: "截取引用" });
+    expect(toggle).toHaveAttribute("aria-pressed", "false");
     act(() => view.unmount());
   });
 });

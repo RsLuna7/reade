@@ -4988,6 +4988,15 @@ function App() {
                   annotations={annotations}
                   fuzzyAnchoring={fuzzyAnchoring}
                   readerRef={pdfReaderHandleRef}
+                  onRegionCard={({ canvas, page }) =>
+                    // 区域引用卡片(plan-pdf-region-card):即用即走,不落库。
+                    setQuoteCardSource({
+                      kind: "region",
+                      image: canvas,
+                      sourceTitle: currentDocument.title,
+                      page,
+                    })
+                  }
                   onBrokenAnnotationsChange={setReaderBrokenIds}
                   onApproximateAnnotationsChange={setReaderApproximateIds}
                   onTocChange={handleTocChange}
