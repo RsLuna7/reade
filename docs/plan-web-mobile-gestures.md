@@ -1,7 +1,14 @@
-# 方案草案：Web 移动端阅读手势
+# 方案定稿：Web 移动端阅读手势
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日）；2026-08-13 复核基线并升级定稿（随实现落地）
+- 状态：**已实施（真机 iOS/Android 验收待完成，见下）**
+- 定稿决策：MG-D1 三重守卫——JS 侧 `mobileGesturesEnabled(APP_RUNTIME, matchMedia("(max-width: 640px) and (pointer: coarse)"))`，CSS 侧媒体查询 × `:root[data-runtime="web"]`（App 挂载时写入，桌面含触屏 Windows 设备不命中）；MG-D2 复用既有 pointerup + selectionchange 双通道捕获（基线复核发现该通道已存在，无需新增）；MG-D3 滚动方向感知半隐（下滑 >48px 半隐、上滑即回、留 14px 提示带）；MG-D4 屏缘热区 24px。
+- 实施落点：`src/lib/edgeSwipe.ts`（`resolveSwipeEdge`/`resolveSwipe` 纯函数 + `attachEdgeSwipe`/`attachSwipeDismiss`）、`src/components/MobileToolbar.tsx`（五钮底部工具条，「更多」直达命令面板）、`src/App.tsx`（手势接线、抽屉反向轻扫关闭、聚焦搜索、滚动半隐）、`src/App.css`（移动语境样式与 ≥44px 触控目标、朗读条/读完接着读卡上移、顶栏收敛为标题行）。
+- 与草案的偏离：
+  1. 触屏选区路径**无需新增**——基线复核确认 App 已有 pointerup + 220ms 防抖 selectionchange 双通道捕获（早于本案落地），本案只补 44px 触控目标样式；
+  2. 手势只响应 `pointerType === "touch"`（触控笔/鼠标不触发轻扫，桌面语义交给按钮）；
+  3. 程序化滚动（阅读位置恢复走 `.reading-scroll` 的 smooth 滚动，会展开成一串下滑帧）加了 1.2s 方向判定抑制窗，防止底部工具条在恢复位置时被误隐藏。
+- 未验证项：真机 iOS Safari / Android Chrome 的屏缘手势与系统手势竞争、`selectionchange` 触发时序（Playwright 触屏仿真已验收，逃生门=底部工具条按钮）；底部工具条与朗读条同屏的真机安全区表现。
 - 定位：窄屏（手机）上的 Web 版体验补课：底部工具条替代顶栏密集按钮、左右屏缘轻扫呼出文档树/目录抽屉、长按选区弹标注工具、触控目标 ≥44px。桌面端行为零变化。
 - 关联：抽屉本体复用既有 640/820 断点的 fixed 侧栏抽屉与 toc-drawer（`App.css` 响应式体系）；选区工具条与标注动作复用 `AnnotationUi.tsx` 现状；PWA 方案（`docs/plan-web-pwa.md`）落地后本方案是"装到主屏后像原生"的另一半。
 

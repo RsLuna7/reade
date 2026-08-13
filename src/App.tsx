@@ -259,6 +259,14 @@ import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 // Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
 // 高亮复用朗读同款 CSS Custom Highlight(第二注册名,零 DOM 侵入)。
 import { locateNormalizedText, normalizeShareText } from "./lib/textLocate";
+// Web 移动端阅读手势(plan-web-mobile-gestures):判定纯函数在 lib,
+// App 只在 web + 窄屏粗指针语境挂监听,桌面零回归。
+import {
+  attachEdgeSwipe,
+  attachSwipeDismiss,
+  mobileGesturesEnabled,
+} from "./lib/edgeSwipe";
+import { MobileToolbar } from "./components/MobileToolbar";
 import {
   applySentenceHighlight,
   clearSentenceHighlight,
@@ -1583,6 +1591,12 @@ function App() {
   const [splitPos, setSplitPos] = useState(SPLIT_POS_DEFAULT);
   const [compactTocOpen, setCompactTocOpen] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
+  // 底部工具条滚动方向感知半隐(MG-D3);仅移动语境下更新。
+  // 程序化滚动(阅读位置恢复等,.reading-scroll 是 smooth 滚动,会展开成
+  // 一串下滑帧)在时间窗内不参与方向判定,防止误隐藏。
+  const [mobileToolbarHidden, setMobileToolbarHidden] = useState(false);
+  const mobileScrollAnchor = useRef(0);
+  const mobileScrollSuppressUntil = useRef(0);
   const [tocState, setTocState] = useState<{ path: string; items: TocItem[] } | null>(null);
   const [activeHeadingState, setActiveHeadingState] = useState<{ path: string; id: string | null } | null>(null);
   const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
@@ -1655,6 +1669,10 @@ function App() {
   } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const compactLibraryLayout = useMediaQuery("(max-width: 640px)");
+  // MG-D1 三重守卫:web 运行时(编译时) + 窄屏 + 粗指针。桌面构建里
+  // mobileGesturesEnabled 恒为 false,手势与底部工具条整条路径不生效。
+  const coarseNarrowViewport = useMediaQuery("(max-width: 640px) and (pointer: coarse)");
+  const mobileReadingContext = mobileGesturesEnabled(APP_RUNTIME, coarseNarrowViewport);
   /** ≥1080px 才允许分栏;窄窗自动退化、恢复宽度自动回来(SP-D6)。 */
   const splitWide = useMediaQuery(SPLIT_MEDIA_QUERY);
   const readerRef = useRef<HTMLDivElement>(null);
@@ -3922,6 +3940,50 @@ function App() {
     [showNotice],
   );
 
+  // CSS 侧的运行时守卫锚点(MG-D1):移动语境样式以
+  // :root[data-runtime="web"] 限定,桌面(含触屏 Windows 设备)不命中。
+  useEffect(() => {
+    document.documentElement.dataset.runtime = APP_RUNTIME;
+  }, []);
+
+  // 屏缘轻扫(MG §3.1):左缘右扫开文档树抽屉、右缘左扫开目录抽屉。
+  // 任一抽屉开启时屏缘手势让位(此时生效的是下方的反向轻扫关闭),
+  // 判定失败(纵向滚动/回撤)零副作用,浏览器手势冲突时按钮入口兜底。
+  useEffect(() => {
+    if (!mobileReadingContext || activeView !== "reader") return;
+    if (mobileLibraryOpen || compactTocOpen) return;
+    return attachEdgeSwipe(document.body, {
+      onLeftEdgeSwipe: () => setMobileLibraryOpen(true),
+      onRightEdgeSwipe: () => {
+        if (useReaderStore.getState().currentContent) setCompactTocOpen(true);
+      },
+    });
+  }, [activeView, compactTocOpen, mobileLibraryOpen, mobileReadingContext]);
+
+  // 抽屉开启时的反向轻扫关闭(与 backdrop 点击并存的第二条退路)。
+  useEffect(() => {
+    if (!mobileReadingContext || !mobileLibraryOpen) return;
+    return attachSwipeDismiss(document.body, {
+      direction: "left",
+      onDismiss: () => setMobileLibraryOpen(false),
+    });
+  }, [mobileLibraryOpen, mobileReadingContext]);
+
+  useEffect(() => {
+    if (!mobileReadingContext || !compactTocOpen) return;
+    return attachSwipeDismiss(document.body, {
+      direction: "right",
+      onDismiss: () => setCompactTocOpen(false),
+    });
+  }, [compactTocOpen, mobileReadingContext]);
+
+  // 聚焦搜索:搜索框住在侧栏抽屉里,先开抽屉、解除 inert 后再聚焦
+  // (与命令面板 cmd:focus-search 同一套时序)。
+  const handleMobileFocusSearch = useCallback(() => {
+    setMobileLibraryOpen(true);
+    window.requestAnimationFrame(() => searchRef.current?.focus());
+  }, []);
+
   useEffect(() => {
     const applyTheme = () => {
       document.documentElement.dataset.theme = theme;
@@ -4685,6 +4747,11 @@ function App() {
       "--reading-progress",
       String(Math.min(1, Math.max(0, value / 100))),
     );
+    // 底部工具条以恢复后的位置重新锚定并回到可见态:位置恢复是程序化
+    // 滚动(smooth 滚动会展开成一串下滑帧),窗口期内不做方向判定。
+    mobileScrollAnchor.current = reader.scrollTop;
+    mobileScrollSuppressUntil.current = performance.now() + 1200;
+    setMobileToolbarHidden(false);
   }, [currentPath, currentContent, currentLocator, schedulePdfPositionRestore, snapshot?.rootPath]);
 
   useEffect(() => {
@@ -4805,6 +4872,18 @@ function App() {
         String(Math.min(1, Math.max(0, value / 100))),
       );
 
+      // 底部工具条滚动方向感知(MG-D3):下滑且离顶 >48px 即半隐,
+      // 上滑或回到顶部即恢复;仅移动语境参与,桌面不产生该 state 更新。
+      if (mobileReadingContext) {
+        const previousTop = mobileScrollAnchor.current;
+        const top = reader.scrollTop;
+        mobileScrollAnchor.current = top;
+        if (performance.now() >= mobileScrollSuppressUntil.current) {
+          if (top > previousTop + 2 && top > 48) setMobileToolbarHidden(true);
+          else if (top < previousTop - 2 || top <= 48) setMobileToolbarHidden(false);
+        }
+      }
+
       // H0 写入支路:同一 rAF 里只采样(ratio 上面已算好),真正落盘交给
       // 500ms trailing debounce,避免每帧写 localStorage。
       const contentKind = currentContent?.kind;
@@ -4843,7 +4922,7 @@ function App() {
         return { path: currentPath, id: nextActive };
       });
     });
-  }, [currentContent?.kind, currentPath, flushPendingPosition]);
+  }, [currentContent?.kind, currentPath, flushPendingPosition, mobileReadingContext]);
 
   useEffect(
     () => () => {
@@ -5777,6 +5856,19 @@ function App() {
             onOpenLibraryHub={openAnnotationHub}
           />
         </aside>
+
+        {IS_WEB_RUNTIME && (
+          <MobileToolbar
+            hidden={mobileToolbarHidden}
+            themeMode={themeMode}
+            hasDocument={Boolean(currentContent) && !overlayViewOpen}
+            onOpenLibrary={() => setMobileLibraryOpen(true)}
+            onOpenToc={() => setCompactTocOpen(true)}
+            onFocusSearch={handleMobileFocusSearch}
+            onToggleTheme={toggleTheme}
+            onOpenMore={() => setCommandPaletteOpen(true)}
+          />
+        )}
 
         <SelectionToolbar
           open={Boolean(pendingSelection) && annotationTool === "view"}

@@ -5394,6 +5394,105 @@ button.links-panel-entry:focus-visible {
   }
 }
 
+/* ---------------------------------------------------------------------------
+   Web 移动端阅读手势(plan-web-mobile-gestures)
+   三重守卫:媒体查询(窄屏 + 粗指针)× :root[data-runtime="web"]。
+   桌面运行时(含触屏 Windows 设备)与宽窗/细指针语境不命中任何规则。
+--------------------------------------------------------------------------- */
+
+/* 底部工具条默认不渲染视觉(组件仅 Web 构建挂载,显隐交给下方媒体查询)。 */
+.mobile-toolbar {
+  display: none;
+}
+
+@media (max-width: 640px) and (pointer: coarse) {
+  :root[data-runtime="web"] .mobile-toolbar {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 30;
+    display: grid;
+    grid-auto-columns: 1fr;
+    grid-auto-flow: column;
+    padding: 4px 8px calc(4px + env(safe-area-inset-bottom, 0px));
+    border-top: 1px solid var(--line-strong);
+    background: color-mix(in srgb, var(--paper-raised) 92%, transparent);
+    backdrop-filter: blur(10px);
+    transition: transform var(--motion-standard) var(--motion-ease);
+  }
+
+  /* 下滑半隐:留一条提示带(14px + 安全区),上滑即回(MG-D3)。 */
+  :root[data-runtime="web"] .mobile-toolbar[data-hidden="true"] {
+    transform: translateY(calc(100% - 14px - env(safe-area-inset-bottom, 0px)));
+  }
+
+  :root[data-runtime="web"] .mobile-toolbar button {
+    display: grid;
+    min-height: 52px;
+    gap: 2px;
+    justify-items: center;
+    align-content: center;
+    padding: 4px 0;
+    border: 0;
+    border-radius: 10px;
+    color: var(--ink-soft);
+    background: transparent;
+    font-size: 10px;
+  }
+
+  :root[data-runtime="web"] .mobile-toolbar button:disabled {
+    opacity: 0.4;
+  }
+
+  /* 顶栏收敛为标题行:核心动作已迁至底部工具条,其余进「更多」。 */
+  :root[data-runtime="web"] .topbar-actions {
+    display: none;
+  }
+
+  :root[data-runtime="web"] .breadcrumb {
+    padding-right: 16px;
+  }
+
+  /* 正文与浮层为底部工具条让位。 */
+  :root[data-runtime="web"] .article-shell {
+    padding-bottom: 150px;
+  }
+
+  :root[data-runtime="web"] .read-aloud-bar {
+    right: 12px;
+    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
+  }
+
+  :root[data-runtime="web"] .read-next-card {
+    bottom: calc(76px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* 触控目标 ≥44px(§2.4):图标钮、选区工具条、树行、目录行、tab。 */
+  :root[data-runtime="web"] .icon-button {
+    width: 44px;
+    height: 44px;
+  }
+
+  :root[data-runtime="web"] .annotation-toolbar button,
+  :root[data-runtime="web"] .annotation-toolbar .annotation-color-swatch {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  :root[data-runtime="web"] .tree-row,
+  :root[data-runtime="web"] .toc-link,
+  :root[data-runtime="web"] .side-panel-tabs button {
+    min-height: 44px;
+  }
+
+  /* 屏缘热区内的纵向滚动交给浏览器,横向位移由手势层判定
+     (判定成功前不 preventDefault,pan-y 保证纵向滚动零损耗)。 */
+  :root[data-runtime="web"] .reading-scroll {
+    touch-action: pan-y pinch-zoom;
+  }
+}
+
 :root[data-motion="off"] .spinner,
 :root[data-motion="off"] .spin-icon,
 :root[data-motion="off"] .document-tree__index--indexing {
