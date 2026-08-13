@@ -44,6 +44,11 @@ export interface HomeViewProps {
   reviewSummary?: HomeReviewSummary | null;
   /** Injectable session source for harnesses/tests; defaults to the backend. */
   loadSessions?: (fromMs: number, toMs: number) => Promise<ReadingSession[]>;
+  /**
+   * 阅读时间预估(plan-reading-time-estimate §3.3):继续阅读卡的
+   * "剩余约 N 分钟"文案;返回 null(读完/无数据)不渲染。
+   */
+  remainingEstimate?: (relativePath: string, progress: HomeProgress | null) => string | null;
 }
 
 function fileName(path: string): string {
@@ -99,7 +104,11 @@ function GoalRing({ progress }: { progress: number }) {
   );
 }
 
-export function HomeView({ reviewSummary = null, loadSessions = listReadingSessions }: HomeViewProps) {
+export function HomeView({
+  reviewSummary = null,
+  loadSessions = listReadingSessions,
+  remainingEstimate,
+}: HomeViewProps) {
   const snapshot = useReaderStore((state) => state.snapshot);
   const documents = useReaderStore((state) => state.documents);
   const motionLevel = useReaderStore((state) => state.motionLevel);
@@ -217,6 +226,7 @@ export function HomeView({ reviewSummary = null, loadSessions = listReadingSessi
             <ol className="home-continue-list">
               {continueItems.map((item) => {
                 const progress = progressLabel(item.progress);
+                const remaining = remainingEstimate?.(item.relativePath, item.progress) ?? null;
                 return (
                   <li key={item.relativePath}>
                     <button
@@ -233,6 +243,9 @@ export function HomeView({ reviewSummary = null, loadSessions = listReadingSessi
                         <span>{formatRelativeTime(item.lastReadAt, now)}</span>
                         {item.totalSeconds > 0 && <span>{formatDuration(item.totalSeconds)}</span>}
                         {progress && <span className="home-continue-progress">{progress}</span>}
+                        {remaining && (
+                          <span className="home-continue-estimate">{remaining}</span>
+                        )}
                       </span>
                     </button>
                   </li>

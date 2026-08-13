@@ -46,6 +46,18 @@ export interface LibrarySnapshot {
   documents: DocumentInfo[];
 }
 
+/**
+ * 文档索引文本量（plan-reading-time-estimate §3.2，契约与库覆盖率
+ * treemap 共享）：charCount 为阅读文本字符数，segmentCount 对 PDF 即
+ * 页数（覆盖率分母），needsOcrSegments 供过滤扫描版。
+ */
+export interface DocumentExtent {
+  relativePath: string;
+  charCount: number;
+  segmentCount: number;
+  needsOcrSegments: number;
+}
+
 export type EpubLinkTarget =
   | { kind: "external"; value: string }
   | { kind: "relative"; value: string }
@@ -322,6 +334,15 @@ export async function clearConversionCache(): Promise<void> {
 export async function searchDocuments(query: string, limit = 100): Promise<SearchResult[]> {
   if (APP_RUNTIME === "web") return getWebLibrary().search(query, limit);
   return (await getTauriBackend()).searchDocuments(query, limit);
+}
+
+/**
+ * 全库文档文本量聚合：桌面对 search_segments 一次 GROUP BY；Web 版由
+ * search.json 内容长度合成（单段、无 OCR 语义）。
+ */
+export async function listDocumentExtents(): Promise<DocumentExtent[]> {
+  if (APP_RUNTIME === "web") return getWebLibrary().documentExtents();
+  return (await getTauriBackend()).listDocumentExtents();
 }
 
 /**

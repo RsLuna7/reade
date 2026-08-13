@@ -1,6 +1,7 @@
 import type {
   AssetPayload,
   DocumentContent,
+  DocumentExtent,
   DocumentInfo,
   SearchResult,
 } from "./backend";
@@ -470,6 +471,20 @@ export class WebLibraryClient {
   ): Promise<SearchResult[]> {
     const index = await this.loadSearchIndex();
     return findRelatedWebPassages(index.documents, text, excludePath, limit);
+  }
+
+  /**
+   * Web twin of `list_document_extents`（plan-reading-time-estimate §3.2）:
+   * search.json 全文长度即字符数;Web 只有 Markdown,单段、无 OCR 语义。
+   */
+  async documentExtents(): Promise<DocumentExtent[]> {
+    const index = await this.loadSearchIndex();
+    return index.documents.map((document) => ({
+      relativePath: document.relativePath,
+      charCount: document.content.length,
+      segmentCount: 1,
+      needsOcrSegments: 0,
+    }));
   }
 
   clearCache(): void {

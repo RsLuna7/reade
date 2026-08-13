@@ -1,7 +1,7 @@
-# 方案草案：阅读时间预估
+# 方案定稿：阅读时间预估
 
-- 日期：2026-08-13（基线查证日）
-- 状态：**草案（实施前需复核基线行号并升级定稿）**
+- 日期：2026-08-13（基线查证日；同日复核基线并定稿）
+- 状态：**定稿（批次 2 实施）**
 - 定位：在文档树条目、主页卡片、目录条目显示"约 N 分钟"。速度先用默认值冷启动，随个人阅读数据（`reade-stats.sqlite3` 的 activeSeconds ÷ 已读字符量）自动校准。
 - 关联：字符数数据与库覆盖率地图（`docs/plan-coverage-treemap.md`）共享同一 `list_document_extents` 新契约；个人速度校准依赖阅读统计会话（`record_reading_session` 既有链路）与 `readingPositions` 高水位。
 
@@ -43,29 +43,39 @@
 ### 3.1 纯函数（`src/lib/readingTimeEstimate.ts` 新建）
 
 ```ts
-export const DEFAULT_CHARS_PER_MINUTE = 500;
+export const DEFAULT_CHARS_PER_MINUTE = 500;               // TE-D3
+export const READING_SPEED_CLAMP = [150, 2000];            // TE-D1
+export const CALIBRATION_MIN_SAMPLES = 5;
+export const CALIBRATION_MIN_ACTIVE_SECONDS = 120;
+export const CALIBRATION_MIN_COVERAGE = 0.15;
+export interface ReadingSpeed { charsPerMinute: number; samples: number; calibrated: boolean }
 export function calibrateReadingSpeed(input: {
-  sessionsByPath: Map<string, number>;      // activeSeconds 合计
-  extents: Map<string, number>;             // 字符数
-  coverage: Map<string, number>;            // 0..1 高水位
-}): { charsPerMinute: number; samples: number; calibrated: boolean }
+  activeSecondsByPath: ReadonlyMap<string, number>;   // 90 天会话按文档聚合
+  charsByPath: ReadonlyMap<string, number>;           // extents 字符数
+  coverageByPath: ReadonlyMap<string, number>;        // 0..1 高水位
+}): ReadingSpeed
+export function highWaterCoverage(position, pageCount?): number | null   // scroll→maxScrollRatio；pdf→maxPage/pageCount
+export function extentSupportsEstimate(extent): boolean   // needs_ocr 段占比 >50% 不出徽标（TE-D5）
 export function estimateReadingMinutes(chars: number, cpm: number): number   // ceil, ≥1
-export function formatEstimate(minutes: number): string
+export function estimateRemainingMinutes(extent, progress, cpm): number | null // 读完/无数据 → null
+export function formatReadingEstimate(minutes: number): string   // "1 分钟内 / 约 N 分钟 / 约 N 小时"
+export function formatRemainingEstimate(minutes: number): string // "剩余不足 1 分钟 / 剩余约 N 分钟…"
 ```
 
-- 每文档速度样本 = `(chars × coverage) / (activeSeconds / 60)`；过滤 coverage < 0.15 或 activeSeconds < 120 的噪声样本；中位数输出并 clamp 到 [150, 2000] 字/分钟防坏数据。
+- 每文档速度样本 = `(chars × coverage) / (activeSeconds / 60)`；过滤 coverage < 0.15 或 activeSeconds < 120 或 chars ≤ 0 的噪声样本；样本 <5 回退默认；中位数输出并 clamp 到 [150, 2000] 字/分钟防坏数据。
 
-### 3.2 数据接线
+### 3.2 数据接线（决策 2：契约与批次七 coverage-treemap 共享）
 
-- extents：复用/等待 `list_document_extents`（若 treemap 方案未先行，本方案自带该 command，两方案实施时合并为一）。
+- 新 command `list_document_extents() → Vec<DocumentExtent>`，`DocumentExtent = { relativePath, charCount, segmentCount, needsOcrSegments }`：对 `search_segments` 一次 GROUP BY 聚合，零文件访问、不返回正文。字段为 treemap 预留：`charCount` 是 treemap 的瓦片面积基数，`segmentCount` 对 PDF 即页数（覆盖率 = maxPage/segmentCount 双方案共用），`needsOcrSegments` 供两方案过滤扫描版。
 - 会话：进库后一次 `listReadingSessions(now-90d, now)`，前端按 path 聚合（与 StatsView 的加载模式一致，量级可控）。
-- 缓存：`Map` 挂 module 级 + `library-changed`/refresh 失效；树条目徽标从缓存同步读取，未命中显示占位省略（不闪烁）。
+- 缓存：extents 存 App state（React），随 snapshot 变化与索引完成事件重取（`indexProgress` 完成 → 重取一次，覆盖后台增量索引尚未完成时打开库的场景）；速度每库计算一次。
+- Web：`WebLibraryClient.documentExtents()` 从 `search.json` 内容长度合成（segmentCount=1、needsOcr=0），默认速度、无个人校准。
 
 ### 3.3 展示
 
-- 树条目：右侧灰字 `约 12 分钟`（窄窗 1180 断点以下隐藏，避免挤压标题）。
-- 主页继续阅读：`剩余约 N 分钟 = estimate(chars × (1 - coverage))`。
-- 目录面板顶部一行：`全文约 N 分钟 · 个人速度已校准`（未校准时不带后缀）。
+- 树条目：右侧灰字 `约 12 分钟`（窄窗 1180 断点以下隐藏，避免挤压标题）；经 `estimateForPath` prop 注入，DocumentTree 保持展示组件。
+- 主页继续阅读：`剩余约 N 分钟 = estimate(charCount × (1 - coverage))`；PDF 覆盖率 = maxPage/segmentCount；读完（剩余 0）不显示。
+- 目录面板顶部一行：`全文约 N 分钟 · 个人速度已校准`（未校准时不带后缀）；TocNavigation 增加可选 `estimateLine` prop，不传时 DOM 与现状逐字节一致（既有兼容契约测试保障）。
 
 ## 4. 改动清单（预估）
 
@@ -76,21 +86,25 @@ export function formatEstimate(minutes: number): string
 | 3 | `src/components/DocumentTree.tsx`、`HomeView.tsx`、TocNavigation（App.tsx） | 三处徽标 | M |
 | 4 | `src/App.css`、`docs/USER_GUIDE.md` | 样式 + 文档 | S |
 
-## 5. 验收标准（草案级）
+## 5. 验收标准（定稿）
 
-- [ ] 纯函数测试：中位数抗离群、样本不足回退默认、clamp 边界、coverage 折算、格式化（<1min / 小时档）。
-- [ ] 运行时（桌面）：新库冷启动显示默认速度预估；累计若干阅读后徽标数字变化（校准生效，devtools 打印 charsPerMinute 佐证）。
-- [ ] Web：默认速度徽标正常。
-- [ ] 窄窗（1180 以下）树徽标隐藏；明/暗截图；全套回归。
+- [x] 纯函数测试：中位数抗离群、样本不足回退默认、clamp 边界、coverage 折算、格式化（<1min / 小时档）、OCR 占比过滤、剩余时长。
+- [x] Rust 测试：extents 聚合（字符数/段数/OCR 计数、按库隔离）。
+- [x] 组件测：树条目徽标、继续阅读卡剩余时长、目录顶部行与"已校准"后缀、TocNavigation 无 prop 时逐字节兼容。
+- [x] 回归：`pnpm test`、`tsc --noEmit`、`cargo test`、`cargo clippy`。
+- [ ] 运行时（人工，桌面）：新库冷启动显示默认速度预估；累计若干阅读后徽标数字变化（校准生效）。
+- [ ] Web：默认速度徽标正常；窄窗（1180 以下）树徽标隐藏；明/暗截图。
 
-## 6. 决策点
+## 6. 决策点（已定）
 
-| # | 决策 | 推荐 | 备选 |
-|---|------|------|------|
-| TE-D1 | 速度统计量 | **中位数 + clamp**（个人库样本少、离群多） | 平均值（一次挂机会话即污染）；EWMA（顺序敏感、难测） |
-| TE-D2 | 有效字符量 | **chars × 高水位覆盖率**（读一半只记一半） | 全文 chars（把"翻了翻"当"读完"，速度虚高） |
-| TE-D3 | 默认速度 | **500 字/分钟**（CJK 阅读经验中值，常量可调） | 按语言探测分默认值（探测不可靠，留远期） |
-| TE-D4 | 展示位置 | **树 + 主页 + 目录顶部** 三处 | 加书架角标（等书架方案落地再接） |
+| # | 决策 | 结论 |
+|---|------|------|
+| TE-D1 | 速度统计量 | **中位数 + clamp [150, 2000]**（个人库样本少、离群多） |
+| TE-D2 | 有效字符量 | **chars × 高水位覆盖率**（读一半只记一半）；PDF 覆盖率 = maxPage / segmentCount |
+| TE-D3 | 默认速度 | **500 字/分钟**（CJK 阅读经验中值，常量导出可调） |
+| TE-D4 | 展示位置 | **树 + 主页 + 目录顶部** 三处 |
+| TE-D5 | 扫描版 PDF | **needs_ocr 段占比 >50% 的文档不显示徽标**（字符数严重失真时宁缺毋滥） |
+| TE-D6 | extents 契约 | **`list_document_extents` 按决策 2 与批次七 coverage-treemap 共享**：charCount（treemap 面积基数）、segmentCount（PDF 页数/覆盖率分母）、needsOcrSegments（双方过滤扫描版） |
 
 ## 7. 风险
 

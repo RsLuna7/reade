@@ -119,6 +119,25 @@ describe("HomeView (desktop)", () => {
     expect(readDocument).toHaveBeenCalledWith("guide.md");
   });
 
+  it("appends the remaining-time estimate when the callback provides one", async () => {
+    const documents = [doc("guide.md", { title: "入门指南" })];
+    setHomeState(documents);
+    writeReadingPosition(ROOT, "guide.md", { kind: "scroll", scrollRatio: 0.5 });
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("guide.md", Date.now() - HOUR_MS),
+    ]);
+    const remainingEstimate = vi.fn(() => "剩余约 12 分钟");
+
+    render(<HomeView remainingEstimate={remainingEstimate} />);
+
+    expect(await screen.findByText("剩余约 12 分钟")).toBeInTheDocument();
+    // 回调收到路径与高水位进度,由 App 侧折算剩余字符。
+    expect(remainingEstimate).toHaveBeenCalledWith(
+      "guide.md",
+      expect.objectContaining({ kind: "ratio" }),
+    );
+  });
+
   it("shows the guidance empty state for a library without history", async () => {
     setHomeState([doc("fresh-start.md")]);
 

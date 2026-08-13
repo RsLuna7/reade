@@ -777,8 +777,17 @@ a:focus-visible {
 
 .document-tree__name {
   min-width: 0;
+  flex: 1 1 auto;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* 阅读时间预估徽标(plan-reading-time-estimate §3.3)。 */
+.document-tree__estimate {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
   white-space: nowrap;
 }
 
@@ -1897,6 +1906,14 @@ a:focus-visible {
   font-weight: 750;
   letter-spacing: 0.15em;
   text-transform: uppercase;
+}
+
+/* 目录顶部的全文预估行(plan-reading-time-estimate §3.3)。 */
+.toc-estimate {
+  margin: 0 0 8px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
 }
 
 .toc-list {
@@ -4305,6 +4322,11 @@ button.links-panel-entry:focus-visible {
     --reader-gutter-toc: 16px;
   }
 
+  /* 窄窗下时长徽标让位给标题(TE 方案 §3.3)。 */
+  .document-tree__estimate {
+    display: none;
+  }
+
   .toc-panel {
     padding-right: 10px;
   }
@@ -5437,6 +5459,11 @@ button.links-panel-entry:focus-visible {
   background: var(--chrome);
   color: var(--ink-soft);
   font-size: 10.5px;
+}
+
+/* 继续阅读卡的剩余时长(plan-reading-time-estimate §3.3)。 */
+.home-continue-estimate {
+  color: var(--teal);
 }
 
 .home-continue-progress {

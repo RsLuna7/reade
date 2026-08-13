@@ -9,6 +9,7 @@ import type {
   CollectionItem,
   CollectionSummary,
   DocumentContent,
+  DocumentExtent,
   DocumentFingerprintEntry,
   DocumentIndexEvent,
   DocumentInfo,
@@ -47,6 +48,7 @@ export async function readEpubAsset(relativePath: string, assetId: number): Prom
 export function retryDocumentIndex(relativePath: string): Promise<void> { return invoke("retry_document_index", { relativePath }); }
 export function clearConversionCache(): Promise<void> { return invoke("clear_conversion_cache"); }
 export function searchDocuments(query: string, limit: number): Promise<SearchResult[]> { return invoke("search_documents", { query, limit }); }
+export function listDocumentExtents(): Promise<DocumentExtent[]> { return invoke("list_document_extents"); }
 export function listDocumentLinks(relativePath: string): Promise<DocumentLinks> {
   return invoke("list_document_links", { relativePath });
 }

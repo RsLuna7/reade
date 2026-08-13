@@ -65,6 +65,7 @@ import {
   listCollections,
   listDocumentLinks,
   listAnnotationsForTransfer,
+  listDocumentExtents,
   listDocumentFingerprints,
   listReadingSessions,
   onDocumentIndexStatus,
@@ -84,6 +85,7 @@ import {
   type Annotation,
   type AnnotationColor,
   type CollectionSummary,
+  type DocumentExtent,
   type LibrarySnapshot,
   type MovedDocumentCandidate,
   type ReviewSummary,
@@ -188,7 +190,22 @@ import {
   CONTINUE_READING_WINDOW_MS,
   hasContinueCandidates,
   writeHomeBaseline,
+  type HomeProgress,
 } from "./lib/homeData";
+// 阅读时间预估(plan-reading-time-estimate):纯函数在 lib,数据装配在此。
+import {
+  CALIBRATION_WINDOW_MS,
+  DEFAULT_READING_SPEED,
+  aggregateActiveSeconds,
+  calibrateReadingSpeed,
+  estimateReadingMinutes,
+  estimateRemainingMinutes,
+  extentSupportsEstimate,
+  formatReadingEstimate,
+  formatRemainingEstimate,
+  highWaterCoverage,
+  type ReadingSpeed,
+} from "./lib/readingTimeEstimate";
 import { extractToc, type TocItem } from "./lib/markdown";
 import {
   listLibraryReadingPositions,
@@ -1055,6 +1072,7 @@ export function TocNavigation({
   heat,
   reachedIds,
   onSelectTop,
+  estimateLine,
 }: {
   items: TocItem[];
   activeId: string | null;
@@ -1065,9 +1083,13 @@ export function TocNavigation({
   reachedIds?: ReadonlySet<string> | null;
   /** 文首/失效章节说明行的跳转目标(滚动到文档顶部)。 */
   onSelectTop?: () => void;
+  /** 阅读时间预估(plan-reading-time-estimate §3.3):目录顶部一行;
+      不传时渲染与传统输出逐字节一致。 */
+  estimateLine?: string | null;
 }) {
   return (
     <div className="toc-section">
+      {estimateLine ? <p className="toc-estimate">{estimateLine}</p> : null}
       {heat && heat.unassignedCount > 0 ? (
         <button type="button" className="toc-unassigned" onClick={onSelectTop}>
           文首或已变更章节另有 {heat.unassignedCount} 条标注
@@ -1126,6 +1148,7 @@ function SidePanel({
   tocHeat,
   tocReachedIds,
   onSelectDocumentTop,
+  tocEstimateLine,
   annotations,
   brokenIds,
   approximateIds,
@@ -1170,6 +1193,7 @@ function SidePanel({
   tocHeat?: TocHeatResult | null;
   tocReachedIds?: ReadonlySet<string> | null;
   onSelectDocumentTop?: () => void;
+  tocEstimateLine?: string | null;
   annotations: Annotation[];
   brokenIds: Set<string>;
   approximateIds: Set<string>;
@@ -1261,6 +1285,7 @@ function SidePanel({
           heat={tocHeat}
           reachedIds={tocReachedIds}
           onSelectTop={onSelectDocumentTop}
+          estimateLine={tocEstimateLine}
         />
       ) : tab === "annotations" ? (
         <AnnotationList
@@ -3596,6 +3621,106 @@ function App() {
     setLibrarySwitcherOpen((open) => !open);
   }, [chooseAndOpenLibrary, libraryMru, librarySwitcherOpen, probeMruEntries, refreshLibrary]);
 
+  // ---- 阅读时间预估(plan-reading-time-estimate §3.2) ----
+  // extents:一次 GROUP BY 聚合;随 snapshot(打开/刷新)与后台索引完成重取。
+  const [documentExtents, setDocumentExtents] = useState<Map<string, DocumentExtent> | null>(null);
+  const [readingSpeed, setReadingSpeed] = useState<ReadingSpeed>(DEFAULT_READING_SPEED);
+  const indexingDone = !indexProgress || indexProgress.completed >= indexProgress.total;
+
+  useEffect(() => {
+    if (!snapshot) {
+      setDocumentExtents(null);
+      return;
+    }
+    if (!indexingDone) return;
+    let cancelled = false;
+    void listDocumentExtents()
+      .then((extents) => {
+        if (cancelled) return;
+        setDocumentExtents((current) => {
+          // 空结果且本就无数据时保持引用不变,不触发多余重渲染
+          // (索引尚未产出任何段时的常见情形)。
+          if (extents.length === 0 && !current) return current;
+          return new Map(extents.map((extent) => [extent.relativePath, extent]));
+        });
+      })
+      .catch(() => {
+        // 预估是装饰性信息:读取失败静默降级为不显示。
+        if (!cancelled) setDocumentExtents(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot, indexingDone]);
+
+  // 个人速度:近 90 天会话 ÷ 有效读过字符,中位数 + clamp(TE-D1/D2);
+  // Web 无会话数据,恒默认速度档。
+  useEffect(() => {
+    if (IS_WEB_RUNTIME || !snapshot?.rootPath || !documentExtents) {
+      setReadingSpeed(DEFAULT_READING_SPEED);
+      return;
+    }
+    let cancelled = false;
+    const rootPath = snapshot.rootPath;
+    const now = Date.now();
+    void listReadingSessions(now - CALIBRATION_WINDOW_MS, now)
+      .then((sessions) => {
+        if (cancelled) return;
+        const positions = listLibraryReadingPositions(rootPath);
+        const charsByPath = new Map<string, number>();
+        const coverageByPath = new Map<string, number>();
+        for (const [path, extent] of documentExtents) {
+          charsByPath.set(path, extent.charCount);
+          const coverage = highWaterCoverage(positions[path], extent.segmentCount);
+          if (coverage !== null) coverageByPath.set(path, coverage);
+        }
+        setReadingSpeed(
+          calibrateReadingSpeed({
+            activeSecondsByPath: aggregateActiveSeconds(sessions),
+            charsByPath,
+            coverageByPath,
+          }),
+        );
+      })
+      .catch(() => {
+        if (!cancelled) setReadingSpeed(DEFAULT_READING_SPEED);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [snapshot?.rootPath, documentExtents]);
+
+  /** 树条目徽标:全文预估;扫描版/无字符不显示(TE-D5)。 */
+  const estimateForPath = useCallback(
+    (path: string): string | null => {
+      const extent = documentExtents?.get(path);
+      if (!extent || !extentSupportsEstimate(extent)) return null;
+      return formatReadingEstimate(
+        estimateReadingMinutes(extent.charCount, readingSpeed.charsPerMinute),
+      );
+    },
+    [documentExtents, readingSpeed.charsPerMinute],
+  );
+
+  /** 继续阅读卡:剩余时长 = chars × (1 - 高水位覆盖率)。 */
+  const remainingEstimateForItem = useCallback(
+    (path: string, progress: HomeProgress | null): string | null => {
+      const extent = documentExtents?.get(path);
+      if (!extent) return null;
+      const minutes = estimateRemainingMinutes(extent, progress, readingSpeed.charsPerMinute);
+      return minutes === null ? null : formatRemainingEstimate(minutes);
+    },
+    [documentExtents, readingSpeed.charsPerMinute],
+  );
+
+  /** 目录面板顶部一行:全文预估 + 校准状态后缀。 */
+  const tocEstimateLine = useMemo(() => {
+    if (!currentPath) return null;
+    const label = estimateForPath(currentPath);
+    if (!label) return null;
+    return readingSpeed.calibrated ? `全文${label} · 个人速度已校准` : `全文${label}`;
+  }, [currentPath, estimateForPath, readingSpeed.calibrated]);
+
   useEffect(() => {
     if (!snapshot || IS_WEB_RUNTIME) return;
     let disposed = false;
@@ -4308,6 +4433,7 @@ function App() {
           <DocumentTree
             onOpenSecondary={handleOpenSecondary}
             onBeforeSelect={recordNavDeparture}
+            estimateForPath={estimateForPath}
           />
         </div>
 
@@ -4700,6 +4826,7 @@ function App() {
                 tocHeat={tocHeat}
                 tocReachedIds={tocReachedIds}
                 onSelectDocumentTop={scrollToDocumentTop}
+                tocEstimateLine={tocEstimateLine}
                 annotations={sortedAnnotations}
                 brokenIds={brokenAnnotationIds}
                 approximateIds={approximateAnnotationIds}
@@ -4777,7 +4904,10 @@ function App() {
               </div>
             }
           >
-            <HomeView reviewSummary={homeReviewSummary} />
+            <HomeView
+              reviewSummary={homeReviewSummary}
+              remainingEstimate={remainingEstimateForItem}
+            />
           </Suspense>
         )}
 
@@ -4853,6 +4983,7 @@ function App() {
             tocHeat={tocHeat}
             tocReachedIds={tocReachedIds}
             onSelectDocumentTop={scrollToDocumentTop}
+            tocEstimateLine={tocEstimateLine}
             annotations={sortedAnnotations}
             brokenIds={brokenAnnotationIds}
             approximateIds={approximateAnnotationIds}

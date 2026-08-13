@@ -36,9 +36,18 @@ export interface DocumentTreeProps {
    * 阅读回退栈的出发点。仅主栏切换文档时调用,Alt+副栏打开不算跳转。
    */
   onBeforeSelect?: () => void;
+  /**
+   * 阅读时间预估(plan-reading-time-estimate §3.3):返回"约 N 分钟"式
+   * 徽标文案,null 不渲染;数据装配留在 App,树保持展示组件。
+   */
+  estimateForPath?: (path: string) => string | null;
 }
 
-export function DocumentTree({ onOpenSecondary, onBeforeSelect }: DocumentTreeProps = {}) {
+export function DocumentTree({
+  onOpenSecondary,
+  onBeforeSelect,
+  estimateForPath,
+}: DocumentTreeProps = {}) {
   const documents = useReaderStore((state) => state.documents);
   const currentPath = useReaderStore((state) => state.currentPath);
   const searchQuery = useReaderStore((state) => state.searchQuery);
@@ -172,6 +181,7 @@ export function DocumentTree({ onOpenSecondary, onBeforeSelect }: DocumentTreePr
         const isDirectory = node.kind === "directory";
         const isExpanded = isDirectory && expanded.has(node.path);
         const isCurrent = !isDirectory && node.path === currentPath;
+        const estimate = !isDirectory && estimateForPath ? estimateForPath(node.path) : null;
         const item: VisibleTreeItem = { node, parentPath };
 
         return (
@@ -214,6 +224,11 @@ export function DocumentTree({ onOpenSecondary, onBeforeSelect }: DocumentTreePr
                 </span>
               )}
               <span className="document-tree__name">{node.name}</span>
+              {estimate && (
+                <span className="document-tree__estimate" aria-label={`预计阅读时长 ${estimate}`}>
+                  {estimate}
+                </span>
+              )}
               {!isDirectory && node.document.indexStatus !== "ready" && (
                 <span className={`document-tree__index document-tree__index--${node.document.indexStatus}`} title={node.document.indexError ?? `索引状态：${node.document.indexStatus}`} />
               )}

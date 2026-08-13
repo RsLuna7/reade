@@ -621,6 +621,61 @@ pub fn search_documents(
     )
 }
 
+/// Per-document indexed-text extent, aggregated from the cached search
+/// segments (plan-reading-time-estimate §3.2). The shape is shared with the
+/// coverage-treemap plan: `char_count` sizes tiles / feeds time estimates,
+/// `segment_count` is the page count for PDFs (high-water coverage
+/// denominator) and `needs_ocr_segments` lets both features skip scanned
+/// documents whose extracted text is unreliable.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DocumentExtent {
+    pub relative_path: String,
+    pub char_count: u64,
+    pub segment_count: u64,
+    pub needs_ocr_segments: u64,
+}
+
+/// One GROUP BY over `search_segments`: read-only, no file access, never
+/// returns content. Documents whose background indexing has not produced
+/// segments yet are simply absent.
+#[tauri::command]
+pub fn list_document_extents(state: State<'_, AppState>) -> CommandResult<Vec<DocumentExtent>> {
+    let current = lock_state(&state)?;
+    let root = current
+        .root
+        .as_ref()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    document_extents(&current.cache, &normalize_root(root))
+}
+
+fn document_extents(connection: &Connection, root_key: &str) -> CommandResult<Vec<DocumentExtent>> {
+    let mut statement = connection
+        .prepare(
+            "SELECT relative_path,
+                    COALESCE(SUM(LENGTH(content)), 0),
+                    COUNT(*),
+                    COALESCE(SUM(needs_ocr != 0), 0)
+             FROM search_segments
+             WHERE library_root = ?1
+             GROUP BY relative_path
+             ORDER BY relative_path",
+        )
+        .map_err(|error| format!("Cannot prepare document extents query: {error}"))?;
+    let rows = statement
+        .query_map(params![root_key], |row| {
+            Ok(DocumentExtent {
+                relative_path: row.get(0)?,
+                char_count: row.get::<_, i64>(1)?.max(0) as u64,
+                segment_count: row.get::<_, i64>(2)?.max(0) as u64,
+                needs_ocr_segments: row.get::<_, i64>(3)?.max(0) as u64,
+            })
+        })
+        .map_err(|error| format!("Cannot query document extents: {error}"))?;
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|error| format!("Cannot read document extents: {error}"))
+}
+
 /// Read-only backlink/outgoing view for one document
 /// (`docs/plan-backlinks.md` §3.3). Pure SELECTs over the derived
 /// `document_links` table plus the in-memory scan snapshot; the link table
@@ -2758,6 +2813,52 @@ mod tests {
         let results = search_index(&current.cache, "root", "%", 10).expect("search");
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].relative_path, "percent.md");
+    }
+
+    #[test]
+    fn document_extents_aggregate_chars_pages_and_ocr_flags_per_library() {
+        let state = AppState::in_memory().expect("state");
+        let current = state.inner.lock().expect("lock");
+        let insert = |root: &str, path: &str, ordinal: u32, content: &str, needs_ocr: i64| {
+            current
+                .cache
+                .execute(
+                    "INSERT INTO search_segments(
+                         library_root, relative_path, title, format, ordinal, content, needs_ocr
+                     ) VALUES (?1, ?2, 't', 'pdf', ?3, ?4, ?5)",
+                    params![root, path, ordinal, content, needs_ocr],
+                )
+                .expect("insert segment");
+        };
+        // 中文按字符计数(SQLite LENGTH 对 TEXT 数码位):两段共 5 + 4 字符。
+        insert("root", "notes/a.md", 0, "中文内容五", 0);
+        insert("root", "notes/a.md", 1, "四字正文", 0);
+        // 扫描版 PDF:三页里两页 needs_ocr。
+        insert("root", "scan.pdf", 0, "", 1);
+        insert("root", "scan.pdf", 1, "page text", 0);
+        insert("root", "scan.pdf", 2, "", 1);
+        // 其他库的段不得串库。
+        insert("other", "notes/a.md", 0, "leak", 0);
+
+        let extents = document_extents(&current.cache, "root").expect("extents");
+        assert_eq!(
+            extents,
+            vec![
+                DocumentExtent {
+                    relative_path: "notes/a.md".to_owned(),
+                    char_count: 9,
+                    segment_count: 2,
+                    needs_ocr_segments: 0,
+                },
+                DocumentExtent {
+                    relative_path: "scan.pdf".to_owned(),
+                    char_count: 9,
+                    segment_count: 3,
+                    needs_ocr_segments: 2,
+                },
+            ],
+        );
+        assert!(document_extents(&current.cache, "empty").expect("empty").is_empty());
     }
 
     #[test]

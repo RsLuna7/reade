@@ -10,6 +10,7 @@ import {
   findRelatedPassages,
   listAnnotations,
   listCollections,
+  listDocumentExtents,
   listDocumentLinks,
   listReadingSessions,
   listReviewQueue,
@@ -58,6 +59,8 @@ vi.mock("./lib/backend", async () => {
     openLibrary: vi.fn(async (rootPath: string) => ({ rootPath, documents: [] })),
     probeLibraryPath: vi.fn(async () => true),
     chooseLibraryDirectory: vi.fn(async () => null),
+    // 阅读时间预估(plan-reading-time-estimate):extents 聚合走 mock。
+    listDocumentExtents: vi.fn(async () => []),
     // 阅读会话在 jsdom 里没有 Tauri sqlite 后端;主页与冷启动判定用它。
     listReadingSessions: vi.fn(async () => []),
     // 设置 snapshot 的用例会挂载库监听 effect;jsdom 里没有 Tauri 事件桥。
@@ -137,6 +140,7 @@ beforeEach(() => {
     .mockImplementation(async (rootPath: string) => ({ rootPath, documents: [] }));
   vi.mocked(probeLibraryPath).mockReset().mockImplementation(async () => true);
   vi.mocked(chooseLibraryDirectory).mockReset().mockImplementation(async () => null);
+  vi.mocked(listDocumentExtents).mockReset().mockImplementation(async () => []);
   vi.mocked(listReadingSessions).mockReset().mockImplementation(async () => []);
   useReaderStore.setState({
     snapshot: null,
@@ -1215,6 +1219,23 @@ describe("TOC heat wiring (T1)", () => {
     );
   });
 
+  it("renders the estimate line only when provided (TE §3.3)", () => {
+    const { container, rerender } = render(
+      <TocNavigation items={tocItems} activeId={null} onSelect={() => undefined} />,
+    );
+    expect(container.querySelector(".toc-estimate")).toBeNull();
+
+    rerender(
+      <TocNavigation
+        items={tocItems}
+        activeId={null}
+        onSelect={() => undefined}
+        estimateLine="全文约 12 分钟"
+      />,
+    );
+    expect(container.querySelector(".toc-estimate")).toHaveTextContent("全文约 12 分钟");
+  });
+
   it("shows density dots with a11y labels and an unassigned note line", async () => {
     const sectionAnnotation = markdownAnnotation({
       id: "ann-heat",
@@ -1810,6 +1831,55 @@ describe("command palette (CP)", () => {
     await screen.findByRole("dialog", { name: "命令面板" });
     expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
+  });
+});
+
+describe("reading time estimate (plan-reading-time-estimate)", () => {
+  it("shows default-speed estimates on tree rows and the TOC head", async () => {
+    vi.mocked(listDocumentExtents).mockResolvedValue([
+      { relativePath: "guide.md", charCount: 1000, segmentCount: 1, needsOcrSegments: 0 },
+    ]);
+    setLibraryReadingState();
+
+    const view = render(<App />);
+    // 1000 字 ÷ 默认 500 字/分钟 = 约 2 分钟。
+    await waitFor(() => {
+      expect(view.container.querySelector(".document-tree__estimate")).toHaveTextContent(
+        "约 2 分钟",
+      );
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("全文约 2 分钟").length).toBeGreaterThan(0);
+    });
+    // 冷启动默认速度不带"已校准"后缀。
+    expect(screen.queryByText(/个人速度已校准/)).not.toBeInTheDocument();
+  });
+
+  it("calibrates the personal speed from sessions and flags the TOC line", async () => {
+    const now = Date.now();
+    vi.mocked(listDocumentExtents).mockResolvedValue([
+      { relativePath: "guide.md", charCount: 900, segmentCount: 1, needsOcrSegments: 0 },
+      ...[1, 2, 3, 4, 5].map((index) => ({
+        relativePath: `read-${index}.md`,
+        charCount: 3000,
+        segmentCount: 1,
+        needsOcrSegments: 0,
+      })),
+    ]);
+    // 每篇 3000 字读完(coverage 1)用时 300 秒 → 个人速度 600 字/分钟。
+    vi.mocked(listReadingSessions).mockImplementation(async () =>
+      [1, 2, 3, 4, 5].map((index) => homeSession(`read-${index}.md`, now - 60_000)),
+    );
+    for (const index of [1, 2, 3, 4, 5]) {
+      writeReadingPosition(HOME_ROOT, `read-${index}.md`, { kind: "scroll", scrollRatio: 1 });
+    }
+    setLibraryReadingState();
+
+    render(<App />);
+    // guide 900 字 ÷ 600 字/分钟 → 约 2 分钟,带校准后缀。
+    await waitFor(() => {
+      expect(screen.getAllByText("全文约 2 分钟 · 个人速度已校准").length).toBeGreaterThan(0);
+    });
   });
 });
 
