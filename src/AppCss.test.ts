@@ -181,3 +181,51 @@ describe("annotation interaction CSS", () => {
     expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*white-space:\s*nowrap/s);
   });
 });
+
+describe("annotation color tokens", () => {
+  // 明暗两套、OKLCH 调平的标注四色(见 App.css token 块注释):
+  // 每色三个 token——裸色(UI 身份色)、-fill(高亮底)、-line(下划线)。
+  const ANNOT_TOKENS = (["yellow", "green", "blue", "pink"] as const).flatMap(
+    (color) => [`--annot-${color}`, `--annot-${color}-fill`, `--annot-${color}-line`],
+  );
+
+  it("defines the light palette on :root and a complete dark override", () => {
+    // 暗色靠主题 id 后缀匹配(`${series}-${mode}` 契约)一次覆盖四个暗主题;
+    // 三组 token 必须成套出现,缺一个就会出现明暗混用的脏色。
+    const darkBlock = css.match(/:root\[data-theme\$="-dark"\]\s*\{([^}]*)\}/)?.[1];
+    expect(darkBlock, 'missing :root[data-theme$="-dark"] annotation block').toBeTruthy();
+    for (const token of ANNOT_TOKENS) {
+      expect(css).toContain(`${token}:`);
+      expect(darkBlock).toContain(`${token}:`);
+    }
+  });
+
+  it("routes marks, list chips, dots, swatches and ticks through the tokens", () => {
+    expect(css).toMatch(
+      /\.annotation-mark--highlight\.annotation-mark--yellow\s*\{\s*background:\s*var\(--annot-yellow-fill\)/,
+    );
+    expect(css).toMatch(
+      /\.annotation-mark--underline\.annotation-mark--pink\s*\{\s*border-bottom-color:\s*var\(--annot-pink-line\)/,
+    );
+    expect(css).toMatch(
+      /\.annotation-list-kind--green\s*\{\s*background:\s*var\(--annot-green-fill\)/,
+    );
+    expect(css).toMatch(/\.annotation-color-dot--green\s*\{\s*background:\s*var\(--annot-green\)/);
+    expect(css).toMatch(/\.annotation-color-swatch--pink\s*\{\s*background:\s*var\(--annot-pink\)/);
+    expect(css).toMatch(/\.scroll-map-tick--blue\s*\{\s*background:\s*var\(--annot-blue\)/);
+    // 旧的单套荧光色值不得回流(暗色主题下文字对比度 2.87-3.80:1,不达标)。
+    expect(css).not.toMatch(/#ffe650|#78dc8c|#78b4ff|#ff8cbe/i);
+  });
+
+  it("keeps PDF highlights on the fixed light palette (pages stay white)", () => {
+    // PDF 页面不随主题变色,若误用 --annot-* token,暗色主题会把暗色系
+    // 高亮叠到白色页面上。
+    const pdfRules = Array.from(css.matchAll(/\.pdf-user-highlight--[^{]+\{([^}]*)\}/g)).map(
+      (match) => match[1],
+    );
+    expect(pdfRules.length).toBeGreaterThan(0);
+    for (const body of pdfRules) {
+      expect(body).not.toContain("var(--annot-");
+    }
+  });
+});

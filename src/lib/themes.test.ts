@@ -54,7 +54,8 @@ describe("theme registry", () => {
     expect(THEME_META["celadon-light"].themeColor).toBe("#e3ede0");
     expect(THEME_META["celadon-dark"].themeColor).toBe("#141f1c");
     // Tea-brown, not green: the accent (and the selection/heatmap tints mixed
-    // from it) must never collide with the fixed annotation green #78dc8c.
+    // from it) must never collide with the annotation green (--annot-green,
+    // #87e2a8 light / #74c692 dark).
     expect(THEME_META["celadon-light"].swatch.accent).toBe("#8a6138");
     expect(THEME_META["celadon-dark"].swatch.accent).toBe("#c69c66");
     expect(SERIES_FONT_PRESET.celadon).toBe("system");

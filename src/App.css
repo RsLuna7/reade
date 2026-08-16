@@ -25,6 +25,47 @@
   --focus-fade: 0ms;
 }
 
+/*
+  标注四色 token:明暗两套、OKLCH 等明度调平(黄/绿/蓝/粉 = 金句/疑问/行动/术语)。
+  - 明色系:基色收敛在 OKLCH L84-86,四色感知重量一致;文字对高亮底 ≥10:1。
+  - 暗色系:降明度(L76-78)、降彩度、降透明度(30-32%)——半透明亮色直接叠暗纸
+    会"沉成脏色",实测旧黄高亮在四个暗主题的文字对比度只有 2.87-3.80:1。
+    换成本组后全部主题 ≥5.4:1(WCAG 1.4.3 正文线 4.5:1)。
+  - *-line 下划线:非文本指示,对纸面 ≥3:1(WCAG 1.4.11);明暗各一组。
+  - 裸色(--annot-*)给圆点/色块/滚动条刻度等 UI 身份色,与高亮底同源。
+  PDF 页面恒为白底、不随主题,故 .pdf-user-highlight--* 固定用明色系字面量。
+*/
+:root {
+  --annot-yellow: #efcf53;
+  --annot-yellow-fill: rgb(239 207 83 / 50%);
+  --annot-yellow-line: #a07a00;
+  --annot-green: #87e2a8;
+  --annot-green-fill: rgb(135 226 168 / 45%);
+  --annot-green-line: #318f5a;
+  --annot-blue: #a1cfff;
+  --annot-blue-fill: rgb(161 207 255 / 45%);
+  --annot-blue-line: #407bc5;
+  --annot-pink: #ffb0ca;
+  --annot-pink-fill: rgb(255 176 202 / 45%);
+  --annot-pink-line: #c5547c;
+}
+
+/* 主题 id 契约为 `${series}-${mode}`(theme-tokens.css),后缀匹配即覆盖全部暗色系。 */
+:root[data-theme$="-dark"] {
+  --annot-yellow: #d1b64a;
+  --annot-yellow-fill: rgb(209 182 74 / 30%);
+  --annot-yellow-line: #d8bd51;
+  --annot-green: #74c692;
+  --annot-green-fill: rgb(116 198 146 / 30%);
+  --annot-green-line: #7bcc98;
+  --annot-blue: #7fb6ee;
+  --annot-blue-fill: rgb(127 182 238 / 32%);
+  --annot-blue-line: #7fb6ee;
+  --annot-pink: #e596b1;
+  --annot-pink-fill: rgb(229 150 177 / 32%);
+  --annot-pink-line: #ea93b1;
+}
+
 :root[data-motion="subtle"] {
   --motion-fast: 120ms;
   --motion-standard: 180ms;
@@ -1586,11 +1627,11 @@ a:focus-visible {
   outline: none;
 }
 
-/* 标注四色:与 .annotation-color-dot--* 同一组不随主题变化的色值。 */
-.scroll-map-tick--yellow { background: #ffe650; }
-.scroll-map-tick--green { background: #78dc8c; }
-.scroll-map-tick--blue { background: #78b4ff; }
-.scroll-map-tick--pink { background: #ff8cbe; }
+/* 标注四色:与 .annotation-color-dot--* 同一组 token,随明暗模式切换。 */
+.scroll-map-tick--yellow { background: var(--annot-yellow); }
+.scroll-map-tick--green { background: var(--annot-green); }
+.scroll-map-tick--blue { background: var(--annot-blue); }
+.scroll-map-tick--pink { background: var(--annot-pink); }
 
 .scroll-map-tick--bookmark {
   width: 7px;
@@ -1885,20 +1926,21 @@ a:focus-visible {
   box-sizing: border-box;
   mix-blend-mode: multiply;
 }
-.pdf-user-highlight--highlight.pdf-user-highlight--yellow { background: rgb(255 230 80 / 45%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--green { background: rgb(120 220 140 / 40%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--blue { background: rgb(120 180 255 / 40%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--pink { background: rgb(255 140 190 / 40%); }
+/* PDF 页面恒为白底(不随主题),固定用明色系字面量,不走 --annot-* token。 */
+.pdf-user-highlight--highlight.pdf-user-highlight--yellow { background: rgb(239 207 83 / 50%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--green { background: rgb(135 226 168 / 45%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--blue { background: rgb(161 207 255 / 45%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--pink { background: rgb(255 176 202 / 45%); }
 .pdf-user-highlight--underline {
   background: transparent;
   mix-blend-mode: normal;
   border-bottom-width: 3px;
   border-bottom-style: solid;
 }
-.pdf-user-highlight--underline.pdf-user-highlight--yellow { border-bottom-color: rgb(230 180 20); }
-.pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: rgb(40 160 80); }
-.pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: rgb(50 120 220); }
-.pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: rgb(220 70 140); }
+.pdf-user-highlight--underline.pdf-user-highlight--yellow { border-bottom-color: #a07a00; }
+.pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: #318f5a; }
+.pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: #407bc5; }
+.pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: #c5547c; }
 .pdf-annotation-layer { pointer-events: none; z-index: 3; }
 .pdf-annotation-layer a { position: absolute; pointer-events: auto; border-radius: 2px; background: color-mix(in srgb, #3f82b8 12%, transparent); }
 .pdf-annotation-layer a:hover { outline: 1px solid #3f82b8; background: color-mix(in srgb, #3f82b8 22%, transparent); }
@@ -2609,13 +2651,13 @@ a:focus-visible {
 }
 
 .annotation-list-kind--highlight.annotation-list-kind--yellow,
-.annotation-list-kind--yellow { background: rgb(255 230 80 / 35%); }
+.annotation-list-kind--yellow { background: var(--annot-yellow-fill); }
 .annotation-list-kind--highlight.annotation-list-kind--green,
-.annotation-list-kind--green { background: rgb(120 220 140 / 30%); }
+.annotation-list-kind--green { background: var(--annot-green-fill); }
 .annotation-list-kind--highlight.annotation-list-kind--blue,
-.annotation-list-kind--blue { background: rgb(120 180 255 / 30%); }
+.annotation-list-kind--blue { background: var(--annot-blue-fill); }
 .annotation-list-kind--highlight.annotation-list-kind--pink,
-.annotation-list-kind--pink { background: rgb(255 140 190 / 30%); }
+.annotation-list-kind--pink { background: var(--annot-pink-fill); }
 
 .annotation-list-kind--underline.annotation-list-kind--yellow,
 .annotation-list-kind--underline.annotation-list-kind--green,
@@ -2624,10 +2666,10 @@ a:focus-visible {
   background: transparent;
 }
 
-.annotation-list-kind--underline.annotation-list-kind--yellow { border-bottom-color: rgb(230 180 20); }
-.annotation-list-kind--underline.annotation-list-kind--green { border-bottom-color: rgb(40 160 80); }
-.annotation-list-kind--underline.annotation-list-kind--blue { border-bottom-color: rgb(50 120 220); }
-.annotation-list-kind--underline.annotation-list-kind--pink { border-bottom-color: rgb(220 70 140); }
+.annotation-list-kind--underline.annotation-list-kind--yellow { border-bottom-color: var(--annot-yellow-line); }
+.annotation-list-kind--underline.annotation-list-kind--green { border-bottom-color: var(--annot-green-line); }
+.annotation-list-kind--underline.annotation-list-kind--blue { border-bottom-color: var(--annot-blue-line); }
+.annotation-list-kind--underline.annotation-list-kind--pink { border-bottom-color: var(--annot-pink-line); }
 
 .annotation-list-colors {
   padding: 0 8px 4px;
@@ -2805,10 +2847,10 @@ a:focus-visible {
   border-radius: 50%;
 }
 
-.annotation-color-dot--yellow { background: #ffe650; }
-.annotation-color-dot--green { background: #78dc8c; }
-.annotation-color-dot--blue { background: #78b4ff; }
-.annotation-color-dot--pink { background: #ff8cbe; }
+.annotation-color-dot--yellow { background: var(--annot-yellow); }
+.annotation-color-dot--green { background: var(--annot-green); }
+.annotation-color-dot--blue { background: var(--annot-blue); }
+.annotation-color-dot--pink { background: var(--annot-pink); }
 
 .annotation-filter-chip--color {
   display: inline-flex;
@@ -2964,15 +3006,15 @@ a:focus-visible {
   box-shadow: inset 0 0 0 1px rgb(255 255 255 / 35%);
 }
 
-.annotation-tools-popover .annotation-color-swatch--yellow { background: #ffe650; }
-.annotation-tools-popover .annotation-color-swatch--green { background: #78dc8c; }
-.annotation-tools-popover .annotation-color-swatch--blue { background: #78b4ff; }
-.annotation-tools-popover .annotation-color-swatch--pink { background: #ff8cbe; }
+.annotation-tools-popover .annotation-color-swatch--yellow { background: var(--annot-yellow); }
+.annotation-tools-popover .annotation-color-swatch--green { background: var(--annot-green); }
+.annotation-tools-popover .annotation-color-swatch--blue { background: var(--annot-blue); }
+.annotation-tools-popover .annotation-color-swatch--pink { background: var(--annot-pink); }
 
-.annotation-list-colors .annotation-color-swatch--yellow { background: #ffe650; }
-.annotation-list-colors .annotation-color-swatch--green { background: #78dc8c; }
-.annotation-list-colors .annotation-color-swatch--blue { background: #78b4ff; }
-.annotation-list-colors .annotation-color-swatch--pink { background: #ff8cbe; }
+.annotation-list-colors .annotation-color-swatch--yellow { background: var(--annot-yellow); }
+.annotation-list-colors .annotation-color-swatch--green { background: var(--annot-green); }
+.annotation-list-colors .annotation-color-swatch--blue { background: var(--annot-blue); }
+.annotation-list-colors .annotation-color-swatch--pink { background: var(--annot-pink); }
 
 .icon-button.is-armed {
   color: var(--accent-ink);
@@ -3239,10 +3281,10 @@ a:focus-visible {
   outline-offset: 1px;
 }
 
-.annotation-color-swatch--yellow { background: #ffe650; }
-.annotation-color-swatch--green { background: #78dc8c; }
-.annotation-color-swatch--blue { background: #78b4ff; }
-.annotation-color-swatch--pink { background: #ff8cbe; }
+.annotation-color-swatch--yellow { background: var(--annot-yellow); }
+.annotation-color-swatch--green { background: var(--annot-green); }
+.annotation-color-swatch--blue { background: var(--annot-blue); }
+.annotation-color-swatch--pink { background: var(--annot-pink); }
 
 .annotation-toolbar-close {
   min-width: 24px;
@@ -3288,10 +3330,10 @@ a:focus-visible {
   color: inherit;
 }
 
-.annotation-mark--highlight.annotation-mark--yellow { background: rgb(255 230 80 / 45%); }
-.annotation-mark--highlight.annotation-mark--green { background: rgb(120 220 140 / 40%); }
-.annotation-mark--highlight.annotation-mark--blue { background: rgb(120 180 255 / 40%); }
-.annotation-mark--highlight.annotation-mark--pink { background: rgb(255 140 190 / 40%); }
+.annotation-mark--highlight.annotation-mark--yellow { background: var(--annot-yellow-fill); }
+.annotation-mark--highlight.annotation-mark--green { background: var(--annot-green-fill); }
+.annotation-mark--highlight.annotation-mark--blue { background: var(--annot-blue-fill); }
+.annotation-mark--highlight.annotation-mark--pink { background: var(--annot-pink-fill); }
 
 .annotation-mark--underline {
   background: transparent;
@@ -3299,10 +3341,10 @@ a:focus-visible {
   border-bottom: 2px solid currentColor;
   padding-bottom: 1px;
 }
-.annotation-mark--underline.annotation-mark--yellow { border-bottom-color: rgb(230 180 20); }
-.annotation-mark--underline.annotation-mark--green { border-bottom-color: rgb(40 160 80); }
-.annotation-mark--underline.annotation-mark--blue { border-bottom-color: rgb(50 120 220); }
-.annotation-mark--underline.annotation-mark--pink { border-bottom-color: rgb(220 70 140); }
+.annotation-mark--underline.annotation-mark--yellow { border-bottom-color: var(--annot-yellow-line); }
+.annotation-mark--underline.annotation-mark--green { border-bottom-color: var(--annot-green-line); }
+.annotation-mark--underline.annotation-mark--blue { border-bottom-color: var(--annot-blue-line); }
+.annotation-mark--underline.annotation-mark--pink { border-bottom-color: var(--annot-pink-line); }
 
 /* 朗读当前句(RA-D3 修订):CSS Custom Highlight,零 DOM 变异——React
    重渲不可能再与句高亮冲突(P1 insertBefore 崩溃的根修复)。仍是选区色

@@ -254,8 +254,9 @@
 /*
   ---------- 青瓷 celadon: eye-care green (M3/D1). Low-chroma warm-green
   paper, ink-green text, tea-brown accent — deliberately not a green accent
-  so selection/heatmap tints never collide with the fixed annotation green
-  (#78dc8c stays the only saturated green on the page). ----------
+  so selection/heatmap tints never collide with the annotation green
+  (--annot-green in App.css: #87e2a8 light / #74c692 dark stays the only
+  saturated green on the page). ----------
 */
 
 :root[data-theme="celadon-light"] {
