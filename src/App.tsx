@@ -5257,11 +5257,9 @@ function App() {
       : "选择文档库";
   const pathParts = currentPath?.replace(/\\/g, "/").split("/") ?? [];
   const statusDetail = buildLibraryStatusDetail({
-    isWeb: IS_WEB_RUNTIME,
     searchQuery,
     searchResultCount: searchResults.length,
     indexProgress,
-    documents,
   });
 
   useEffect(() => {
@@ -5447,10 +5445,11 @@ function App() {
         </div>
 
         <footer className="sidebar-footer">
-          <div className="sidebar-status">
-            <strong>{snapshot ? `${documents.length.toLocaleString()} 篇文档` : "尚未打开文档库"}</strong>
-            <span ref={statusDetailRef}>{statusDetail}</span>
-          </div>
+          {statusDetail ? (
+            <div className="sidebar-status">
+              <span ref={statusDetailRef}>{statusDetail}</span>
+            </div>
+          ) : null}
           <div className="theme-controls">
             <button
               className="theme-series-label"

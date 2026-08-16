@@ -534,32 +534,41 @@ a:focus-visible {
   /* Anchor for the upward-opening theme style popover. */
   position: relative;
   display: flex;
+  flex-direction: column;
   flex-shrink: 0;
   min-height: 61px;
-  align-items: center;
-  gap: 7px;
-  padding: 11px 18px;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 12px;
   border-top: 1px solid var(--line);
   background: color-mix(in srgb, var(--chrome) 92%, transparent);
 }
 
 .theme-controls {
-  display: flex;
-  flex-shrink: 0;
-  align-items: center;
-  gap: 4px;
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2px;
 }
 
-/* Series label, now the「界面风格」popover trigger — always visible. */
+.theme-controls > .theme-series-label,
+.theme-controls > .icon-button {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Four equal cells fill the footer; the series label is one of them. */
 .theme-series-label {
   display: inline-flex;
-  max-width: 4.5em;
-  height: 28px;
+  height: 36px;
   align-items: center;
+  justify-content: center;
+  gap: 4px;
   overflow: hidden;
-  padding: 0 6px;
+  padding: 0 4px;
   border: 1px solid transparent;
-  border-radius: 8px;
+  border-radius: 10px;
   color: var(--muted);
   background: transparent;
   font-size: 10px;
@@ -659,17 +668,11 @@ a:focus-visible {
 
 .sidebar-status {
   min-width: 0;
-  flex: 1;
+  overflow: hidden;
+  padding: 0 4px;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.4;
-}
-
-.sidebar-status strong {
-  display: block;
-  overflow: hidden;
-  color: var(--ink-soft);
-  font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
 }

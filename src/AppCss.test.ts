@@ -78,6 +78,12 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.sidebar-footer\s*\{[^}]*flex-shrink:\s*0/s);
   });
 
+  it("lets every sidebar footer control share the full width", () => {
+    expect(css).toMatch(
+      /\.theme-controls\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)/s,
+    );
+  });
+
   it("hides library and TOC scrollbars while keeping overflow scrolling", () => {
     expect(css).toMatch(/\.sidebar-content\s*\{[^}]*scrollbar-width:\s*none/s);
     expect(css).toMatch(/\.toc-panel\s*\{[^}]*scrollbar-width:\s*none/s);
