@@ -1834,7 +1834,7 @@ a:focus-visible {
 .pdf-toolbar button:hover, .pdf-toolbar button.active { color: var(--accent-ink); background: var(--accent-soft); }
 .pdf-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
 .pdf-toolbar label { color: var(--muted); font-size: 10px; white-space: nowrap; }
-.pdf-toolbar input { width: 36px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--chrome); text-align: center; }
+.pdf-toolbar input { width: 36px; padding: 4px; margin-inline-end: 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--chrome); text-align: center; }
 .pdf-stride-chip { min-width: 30px; font-variant-numeric: tabular-nums; }
 .pdf-mode-toggle { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .pdf-mode-toggle button { position: relative; z-index: 1; white-space: nowrap; }
@@ -1875,7 +1875,7 @@ a:focus-visible {
 }
 /* pdf.js text layer contract: --total-scale-factor is set per page from JS
    (PdfPage), --scale-round-x/y are required by setLayerDimensions' round(). */
-.pdf-page { position: relative; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
+.pdf-page { position: relative; isolation: isolate; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
 .pdf-page canvas, .pdf-annotation-layer, .pdf-user-highlight-layer { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
 .pdf-page canvas { display: block; }
 
