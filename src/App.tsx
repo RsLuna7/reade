@@ -258,9 +258,11 @@ import { extractToc, type TocItem } from "./lib/markdown";
 import {
   listLibraryReadingPositions,
   readReadingPosition,
+  resetPdfMaxPage,
   writeReadingPosition,
   type ReadingPosition,
 } from "./lib/readingPositions";
+import { deletePdfPageOffset, readPdfPageOffset } from "./lib/pdfPageOffset";
 // 读完接着读(plan-read-next):三级回落纯逻辑在 lib,App 只负责哨兵
 // 触发、会话级 dismiss 与朗读互斥。
 import {
@@ -2122,6 +2124,19 @@ function App() {
     [],
   );
 
+  const handleResetPdfFrontier = useCallback((physicalPage: number) => {
+    const root = snapshot?.rootPath;
+    const path = currentPath;
+    if (!root || !path) return;
+    const stored = resetPdfMaxPage(root, path, physicalPage);
+    if (!stored || stored.kind !== "pdf") return;
+    setReadingHighWater((current) => ({
+      path,
+      maxScrollRatio: current?.path === path ? current.maxScrollRatio : 0,
+      maxPage: stored.maxPage,
+    }));
+  }, [currentPath, snapshot?.rootPath]);
+
   // T2 测量点:渲染后在空闲期对 TOC 目标元素做一次 offset/scrollHeight 测量,
   // 内容(toc/currentContent)或排版参数变化时缓存失效重测;滚动路径不测量。
   useEffect(() => {
@@ -2685,6 +2700,64 @@ function App() {
             run: () => void chooseAndOpenLibrary(),
           }
         : null,
+      currentContent?.kind === "pdf" && pdfViewMode === "original"
+        ? {
+            kind: "command" as const,
+            id: "cmd:pdf-calibrate",
+            title: "标定 PDF 印刷页码",
+            keywords: "pdf page printed calibrate 印刷 页码 标定",
+            badge: "命令",
+            run: () => pdfReaderHandleRef.current?.openPageCalibration(),
+          }
+        : null,
+      currentContent?.kind === "pdf" &&
+      pdfViewMode === "original" &&
+      snapshot?.rootPath &&
+      currentPath &&
+      readPdfPageOffset(snapshot.rootPath, currentPath)
+        ? {
+            kind: "command" as const,
+            id: "cmd:pdf-clear-offset",
+            title: "清除页码校正",
+            keywords: "pdf page offset clear 印刷 页码 校正 清除",
+            badge: "命令",
+            run: () => {
+              if (snapshot?.rootPath && currentPath) {
+                deletePdfPageOffset(snapshot.rootPath, currentPath);
+              }
+            },
+          }
+        : null,
+      currentContent?.kind === "pdf" && pdfViewMode === "original"
+        ? {
+            kind: "command" as const,
+            id: "cmd:pdf-frontier",
+            title: "跳到最远页（主线）",
+            keywords: "pdf frontier max page 主线 最远页",
+            badge: "命令",
+            run: () => {
+              const frontier =
+                readingHighWater?.path === currentPath && readingHighWater.maxPage > 0
+                  ? readingHighWater.maxPage
+                  : 1;
+              recordNavDeparture();
+              pdfReaderHandleRef.current?.jumpToPage(frontier);
+            },
+          }
+        : null,
+      currentContent?.kind === "pdf" && pdfViewMode === "original"
+        ? {
+            kind: "command" as const,
+            id: "cmd:pdf-reset-frontier",
+            title: "将主线设为当前页",
+            keywords: "pdf frontier reset 主线 当前页",
+            badge: "命令",
+            run: () => {
+              const page = pdfReaderHandleRef.current?.getPosition()?.page ?? 1;
+              handleResetPdfFrontier(page);
+            },
+          }
+        : null,
     ];
     for (const command of commands) {
       if (command) entries.push(command);
@@ -2692,15 +2765,20 @@ function App() {
     return entries;
   }, [
     chooseAndOpenLibrary,
+    commandPaletteOpen,
     compactLibraryLayout,
     currentContent,
+    currentPath,
     documents,
     handleReadAloudButton,
+    handleResetPdfFrontier,
     handleToggleSplit,
     homeOpen,
     paletteCollections,
+    pdfViewMode,
     readAloud.barOpen,
     readAloudDisabledReason,
+    readingHighWater,
     recordNavDeparture,
     refreshLibrary,
     selectDocument,
@@ -5797,6 +5875,26 @@ function App() {
                   annotations={annotations}
                   fuzzyAnchoring={fuzzyAnchoring}
                   readerRef={pdfReaderHandleRef}
+                  libraryRoot={snapshot?.rootPath}
+                  keyboardActive={
+                    !commandPaletteOpen &&
+                    !settingsOpen &&
+                    !stylePickerOpen &&
+                    !noteDraft &&
+                    !quoteCardSource &&
+                    !markEditor &&
+                    !relatedPassages &&
+                    !relocatePreview &&
+                    !importReview &&
+                    !bookDigestOpen
+                  }
+                  frontierPage={
+                    readingHighWater?.path === currentPath && readingHighWater.maxPage > 0
+                      ? readingHighWater.maxPage
+                      : 1
+                  }
+                  onIntentionalJump={recordNavDeparture}
+                  onResetFrontier={handleResetPdfFrontier}
                   onRegionCard={({ canvas, page }) =>
                     // 区域引用卡片(plan-pdf-region-card):即用即走,不落库。
                     setQuoteCardSource({
@@ -5878,6 +5976,7 @@ function App() {
                     path={splitState.path}
                     documents={documents}
                     motionLevel={motionLevel}
+                    libraryRoot={snapshot?.rootPath}
                     scrollMemory={paneScrollMemory.current}
                     pdfPositionMemory={panePdfMemory.current}
                     onClose={() => setSplitState(null)}

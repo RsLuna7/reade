@@ -76,6 +76,8 @@ export interface SecondaryPaneProps {
   /** Current library snapshot — used for titles, PDF metadata and the 失联 check. */
   documents: DocumentInfo[];
   motionLevel: ReaderMotionLevel;
+  /** Library root so a PDF in the pane shares printed-page calibration. */
+  libraryRoot?: string;
   onClose: () => void;
   /** Fired when the pane self-navigates, so the owner can keep its state in sync. */
   onPathChange?: (path: string) => void;
@@ -89,6 +91,7 @@ export function SecondaryPane({
   path,
   documents,
   motionLevel,
+  libraryRoot,
   onClose,
   onPathChange,
   scrollMemory: scrollMemoryProp,
@@ -348,6 +351,7 @@ export function SecondaryPane({
           motionLevel={motionLevel}
           annotations={EMPTY_ANNOTATIONS}
           readerRef={pdfHandleRef}
+          libraryRoot={libraryRoot}
           onTocChange={NOOP_TOC_CHANGE}
           onActiveChange={NOOP_ACTIVE_CHANGE}
         />

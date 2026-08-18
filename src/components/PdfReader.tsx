@@ -32,6 +32,19 @@ import {
   singleFitScale,
   spreadFitScale,
 } from "../lib/pdfSpread";
+import {
+  deletePdfPageOffset,
+  displayPageNumber,
+  effectiveOffset,
+  isValidCalibration,
+  offsetFromCalibration,
+  pageInputAriaLabel,
+  physicalFromPrinted,
+  printedFromPhysical,
+  readPdfPageOffset,
+  subscribePdfPageOffsets,
+  writePdfPageOffset,
+} from "../lib/pdfPageOffset";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
@@ -41,6 +54,25 @@ const PAGE_RENDER_MARGIN = "1200px 0px";
 const PAGE_REFERENCE_GAP = 8;
 /** 双页意图的会话级记忆(PS-D3):同 SecondaryPane scrollMemory 模式。 */
 const spreadMemory = new Map<string, boolean>();
+/** A2 快翻步长:会话级,不写 reader preferences。 */
+const STRIDE_OPTIONS = [5, 10, 20] as const;
+type PdfStride = (typeof STRIDE_OPTIONS)[number];
+const DEFAULT_STRIDE: PdfStride = 10;
+
+function cyclePdfStride(current: number): PdfStride {
+  const index = STRIDE_OPTIONS.indexOf(current as PdfStride);
+  return STRIDE_OPTIONS[(index < 0 ? 0 : index + 1) % STRIDE_OPTIONS.length];
+}
+
+function isTypingTarget(target: EventTarget | null): boolean {
+  return (
+    target instanceof HTMLElement &&
+    (target.tagName === "INPUT" ||
+      target.tagName === "TEXTAREA" ||
+      target.tagName === "SELECT" ||
+      target.isContentEditable)
+  );
+}
 
 class ReadeRangeTransport extends PDFDataRangeTransport {
   private aborted = false;
@@ -221,6 +253,8 @@ export interface PdfReaderHandle {
   getMode: () => "original" | "reading";
   setMode: (mode: "original" | "reading") => void;
   restorePosition: (position: PdfPagePosition) => boolean;
+  jumpToPage: (physicalPage: number) => void;
+  openPageCalibration: () => void;
 }
 
 interface PdfReaderProps {
@@ -239,6 +273,16 @@ interface PdfReaderProps {
   onRegionCard?: (capture: PdfRegionCapture) => void;
   /** 视图模式外报(plan-focus-mode FM-D4):原版式禁用聚焦模式。 */
   onModeChange?: (mode: "original" | "reading") => void;
+  /** A1: 书库根路径,用于读写印刷页校正;副栏同样传入以共享 offset。 */
+  libraryRoot?: string;
+  /** A2: 仅主栏在无 dialog 时为 true;副栏不传(默认 false)。 */
+  keyboardActive?: boolean;
+  /** A3: 已记录的最远文件页;有传才渲染「主线」钮。 */
+  frontierPage?: number | null;
+  /** A3: 主线跳转前记录回退栈;页码框/标定/A/D 不调用。 */
+  onIntentionalJump?: () => void;
+  /** A3: 将高水位重设为当前文件页。 */
+  onResetFrontier?: (physicalPage: number) => void;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
   onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
@@ -281,6 +325,8 @@ interface PageProps {
   onRegionCapture?: (capture: PdfRegionCapture) => void;
   onRatioChange: (page: number, ratio: number) => void;
   onJump: (page: number) => void;
+  /** Corner badge / aria page number (printed when calibrated). */
+  badgePage?: number;
 }
 
 function sourceIdentity(relativePath: string, size: number, modified: number): string {
@@ -342,7 +388,8 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage }: PageProps) {
+  const shownPage = badgePage ?? pageNumber;
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const textRef = useRef<HTMLDivElement>(null);
@@ -649,7 +696,11 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     id={`pdf-page-${pageNumber}`}
     data-page-number={pageNumber}
     ref={hostRef}
-    aria-label={`第 ${pageNumber} 页`}
+    aria-label={
+      shownPage === pageNumber
+        ? `第 ${pageNumber} 页`
+        : `印刷第 ${shownPage} 页，文件第 ${pageNumber} 页`
+    }
     style={{ aspectRatio: `1 / ${ratio}` }}
   >
     {renderNearby && <>
@@ -671,7 +722,7 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
       )}
     </>}
     <span className="reade-motion-locator-highlight" aria-hidden="true" />
-    <span className="pdf-page-number">{pageNumber}</span>
+    <span className="pdf-page-number">{shownPage}</span>
   </section>;
 }
 
@@ -705,6 +756,11 @@ export function PdfReader({
   readerRef,
   onRegionCard,
   onModeChange,
+  libraryRoot,
+  keyboardActive = false,
+  frontierPage = null,
+  onIntentionalJump,
+  onResetFrontier,
   onBrokenAnnotationsChange,
   onApproximateAnnotationsChange,
   onTocChange,
@@ -712,6 +768,8 @@ export function PdfReader({
 }: PdfReaderProps) {
   const rootRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
+  const pageInputRef = useRef<HTMLInputElement>(null);
+  const calibrateInputRef = useRef<HTMLInputElement>(null);
   const generationRef = useRef(0);
   const readingRequestRef = useRef(0);
   const currentPageRef = useRef(1);
@@ -731,6 +789,13 @@ export function PdfReader({
   // "截取引用"模式(plan-pdf-region-card):仅原版式;Esc 退出,换文档/
   // 切阅读模式自动退出;激活期间文本层 pointer-events 由 CSS 关闭。
   const [regionSelect, setRegionSelect] = useState(false);
+  const [pageOffset, setPageOffset] = useState(() =>
+    libraryRoot ? (readPdfPageOffset(libraryRoot, relativePath)?.offset ?? 0) : 0,
+  );
+  const [calibrateOpen, setCalibrateOpen] = useState(false);
+  const [calibrateDraft, setCalibrateDraft] = useState("");
+  const [calibrateError, setCalibrateError] = useState<string | null>(null);
+  const [stride, setStride] = useState<PdfStride>(DEFAULT_STRIDE);
   const [boundReading, setBoundReading] = useState<BoundReadingMode | null>(null);
   const [readingLoadingKey, setReadingLoadingKey] = useState<string | null>(null);
   const sourceKey = sourceIdentity(relativePath, size, modified);
@@ -802,6 +867,8 @@ export function PdfReader({
     setBoundReading(null);
     setReadingLoadingKey(null);
     setRegionSelect(false);
+    setCalibrateOpen(false);
+    setCalibrateError(null);
     // 换文档恢复该文档的双页意图(PS-D3 会话级记忆)。
     setSpreadIntent(spreadMemory.get(relativePath) ?? false);
   }, [relativePath, sourceKey]);
@@ -829,7 +896,10 @@ export function PdfReader({
   // 阅读模式没有页位图可裁;Esc 只在模式激活时消费(不 preventDefault,
   // App 全局 Esc 链的收尾行为保持不变)。
   useEffect(() => {
-    if (mode !== "original") setRegionSelect(false);
+    if (mode !== "original") {
+      setRegionSelect(false);
+      setCalibrateOpen(false);
+    }
   }, [mode]);
 
   useEffect(() => {
@@ -844,6 +914,27 @@ export function PdfReader({
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [regionSelect]);
+
+  useEffect(() => {
+    const syncOffset = () => {
+      if (!libraryRoot) {
+        setPageOffset(0);
+        return;
+      }
+      setPageOffset(readPdfPageOffset(libraryRoot, relativePath)?.offset ?? 0);
+    };
+    syncOffset();
+    return subscribePdfPageOffsets(syncOffset);
+  }, [libraryRoot, relativePath]);
+
+  useEffect(() => {
+    if (!calibrateOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setCalibrateOpen(false);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [calibrateOpen]);
 
   useEffect(() => {
     onTocChange([]);
@@ -905,6 +996,132 @@ export function PdfReader({
       }
     });
   }, [mode, reading?.pages, session?.pdf.numPages, setActivePage]);
+
+  const numPages = session?.pdf.numPages ?? 0;
+  const activeOffset = effectiveOffset(pageOffset, numPages);
+  const displayPage = displayPageNumber(currentPage, activeOffset);
+  const pageAria = pageInputAriaLabel(currentPage, activeOffset, numPages);
+
+  const openPageCalibration = useCallback(() => {
+    const printed = printedFromPhysical(currentPageRef.current, activeOffset);
+    setCalibrateDraft(printed >= 1 ? String(printed) : "");
+    setCalibrateError(null);
+    setCalibrateOpen(true);
+    window.requestAnimationFrame(() => calibrateInputRef.current?.focus());
+  }, [activeOffset]);
+
+  const confirmPageCalibration = useCallback(() => {
+    if (!libraryRoot || numPages < 1) return;
+    const printed = Number(calibrateDraft);
+    const physical = currentPageRef.current;
+    if (!isValidCalibration(physical, printed, numPages)) {
+      setCalibrateError("无法使用该印刷页码：请输入 ≥1 的整数，且校正后至少有一页印刷号落在文件范围内。");
+      return;
+    }
+    const nextOffset = offsetFromCalibration(physical, printed);
+    if (nextOffset === 0) {
+      deletePdfPageOffset(libraryRoot, relativePath);
+    } else {
+      writePdfPageOffset(libraryRoot, relativePath, { offset: nextOffset, atPhysical: physical });
+    }
+    setCalibrateOpen(false);
+    setCalibrateError(null);
+  }, [calibrateDraft, libraryRoot, numPages, relativePath]);
+
+  const clearPageCalibration = useCallback(() => {
+    if (libraryRoot) deletePdfPageOffset(libraryRoot, relativePath);
+    setCalibrateOpen(false);
+    setCalibrateError(null);
+  }, [libraryRoot, relativePath]);
+
+  const focusPageInput = useCallback(() => {
+    const input = pageInputRef.current;
+    if (!input) return;
+    input.focus();
+    input.select();
+  }, []);
+
+  const jumpToFrontier = useCallback(() => {
+    if (frontierPage == null) return;
+    const target = Math.max(1, Math.round(frontierPage));
+    if (currentPageRef.current >= target) return;
+    onIntentionalJump?.();
+    jump(target);
+  }, [frontierPage, jump, onIntentionalJump]);
+
+  useEffect(() => {
+    if (!keyboardActive || mode !== "original" || !session) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.isComposing) return;
+      const code = event.code;
+      const ctrl = event.ctrlKey || event.metaKey;
+      const typing = isTypingTarget(event.target);
+      const inCalibrateInput = event.target === calibrateInputRef.current;
+
+      if (ctrl && event.shiftKey && !event.altKey && code === "KeyG") {
+        if (typing && !inCalibrateInput && event.target !== pageInputRef.current) return;
+        event.preventDefault();
+        openPageCalibration();
+        return;
+      }
+      if (ctrl && event.shiftKey && !event.altKey && code === "KeyH") {
+        if (typing) return;
+        event.preventDefault();
+        onResetFrontier?.(currentPageRef.current);
+        return;
+      }
+      if (ctrl || event.metaKey || event.altKey) return;
+
+      if (code === "KeyG" && !event.shiftKey) {
+        if (typing && !inCalibrateInput && event.target !== pageInputRef.current) return;
+        event.preventDefault();
+        focusPageInput();
+        return;
+      }
+      if (code === "KeyH" && event.shiftKey) {
+        if (typing) return;
+        if (frontierPage == null) return;
+        event.preventDefault();
+        jumpToFrontier();
+        return;
+      }
+      if (code !== "KeyA" && code !== "KeyD") return;
+      if (typing || calibrateOpen) return;
+      const pageCount = session.pdf.numPages;
+      let next: number;
+      if (event.shiftKey) {
+        const delta = code === "KeyD" ? stride : -stride;
+        next = Math.min(pageCount, Math.max(1, currentPageRef.current + delta));
+      } else if (spreadActive) {
+        next = code === "KeyD"
+          ? nextSpreadPage(currentPageRef.current, pageCount)
+          : previousSpreadPage(currentPageRef.current);
+      } else {
+        next = Math.min(pageCount, Math.max(1, currentPageRef.current + (code === "KeyD" ? 1 : -1)));
+      }
+      if (next === currentPageRef.current) {
+        event.preventDefault();
+        return;
+      }
+      event.preventDefault();
+      jump(next);
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, [
+    calibrateOpen,
+    focusPageInput,
+    frontierPage,
+    jump,
+    jumpToFrontier,
+    keyboardActive,
+    mode,
+    onResetFrontier,
+    openPageCalibration,
+    session,
+    spreadActive,
+    stride,
+  ]);
 
   const handlePageRatioChange = useCallback((page: number, ratio: number) => {
     pageRatiosRef.current.set(page, ratio);
@@ -1101,11 +1318,13 @@ export function PdfReader({
         if (!reader) return false;
         return restorePositionInstantly(reader, toolbarRef.current, position);
       },
+      jumpToPage: (physicalPage) => jump(physicalPage),
+      openPageCalibration,
     };
     return () => {
       readerRef.current = null;
     };
-  }, [capturePosition, mode, openReadingMode, readerRef, switchMode]);
+  }, [capturePosition, jump, mode, openPageCalibration, openReadingMode, readerRef, switchMode]);
 
   useEffect(() => {
     if (locator?.kind !== "pdfPage") return;
@@ -1195,9 +1414,56 @@ export function PdfReader({
       {mode === "original" && <>
         <div className="pdf-toolbar-group">
           <button type="button" aria-label="上一页" onClick={() => jump(spreadActive ? previousSpreadPage(currentPage) : currentPage - 1)}><ChevronLeft size={14} /></button>
-          <label><input value={currentPage} onChange={(event) => jump(Number(event.target.value))} aria-label="当前页" /> / {session?.pdf.numPages ?? "…"}</label>
+          <label>
+            <input
+              ref={pageInputRef}
+              value={displayPage}
+              onChange={(event) => {
+                const typed = Number(event.target.value);
+                jump(activeOffset === 0 ? typed : physicalFromPrinted(typed, activeOffset));
+              }}
+              aria-label={pageAria}
+              title={activeOffset === 0 ? undefined : pageAria}
+            /> / {session?.pdf.numPages ?? "…"}
+          </label>
           <button type="button" aria-label="下一页" onClick={() => jump(spreadActive ? nextSpreadPage(currentPage, session?.pdf.numPages ?? currentPage + 2) : currentPage + 1)}><ChevronRight size={14} /></button>
+          <button
+            type="button"
+            className="pdf-stride-chip"
+            title={`Shift+A / Shift+D 一次跳 ${stride} 页`}
+            aria-label={`快翻步长 ${stride} 页`}
+            onClick={() => setStride((value) => cyclePdfStride(value))}
+          >{stride}</button>
         </div>
+        {libraryRoot && <div className="pdf-toolbar-group">
+          <button
+            type="button"
+            className={activeOffset !== 0 || calibrateOpen ? "active" : ""}
+            aria-pressed={calibrateOpen}
+            title={
+              activeOffset === 0
+                ? "标定印刷页码（Ctrl+Shift+G）"
+                : `${pageAria}，点击可改或清除`
+            }
+            onClick={openPageCalibration}
+          >
+            {activeOffset === 0 || printedFromPhysical(currentPage, activeOffset) < 1
+              ? "标定"
+              : `${printedFromPhysical(currentPage, activeOffset)} · ${currentPage}`}
+          </button>
+        </div>}
+        {frontierPage != null && <div className="pdf-toolbar-group">
+          <button
+            type="button"
+            disabled={currentPage >= frontierPage}
+            title={
+              currentPage >= frontierPage
+                ? "当前已在最远页"
+                : `跳到最远页（文件第 ${frontierPage} 页，Shift+H）`
+            }
+            onClick={jumpToFrontier}
+          >主线</button>
+        </div>}
         <div className="pdf-toolbar-group">
           <button type="button" aria-label="缩小" onClick={() => setScale((value) => Math.max(.5, value - .1))}><Minus size={14} /></button>
           <button type="button" title="实际大小" onClick={() => setScale(1)}>{Math.round(scale * 100)}%</button>
@@ -1237,6 +1503,30 @@ export function PdfReader({
         在页面上拖出一个矩形即可生成引用卡片；按 Esc 退出。
       </div>
     )}
+    {calibrateOpen && mode === "original" && (
+      <div className="pdf-region-hint pdf-page-calibrate-hint" role="status">
+        <span>当前文件第 {currentPage} 页对应印刷第</span>
+        <input
+          ref={calibrateInputRef}
+          value={calibrateDraft}
+          inputMode="numeric"
+          aria-label="印刷页码"
+          onChange={(event) => {
+            setCalibrateDraft(event.target.value);
+            setCalibrateError(null);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault();
+              confirmPageCalibration();
+            }
+          }}
+        />
+        <button type="button" onClick={confirmPageCalibration}>确定</button>
+        <button type="button" onClick={clearPageCalibration}>清除</button>
+        {calibrateError && <span className="pdf-page-calibrate-error">{calibrateError}</span>}
+      </div>
+    )}
     {error && <div className="pdf-state pdf-state--error">{error}</div>}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
     {mode === "original" && session && <div className="pdf-pages" data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
@@ -1260,6 +1550,7 @@ export function PdfReader({
           )}
           onRatioChange={handlePageRatioChange}
           onJump={jump}
+          badgePage={displayPageNumber(page, activeOffset)}
           key={`${session.lifecycle.generation}-${page}`}
         />;
       })}
@@ -1268,7 +1559,7 @@ export function PdfReader({
       {readingLoading && <div className="pdf-state"><span className="spinner" />正在生成按页阅读文本…</div>}
       {reading?.warning && <div className="pdf-reading-warning"><ScanSearch size={18} />{reading.warning}</div>}
       {reading && reading.missingPages.length > 0 && <div className="pdf-reading-warning"><ScanSearch size={18} />第 {ranges(reading.missingPages)} 页没有可提取文本；本结果为部分内容，未执行 OCR。</div>}
-      {reading?.pages.map((page) => <section id={`pdf-page-${page.page}`} data-page-number={page.page} className="pdf-reading-page" key={page.page}><span className="reade-motion-locator-highlight" aria-hidden="true" /><span className="pdf-reading-page-label">Page {page.page}</span>{page.needsOcr && <p className="pdf-page-missing">本页需要 OCR，当前版本未提取正文。</p>}<MarkdownRenderer content={page.markdown} resolveImageSrc={() => null} onNavigate={() => undefined} /></section>)}
+      {reading?.pages.map((page) => <section id={`pdf-page-${page.page}`} data-page-number={page.page} className="pdf-reading-page" key={page.page}><span className="reade-motion-locator-highlight" aria-hidden="true" /><span className="pdf-reading-page-label">Page {displayPageNumber(page.page, activeOffset)}</span>{page.needsOcr && <p className="pdf-page-missing">本页需要 OCR，当前版本未提取正文。</p>}<MarkdownRenderer content={page.markdown} resolveImageSrc={() => null} onNavigate={() => undefined} /></section>)}
       {!readingLoading && !reading && indexError && <div className="pdf-state pdf-state--error">{indexError}</div>}
     </div>}
   </div>;

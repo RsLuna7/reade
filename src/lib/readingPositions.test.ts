@@ -6,6 +6,7 @@ import {
   READING_POSITIONS_VERSION,
   listLibraryReadingPositions,
   readReadingPosition,
+  resetPdfMaxPage,
   sanitizeReadingPosition,
   writeReadingPosition,
 } from "./readingPositions";
@@ -131,6 +132,41 @@ describe("monotonic high-water marks", () => {
       NOW + 1000,
     );
     expect(asPdf).toMatchObject({ kind: "pdf", page: 2, maxPage: 2 });
+  });
+});
+
+describe("resetPdfMaxPage", () => {
+  it("lowers maxPage while keeping the current page and offset", () => {
+    writeReadingPosition(ROOT, "paper.pdf", { kind: "pdf", page: 12, offsetRatio: 0.2 }, NOW);
+    writeReadingPosition(ROOT, "paper.pdf", { kind: "pdf", page: 4, offsetRatio: 0.9 }, NOW + 1000);
+    const reset = resetPdfMaxPage(ROOT, "paper.pdf", 4, NOW + 2000);
+    expect(reset).toEqual({
+      kind: "pdf",
+      page: 4,
+      offsetRatio: 0.9,
+      maxPage: 4,
+      updatedAt: NOW + 2000,
+    });
+    expect(readReadingPosition(ROOT, "paper.pdf")).toEqual(reset);
+  });
+
+  it("creates a pdf entry when none exists", () => {
+    const created = resetPdfMaxPage(ROOT, "missing.pdf", 7, NOW);
+    expect(created).toEqual({
+      kind: "pdf",
+      page: 7,
+      offsetRatio: 0,
+      maxPage: 7,
+      updatedAt: NOW,
+    });
+    expect(readReadingPosition(ROOT, "missing.pdf")).toEqual(created);
+  });
+
+  it("rejects invalid pages without touching storage", () => {
+    expect(resetPdfMaxPage(ROOT, "paper.pdf", 0, NOW)).toBeNull();
+    expect(resetPdfMaxPage(ROOT, "paper.pdf", -3, NOW)).toBeNull();
+    expect(resetPdfMaxPage(ROOT, "paper.pdf", Number.NaN, NOW)).toBeNull();
+    expect(localStorage.getItem(READING_POSITIONS_STORAGE_KEY)).toBeNull();
   });
 });
 

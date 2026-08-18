@@ -1816,6 +1816,7 @@ a:focus-visible {
   z-index: 4;
   top: 12px;
   display: flex;
+  flex-wrap: wrap;
   width: fit-content;
   max-width: 100%;
   margin: 0 auto 24px;
@@ -1834,6 +1835,7 @@ a:focus-visible {
 .pdf-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
 .pdf-toolbar label { color: var(--muted); font-size: 10px; white-space: nowrap; }
 .pdf-toolbar input { width: 36px; padding: 4px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--chrome); text-align: center; }
+.pdf-stride-chip { min-width: 30px; font-variant-numeric: tabular-nums; }
 .pdf-mode-toggle { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .pdf-mode-toggle button { position: relative; z-index: 1; white-space: nowrap; }
 .pdf-mode-indicator { position: absolute; z-index: 0; top: 0; bottom: 0; left: 0; width: calc((100% - 8px) / 2); border-radius: 7px; background: var(--accent-soft); opacity: 0; pointer-events: none; transform: translateX(0); }
@@ -1917,6 +1919,37 @@ a:focus-visible {
   background: var(--paper-raised);
   font-size: 12px;
   box-shadow: var(--shadow);
+}
+.pdf-page-calibrate-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  border-radius: 11px;
+  padding: 6px 12px;
+}
+.pdf-page-calibrate-hint input {
+  width: 48px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--chrome);
+  text-align: center;
+}
+.pdf-page-calibrate-hint button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pdf-page-calibrate-error {
+  flex: 1 1 100%;
+  color: #b34e42;
 }
 /* No width/height override here: pdf.js setLayerDimensions sizes the text
    layer from --total-scale-factor and rotates it via [data-main-rotation]. */

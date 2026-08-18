@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pdfMocks = vi.hoisted(() => ({
@@ -529,5 +529,223 @@ describe("PDF page position preservation", () => {
   it("restores the same ratio against a differently sized target page", () => {
     const position = capturePdfPagePosition(4, 100, 400, 260);
     expect(calculatePdfRestoreScrollTop(600, 80, 1000, 200, position.offsetRatio)).toBe(880);
+  });
+});
+
+describe("PDF tactical navigation (plan-pdf-tactical-nav A)", () => {
+  function fakePdf(numPages = 20) {
+    return {
+      numPages,
+      getOutline: vi.fn().mockResolvedValue(null),
+      getPage: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+  }
+
+  const ROOT = "D:\\books";
+  const common = {
+    relativePath: "scan.pdf",
+    size: 100,
+    modified: 1,
+    indexStatus: "ready" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    libraryRoot: ROOT,
+    keyboardActive: true,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  async function renderReady(
+    viewProps: Partial<typeof common> & {
+      readerRef?: { current: PdfReaderHandle | null };
+      frontierPage?: number;
+      onIntentionalJump?: () => void;
+      onResetFrontier?: (page: number) => void;
+    } = {},
+    numPages = 20,
+  ) {
+    const view = render(<PdfReader {...common} {...viewProps} />);
+    const task = pdfMocks.tasks[pdfMocks.tasks.length - 1];
+    await act(async () => {
+      task.resolve(fakePdf(numPages));
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(view.container).toHaveTextContent(` / ${numPages}`);
+    });
+    return view;
+  }
+
+  beforeEach(() => {
+    localStorage.clear();
+  });
+
+  afterEach(() => {
+    cleanup();
+  });
+
+  it("shows printed pages after calibration and jumps by printed number", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady({ readerRef, relativePath: "offset.pdf" }, 100);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+
+    act(() => readerRef.current!.jumpToPage(37));
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    expect(pageInput).toHaveValue("37");
+
+    fireEvent.click(view.getByRole("button", { name: "标定" }));
+    const printedInput = view.getByRole("textbox", { name: "印刷页码" });
+    fireEvent.change(printedInput, { target: { value: "26" } });
+    fireEvent.click(view.getByRole("button", { name: "确定" }));
+
+    expect(pageInput).toHaveValue("26");
+    expect(pageInput).toHaveAccessibleName("印刷第 26 页，文件第 37 页，共 100 页");
+    expect(view.container.querySelector("#pdf-page-37 .pdf-page-number")).toHaveTextContent("26");
+    expect(view.container.querySelector("#pdf-page-1 .pdf-page-number")).toHaveTextContent("1");
+
+    fireEvent.change(pageInput, { target: { value: "87" } });
+    expect(pageInput).toHaveValue("87");
+    expect(pageInput).toHaveAccessibleName("印刷第 87 页，文件第 98 页，共 100 页");
+
+    act(() => view.unmount());
+  });
+
+  it("persists calibration across remounts", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const first = await renderReady({ readerRef, relativePath: "persist.pdf" }, 40);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+    act(() => readerRef.current!.jumpToPage(12));
+    fireEvent.click(first.getByRole("button", { name: "标定" }));
+    fireEvent.change(first.getByRole("textbox", { name: "印刷页码" }), { target: { value: "1" } });
+    fireEvent.click(first.getByRole("button", { name: "确定" }));
+    act(() => first.unmount());
+
+    const readerRef2 = { current: null as PdfReaderHandle | null };
+    const second = await renderReady({ readerRef: readerRef2, relativePath: "persist.pdf" }, 40);
+    await waitFor(() => expect(readerRef2.current).not.toBeNull());
+    act(() => readerRef2.current!.jumpToPage(12));
+    expect(second.getByRole("textbox", { name: /印刷第 1 页，文件第 12 页/ })).toHaveValue("1");
+    act(() => second.unmount());
+  });
+
+  it("pages with A/D, skips form fields and IME composition, and does not steal arrows", async () => {
+    const view = await renderReady({ relativePath: "keys.pdf" });
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    expect(pageInput).toHaveValue("1");
+
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(pageInput).toHaveValue("2");
+    fireEvent.keyDown(window, { key: "a", code: "KeyA" });
+    expect(pageInput).toHaveValue("1");
+
+    fireEvent.keyDown(window, { key: "g", code: "KeyG" });
+    expect(pageInput).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", isComposing: true });
+    expect(pageInput).toHaveValue("1");
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", ctrlKey: true });
+    expect(pageInput).toHaveValue("1");
+    fireEvent.keyDown(window, { key: "ArrowDown", code: "ArrowDown" });
+    expect(pageInput).toHaveValue("1");
+
+    pageInput.focus();
+    fireEvent.keyDown(pageInput, { key: "d", code: "KeyD" });
+    expect(pageInput).toHaveValue("1");
+
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", shiftKey: true });
+    expect(pageInput).toHaveValue("11");
+    fireEvent.click(view.getByRole("button", { name: "快翻步长 10 页" }));
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", shiftKey: true });
+    expect(pageInput).toHaveValue("20");
+
+    act(() => view.unmount());
+  });
+
+  it("does not page when keyboardActive is false", async () => {
+    const view = await renderReady({ relativePath: "inactive.pdf", keyboardActive: false });
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(view.getByRole("textbox", { name: "当前页" })).toHaveValue("1");
+    act(() => view.unmount());
+  });
+
+  it("does not page with A/D while the calibration hint is open", async () => {
+    const view = await renderReady({ relativePath: "cal-keys.pdf" });
+    fireEvent.keyDown(window, { key: "G", code: "KeyG", ctrlKey: true, shiftKey: true });
+    expect(view.getByRole("textbox", { name: "印刷页码" })).toBeInTheDocument();
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(view.getByRole("textbox", { name: "当前页" })).toHaveValue("1");
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(view.queryByRole("textbox", { name: "印刷页码" })).toBeNull();
+    act(() => view.unmount());
+  });
+
+  it("steps a spread pair with A/D but not with Shift+A/D", async () => {
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1600 });
+    const view = await renderReady({ relativePath: "spread-keys.pdf" }, 8);
+    const reader = view.container.querySelector<HTMLElement>(".pdf-reader");
+    Object.defineProperty(reader, "clientWidth", { configurable: true, get: () => 1200 });
+    act(() => {
+      fireEvent(window, new Event("resize"));
+    });
+    fireEvent.click(await view.findByRole("button", { name: "双页" }));
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(pageInput).toHaveValue("2");
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(pageInput).toHaveValue("4");
+    fireEvent.keyDown(window, { key: "d", code: "KeyD", shiftKey: true });
+    expect(pageInput).toHaveValue("8");
+    Object.defineProperty(window, "innerWidth", { configurable: true, value: 1024 });
+    act(() => view.unmount());
+  });
+
+  it("jumps to the frontier via 主线 and Shift+H, and resets with Ctrl+Shift+H", async () => {
+    const onIntentionalJump = vi.fn();
+    const onResetFrontier = vi.fn();
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady({
+      relativePath: "frontier.pdf",
+      readerRef,
+      frontierPage: 9,
+      onIntentionalJump,
+      onResetFrontier,
+    });
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    const frontier = view.getByRole("button", { name: "主线" });
+    expect(frontier).toBeEnabled();
+
+    fireEvent.click(frontier);
+    expect(onIntentionalJump).toHaveBeenCalledOnce();
+    expect(pageInput).toHaveValue("9");
+    expect(frontier).toBeDisabled();
+
+    act(() => readerRef.current!.jumpToPage(3));
+    expect(frontier).toBeEnabled();
+    fireEvent.keyDown(window, { key: "H", code: "KeyH", shiftKey: true });
+    expect(onIntentionalJump).toHaveBeenCalledTimes(2);
+    expect(pageInput).toHaveValue("9");
+
+    fireEvent.keyDown(window, { key: "H", code: "KeyH", ctrlKey: true, shiftKey: true });
+    expect(onResetFrontier).toHaveBeenCalledWith(9);
+
+    act(() => view.unmount());
+  });
+
+  it("does not page in reading mode", async () => {
+    vi.mocked(readPdfReadingMode).mockReset();
+    vi.mocked(readPdfReadingMode).mockResolvedValue({
+      relativePath: "reading-keys.pdf",
+      status: "ready",
+      pages: [{ page: 1, markdown: "hello", needsOcr: false, ocrReason: null }],
+      missingPages: [],
+      warning: null,
+    });
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady({ relativePath: "reading-keys.pdf", readerRef });
+    await act(async () => readerRef.current!.setMode("reading"));
+    fireEvent.keyDown(window, { key: "d", code: "KeyD" });
+    expect(view.container.querySelector(".pdf-reading-page-label")).toHaveTextContent("Page 1");
+    act(() => view.unmount());
   });
 });

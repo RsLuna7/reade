@@ -237,3 +237,54 @@ export function writeReadingPosition(
   saveEnvelope(envelope);
   return entry;
 }
+
+/**
+ * Sets this PDF's high-water `maxPage` explicitly (plan-pdf-tactical-nav A3).
+ * Unlike `writeReadingPosition`, the mark may go down. Keeps the stored
+ * `page` / `offsetRatio` when an entry already exists; if that page would
+ * sit above the new max, it is clamped so a later sanitize cannot undo the
+ * reset. Missing entries become `{ page, offsetRatio: 0, maxPage: page }`.
+ */
+export function resetPdfMaxPage(
+  libraryRoot: string,
+  relativePath: string,
+  page: number,
+  now: number = Date.now(),
+): ReadingPosition | null {
+  if (!libraryRoot || !relativePath) return null;
+  if (typeof now !== "number" || !Number.isFinite(now) || now <= 0) return null;
+  if (typeof page !== "number" || !Number.isFinite(page) || Math.floor(page) < 1) {
+    return null;
+  }
+
+  const maxPage = Math.max(1, Math.floor(page));
+  const envelope = loadEnvelope();
+  const library = envelope.libraries[libraryRoot] ?? {};
+  const existing = library[relativePath];
+
+  let entry: ReadingPosition;
+  if (existing?.kind === "pdf") {
+    const nextPage = existing.page > maxPage ? maxPage : existing.page;
+    entry = {
+      kind: "pdf",
+      page: nextPage,
+      offsetRatio: existing.offsetRatio,
+      maxPage,
+      updatedAt: now,
+    };
+  } else {
+    entry = {
+      kind: "pdf",
+      page: maxPage,
+      offsetRatio: 0,
+      maxPage,
+      updatedAt: now,
+    };
+  }
+
+  library[relativePath] = entry;
+  evictOverLimit(library, READING_POSITIONS_LIBRARY_LIMIT);
+  envelope.libraries[libraryRoot] = library;
+  saveEnvelope(envelope);
+  return entry;
+}
