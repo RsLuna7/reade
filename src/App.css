@@ -1836,6 +1836,12 @@ a:focus-visible {
 .pdf-toolbar label { color: var(--muted); font-size: 10px; white-space: nowrap; }
 .pdf-toolbar input { width: 36px; padding: 4px; margin-inline-end: 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--chrome); text-align: center; }
 .pdf-stride-chip { min-width: 30px; font-variant-numeric: tabular-nums; }
+.pdf-pin-group { gap: 1px; }
+.pdf-pin-chip {
+  min-width: 26px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
 .pdf-mode-toggle { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 .pdf-mode-toggle button { position: relative; z-index: 1; white-space: nowrap; }
 .pdf-mode-indicator { position: absolute; z-index: 0; top: 0; bottom: 0; left: 0; width: calc((100% - 8px) / 2); border-radius: 7px; background: var(--accent-soft); opacity: 0; pointer-events: none; transform: translateX(0); }

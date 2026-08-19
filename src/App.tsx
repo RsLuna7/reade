@@ -1643,7 +1643,11 @@ function App() {
   >(null);
   // 分栏对照(plan-split-view,SP-D1):session-only App state,不进 store。
   // splitState 在窄窗退化时保留,窗口恢复 ≥1080px 自动回到分栏(SP-D6)。
-  const [splitState, setSplitState] = useState<{ path: string } | null>(null);
+  const [splitState, setSplitState] = useState<{
+    path: string;
+    pinPage?: number;
+    pinSeq?: number;
+  } | null>(null);
   const [splitPos, setSplitPos] = useState(SPLIT_POS_DEFAULT);
   const [compactTocOpen, setCompactTocOpen] = useState(false);
   const [mobileLibraryOpen, setMobileLibraryOpen] = useState(false);
@@ -2477,6 +2481,24 @@ function App() {
     [showNotice, splitWide],
   );
 
+  const handlePinToSecondary = useCallback(
+    (physicalPage: number) => {
+      if (!currentPath) return;
+      if (!splitWide) {
+        showNotice("窗口宽度不足（需 ≥1080px），无法开启分栏。");
+        return;
+      }
+      const page = Math.max(1, Math.round(physicalPage));
+      panePdfMemory.current.set(currentPath, { page, offsetRatio: 0 });
+      setSplitState((current) => ({
+        path: currentPath,
+        pinPage: page,
+        pinSeq: (current?.pinSeq ?? 0) + 1,
+      }));
+    },
+    [currentPath, showNotice, splitWide],
+  );
+
   const handleSplitDividerPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
       splitDragging.current = true;
@@ -2758,6 +2780,19 @@ function App() {
             },
           }
         : null,
+      currentContent?.kind === "pdf" && pdfViewMode === "original"
+        ? {
+            kind: "command" as const,
+            id: "cmd:pdf-pin-secondary",
+            title: "把当前页钉到副栏",
+            keywords: "pdf pin lock split secondary 锁页 副栏 对照 钉",
+            badge: "命令",
+            run: () => {
+              const page = pdfReaderHandleRef.current?.getPosition()?.page ?? 1;
+              handlePinToSecondary(page);
+            },
+          }
+        : null,
     ];
     for (const command of commands) {
       if (command) entries.push(command);
@@ -2770,6 +2805,8 @@ function App() {
     currentContent,
     currentPath,
     documents,
+    handleOpenSecondary,
+    handlePinToSecondary,
     handleReadAloudButton,
     handleResetPdfFrontier,
     handleToggleSplit,
@@ -5895,6 +5932,7 @@ function App() {
                   }
                   onIntentionalJump={recordNavDeparture}
                   onResetFrontier={handleResetPdfFrontier}
+                  onPinToSecondary={handlePinToSecondary}
                   onRegionCard={({ canvas, page }) =>
                     // 区域引用卡片(plan-pdf-region-card):即用即走,不落库。
                     setQuoteCardSource({
@@ -5974,13 +6012,17 @@ function App() {
                 >
                   <SecondaryPane
                     path={splitState.path}
+                    pinPage={splitState.pinPage}
+                    pinSeq={splitState.pinSeq}
                     documents={documents}
                     motionLevel={motionLevel}
                     libraryRoot={snapshot?.rootPath}
                     scrollMemory={paneScrollMemory.current}
                     pdfPositionMemory={panePdfMemory.current}
                     onClose={() => setSplitState(null)}
-                    onPathChange={(path) => setSplitState({ path })}
+                    onPathChange={(path) =>
+                      setSplitState((current) => (current ? { path } : { path }))
+                    }
                   />
                 </Suspense>
               </>

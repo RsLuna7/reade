@@ -279,8 +279,10 @@ onResetFrontier?: (physicalPage: number) => void;
 
 ---
 
-## 7. 明确留给 B 批
+## 7. B 批与仍未做
 
-- 3–5 个页钉（与 Ctrl+B 标注书签分家）。
-- 「把当前页钉到副栏」（走现有分栏，不默认同步滚动）。
-- 把 `formatPrintedPage` 接到标注列表、引用卡片、搜索命中的显示层。
+B1 页钉与 B2 锁到副栏见 `docs/plan-pdf-page-pins.md`。
+
+仍留后续：
+
+- 把 `formatPrintedPage` 接到标注列表、引用卡片、搜索命中的显示层（原 B3）。

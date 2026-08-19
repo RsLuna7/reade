@@ -13,6 +13,37 @@ vi.mock("../lib/backend", async (importOriginal) => {
   };
 });
 
+const panePdf = vi.hoisted(() => ({
+  jumpToPage: vi.fn(),
+  restorePosition: vi.fn(() => true),
+}));
+
+vi.mock("./PdfReader", () => ({
+  PdfReader: function MockPdfReader(props: {
+    readerRef?: { current: {
+      getPosition: () => { page: number; offsetRatio: number };
+      getMode: () => "original";
+      setMode: () => void;
+      restorePosition: (position: unknown) => boolean;
+      jumpToPage: (page: number) => void;
+      openPageCalibration: () => void;
+    } | null };
+    relativePath: string;
+  }) {
+    if (props.readerRef) {
+      props.readerRef.current = {
+        getPosition: () => ({ page: 1, offsetRatio: 0 }),
+        getMode: () => "original",
+        setMode: () => undefined,
+        restorePosition: panePdf.restorePosition,
+        jumpToPage: panePdf.jumpToPage,
+        openPageCalibration: () => undefined,
+      };
+    }
+    return <div data-testid="pane-pdf">{props.relativePath}</div>;
+  },
+}));
+
 import { readAsset, readDocument, type DocumentContent, type DocumentInfo } from "../lib/backend";
 import { useReaderStore } from "../store/useReaderStore";
 import { SecondaryPane } from "./SecondaryPane";
@@ -46,6 +77,9 @@ beforeEach(() => {
   readDocumentMock.mockReset();
   readAssetMock.mockReset();
   readAssetMock.mockRejectedValue(new Error("no assets in tests"));
+  panePdf.jumpToPage.mockReset();
+  panePdf.restorePosition.mockReset();
+  panePdf.restorePosition.mockReturnValue(true);
 });
 
 afterEach(() => {
@@ -292,5 +326,52 @@ describe("SecondaryPane", () => {
     });
     // Session-only memory restores the previous position for the same path.
     expect(scroller.scrollTop).toBe(120);
+  });
+
+  it("jumps an already-open PDF when pinSeq changes without reloading", async () => {
+    readDocumentMock.mockResolvedValue({
+      kind: "pdf",
+      relativePath: "scan.pdf",
+      size: 2048,
+      indexStatus: "ready",
+      indexError: null,
+    });
+    const memory = new Map();
+    const view = render(
+      <SecondaryPane
+        path="scan.pdf"
+        documents={[documentInfo("scan.pdf", { format: "pdf", title: "扫描教材" })]}
+        motionLevel="off"
+        onClose={() => undefined}
+        pdfPositionMemory={memory}
+        pinPage={12}
+        pinSeq={1}
+      />,
+    );
+    await waitFor(() => {
+      expect(screen.getByTestId("pane-pdf")).toHaveTextContent("scan.pdf");
+    });
+    await waitFor(() => {
+      expect(panePdf.jumpToPage).toHaveBeenCalledWith(12);
+    });
+    expect(memory.get("scan.pdf")).toEqual({ page: 12, offsetRatio: 0 });
+    const loads = readDocumentMock.mock.calls.length;
+
+    view.rerender(
+      <SecondaryPane
+        path="scan.pdf"
+        documents={[documentInfo("scan.pdf", { format: "pdf", title: "扫描教材" })]}
+        motionLevel="off"
+        onClose={() => undefined}
+        pdfPositionMemory={memory}
+        pinPage={40}
+        pinSeq={2}
+      />,
+    );
+    await waitFor(() => {
+      expect(panePdf.jumpToPage).toHaveBeenCalledWith(40);
+    });
+    expect(readDocumentMock.mock.calls.length).toBe(loads);
+    expect(memory.get("scan.pdf")).toEqual({ page: 40, offsetRatio: 0 });
   });
 });

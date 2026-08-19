@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { BookOpen, ChevronLeft, ChevronRight, Columns3, Crop, FileText, Minus, Plus, ScanSearch } from "lucide-react";
 import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, getDocument, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
@@ -45,6 +45,19 @@ import {
   subscribePdfPageOffsets,
   writePdfPageOffset,
 } from "../lib/pdfPageOffset";
+import {
+  PDF_PAGE_PIN_SLOTS,
+  clearPinSlot,
+  digitSlotIndex,
+  emptyPdfPagePins,
+  pinChipLabel,
+  pinChipTitle,
+  readPdfPagePins,
+  subscribePdfPagePins,
+  togglePinSlot,
+  writePdfPagePins,
+  type PdfPagePinSlots,
+} from "../lib/pdfPagePins";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
@@ -283,6 +296,8 @@ interface PdfReaderProps {
   onIntentionalJump?: () => void;
   /** A3: 将高水位重设为当前文件页。 */
   onResetFrontier?: (physicalPage: number) => void;
+  /** B2: 把当前文件页钉到副栏；不传则不渲染「锁页」钮。 */
+  onPinToSecondary?: (physicalPage: number) => void;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
   onApproximateAnnotationsChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
@@ -761,6 +776,7 @@ export function PdfReader({
   frontierPage = null,
   onIntentionalJump,
   onResetFrontier,
+  onPinToSecondary,
   onBrokenAnnotationsChange,
   onApproximateAnnotationsChange,
   onTocChange,
@@ -796,6 +812,9 @@ export function PdfReader({
   const [calibrateDraft, setCalibrateDraft] = useState("");
   const [calibrateError, setCalibrateError] = useState<string | null>(null);
   const [stride, setStride] = useState<PdfStride>(DEFAULT_STRIDE);
+  const [pagePins, setPagePins] = useState<PdfPagePinSlots>(() =>
+    libraryRoot ? readPdfPagePins(libraryRoot, relativePath) : emptyPdfPagePins(),
+  );
   const [boundReading, setBoundReading] = useState<BoundReadingMode | null>(null);
   const [readingLoadingKey, setReadingLoadingKey] = useState<string | null>(null);
   const sourceKey = sourceIdentity(relativePath, size, modified);
@@ -928,6 +947,14 @@ export function PdfReader({
   }, [libraryRoot, relativePath]);
 
   useEffect(() => {
+    const syncPins = () => {
+      setPagePins(libraryRoot ? readPdfPagePins(libraryRoot, relativePath) : emptyPdfPagePins());
+    };
+    syncPins();
+    return subscribePdfPagePins(syncPins);
+  }, [libraryRoot, relativePath]);
+
+  useEffect(() => {
     if (!calibrateOpen) return;
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key === "Escape") setCalibrateOpen(false);
@@ -1049,6 +1076,31 @@ export function PdfReader({
     jump(target);
   }, [frontierPage, jump, onIntentionalJump]);
 
+  const persistPins = useCallback(
+    (next: PdfPagePinSlots) => {
+      setPagePins(next);
+      if (libraryRoot) writePdfPagePins(libraryRoot, relativePath, next);
+    },
+    [libraryRoot, relativePath],
+  );
+
+  const handlePinChipClick = useCallback(
+    (index: number, event: ReactMouseEvent<HTMLButtonElement>) => {
+      if (event.ctrlKey || event.metaKey) {
+        persistPins(clearPinSlot(pagePins, index));
+        return;
+      }
+      const filled = pagePins[index];
+      if (filled == null) {
+        persistPins(togglePinSlot(pagePins, index, currentPageRef.current));
+        return;
+      }
+      onIntentionalJump?.();
+      jump(filled);
+    },
+    [jump, onIntentionalJump, pagePins, persistPins],
+  );
+
   useEffect(() => {
     if (!keyboardActive || mode !== "original" || !session) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -1070,7 +1122,31 @@ export function PdfReader({
         onResetFrontier?.(currentPageRef.current);
         return;
       }
+      const slot = digitSlotIndex(code);
+      if (ctrl && !event.shiftKey && !event.altKey && slot !== null) {
+        if (typing || calibrateOpen) return;
+        event.preventDefault();
+        persistPins(togglePinSlot(pagePins, slot, currentPageRef.current));
+        return;
+      }
       if (ctrl || event.metaKey || event.altKey) return;
+
+      if (code === "KeyL" && event.shiftKey) {
+        if (typing || calibrateOpen) return;
+        if (!onPinToSecondary) return;
+        event.preventDefault();
+        onPinToSecondary(currentPageRef.current);
+        return;
+      }
+      if (slot !== null && !event.shiftKey) {
+        if (typing || calibrateOpen) return;
+        const target = pagePins[slot];
+        if (target == null) return;
+        event.preventDefault();
+        onIntentionalJump?.();
+        jump(target);
+        return;
+      }
 
       if (code === "KeyG" && !event.shiftKey) {
         if (typing && !inCalibrateInput && event.target !== pageInputRef.current) return;
@@ -1116,8 +1192,12 @@ export function PdfReader({
     jumpToFrontier,
     keyboardActive,
     mode,
+    onIntentionalJump,
+    onPinToSecondary,
     onResetFrontier,
     openPageCalibration,
+    pagePins,
+    persistPins,
     session,
     spreadActive,
     stride,
@@ -1463,6 +1543,29 @@ export function PdfReader({
             }
             onClick={jumpToFrontier}
           >主线</button>
+        </div>}
+        {(keyboardActive || onPinToSecondary) && <div className="pdf-toolbar-group pdf-pin-group">
+          {Array.from({ length: PDF_PAGE_PIN_SLOTS }, (_, index) => {
+            const filled = pagePins[index];
+            return (
+              <button
+                key={index}
+                type="button"
+                className={`pdf-pin-chip${filled != null ? " active" : ""}`}
+                aria-pressed={filled != null}
+                aria-label={pinChipTitle(index, filled, activeOffset)}
+                title={pinChipTitle(index, filled, activeOffset)}
+                onClick={(event) => handlePinChipClick(index, event)}
+              >{pinChipLabel(filled, activeOffset, index)}</button>
+            );
+          })}
+          {onPinToSecondary && (
+            <button
+              type="button"
+              title="把当前页钉到副栏（Shift+L）"
+              onClick={() => onPinToSecondary(currentPage)}
+            >锁页</button>
+          )}
         </div>}
         <div className="pdf-toolbar-group">
           <button type="button" aria-label="缩小" onClick={() => setScale((value) => Math.max(.5, value - .1))}><Minus size={14} /></button>

@@ -562,6 +562,7 @@ describe("PDF tactical navigation (plan-pdf-tactical-nav A)", () => {
       frontierPage?: number;
       onIntentionalJump?: () => void;
       onResetFrontier?: (page: number) => void;
+      onPinToSecondary?: (page: number) => void;
     } = {},
     numPages = 20,
   ) {
@@ -730,6 +731,66 @@ describe("PDF tactical navigation (plan-pdf-tactical-nav A)", () => {
     expect(onResetFrontier).toHaveBeenCalledWith(9);
 
     act(() => view.unmount());
+  });
+
+  it("sets, jumps, and clears page pins without stealing the page-number input", async () => {
+    const onIntentionalJump = vi.fn();
+    const onPinToSecondary = vi.fn();
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady({
+      relativePath: "pins.pdf",
+      readerRef,
+      onIntentionalJump,
+      onPinToSecondary,
+    });
+    const pageInput = view.getByRole("textbox", { name: "当前页" });
+    const slotTwo = view.getByRole("button", { name: /页钉 2：空/ });
+
+    act(() => readerRef.current!.jumpToPage(7));
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", ctrlKey: true });
+    expect(slotTwo).toHaveAccessibleName(/第 7 页/);
+
+    act(() => readerRef.current!.jumpToPage(3));
+    fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+    expect(onIntentionalJump).toHaveBeenCalledOnce();
+    expect(pageInput).toHaveValue("7");
+
+    pageInput.focus();
+    fireEvent.keyDown(pageInput, { key: "1", code: "Digit1" });
+    expect(pageInput).toHaveValue("7");
+
+    fireEvent.keyDown(window, { key: "2", code: "Digit2", ctrlKey: true });
+    expect(view.getByRole("button", { name: /页钉 2：空/ })).toBeInTheDocument();
+    act(() => readerRef.current!.jumpToPage(4));
+    fireEvent.keyDown(window, { key: "2", code: "Digit2" });
+    expect(pageInput).toHaveValue("4");
+
+    fireEvent.click(view.getByRole("button", { name: "锁页" }));
+    expect(onPinToSecondary).toHaveBeenCalledWith(4);
+    fireEvent.keyDown(window, { key: "L", code: "KeyL", shiftKey: true });
+    expect(onPinToSecondary).toHaveBeenCalledTimes(2);
+
+    act(() => view.unmount());
+  });
+
+  it("shows printed numbers on pin chips and hides pins on the secondary pane", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady({ readerRef, relativePath: "printed-pins.pdf" }, 100);
+    act(() => readerRef.current!.jumpToPage(37));
+    fireEvent.click(view.getByRole("button", { name: "标定" }));
+    fireEvent.change(view.getByRole("textbox", { name: "印刷页码" }), { target: { value: "26" } });
+    fireEvent.click(view.getByRole("button", { name: "确定" }));
+    fireEvent.click(view.getByRole("button", { name: /页钉 1：空/ }));
+    expect(view.getByRole("button", { name: /印刷第 26 页（文件第 37 页）/ })).toHaveTextContent("26");
+    act(() => view.unmount());
+
+    const secondary = await renderReady({
+      relativePath: "printed-pins.pdf",
+      keyboardActive: false,
+    }, 100);
+    expect(secondary.queryByRole("button", { name: /页钉 1/ })).toBeNull();
+    expect(secondary.queryByRole("button", { name: "锁页" })).toBeNull();
+    act(() => secondary.unmount());
   });
 
   it("does not page in reading mode", async () => {

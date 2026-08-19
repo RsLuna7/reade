@@ -85,6 +85,9 @@ export interface SecondaryPaneProps {
   scrollMemory?: Map<string, number>;
   /** Caller-owned session PDF positions (page + offset via PdfReaderHandle). */
   pdfPositionMemory?: Map<string, PdfPagePosition>;
+  /** B2: jump the pane PDF to this file page when pinSeq changes. */
+  pinPage?: number | null;
+  pinSeq?: number;
 }
 
 export function SecondaryPane({
@@ -96,6 +99,8 @@ export function SecondaryPane({
   onPathChange,
   scrollMemory: scrollMemoryProp,
   pdfPositionMemory: pdfPositionMemoryProp,
+  pinPage = null,
+  pinSeq = 0,
 }: SecondaryPaneProps) {
   const [activePath, setActivePath] = useState(path);
   const [pane, dispatchPane] = useReducer(reducePaneContent, null);
@@ -200,6 +205,34 @@ export function SecondaryPane({
       if (timer !== null) window.clearTimeout(timer);
     };
   }, [pane, pdfPositionMemory]);
+
+  // B2: pinSeq changes even when the Map is mutated in place, so an already
+  // mounted PDF can jump without remounting the reader.
+  useEffect(() => {
+    if (pinPage == null || pinPage < 1) return;
+    if (pane?.status !== "ready" || pane.content.kind !== "pdf") return;
+    const target = { page: Math.max(1, Math.round(pinPage)), offsetRatio: 0 };
+    pdfPositionMemory.set(pane.path, target);
+    let cancelled = false;
+    let timer: number | null = null;
+    const MAX_ROUNDS = 20;
+    const attempt = (round: number) => {
+      timer = null;
+      if (cancelled) return;
+      const handle = pdfHandleRef.current;
+      if (handle) {
+        handle.jumpToPage(target.page);
+        return;
+      }
+      if (round >= MAX_ROUNDS) return;
+      timer = window.setTimeout(() => attempt(round + 1), 200);
+    };
+    attempt(0);
+    return () => {
+      cancelled = true;
+      if (timer !== null) window.clearTimeout(timer);
+    };
+  }, [pane, pdfPositionMemory, pinPage, pinSeq]);
 
   useEffect(() => {
     if (pane?.status !== "ready" || !pendingHash.current) return;
