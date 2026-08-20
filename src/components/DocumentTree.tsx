@@ -25,6 +25,14 @@ function collectVisibleItems(
   return items;
 }
 
+function indexStatusHint(status: string, error: string | null): string {
+  if (status === "indexing") return "正在建立索引";
+  if (status === "partial") return "部分页面无法提取文本，搜索和时长可能不完整";
+  if (status === "failed") return error ?? "索引失败";
+  if (status === "unsupported") return error ?? "该格式不支持索引";
+  return error ?? `索引状态：${status}`;
+}
+
 export interface DocumentTreeProps {
   /**
    * Alt+点击文档/搜索结果 → 在右侧副栏打开(plan-split-view SP-D4)。
@@ -182,6 +190,10 @@ export function DocumentTree({
         const isExpanded = isDirectory && expanded.has(node.path);
         const isCurrent = !isDirectory && node.path === currentPath;
         const estimate = !isDirectory && estimateForPath ? estimateForPath(node.path) : null;
+        const indexHint =
+          !isDirectory && node.document.indexStatus !== "ready"
+            ? indexStatusHint(node.document.indexStatus, node.document.indexError)
+            : null;
         const item: VisibleTreeItem = { node, parentPath };
 
         return (
@@ -229,8 +241,12 @@ export function DocumentTree({
                   {estimate}
                 </span>
               )}
-              {!isDirectory && node.document.indexStatus !== "ready" && (
-                <span className={`document-tree__index document-tree__index--${node.document.indexStatus}`} title={node.document.indexError ?? `索引状态：${node.document.indexStatus}`} />
+              {indexHint && (
+                <span
+                  className={`document-tree__index document-tree__index--${node.document.indexStatus}`}
+                  title={indexHint}
+                  aria-label={indexHint}
+                />
               )}
             </button>
             {isDirectory && isExpanded && renderNodes(node.children, node.path)}

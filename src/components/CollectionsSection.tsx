@@ -4,9 +4,11 @@
  * - `CollectionsSection` — the sidebar block above the document tree
  *   (CO-D1). Collections load on first expand; every collection row shows
  *   the `presentCount/itemCount` health badge; expanded collections list
- *   their items with a format badge, a progress badge derived from the
- *   persisted reading positions, hover/focus reorder buttons (CO-D4) and a
- *   greyed-out state for missing paths (CO-D3: kept, never auto-deleted).
+ *   their items with a format badge, a scroll-progress badge derived from
+ *   persisted reading positions (PDF page numbers are omitted — collections
+ *   are a reading list, not a continue-reading surface), hover/focus reorder
+ *   buttons (CO-D4) and a greyed-out state for missing paths (CO-D3: kept,
+ *   never auto-deleted).
  * - `CollectionMembershipPopover` — the topbar "加入合集" popover (CO-D2):
  *   checkbox per collection for the current document, plus "新建合集并加入".
  *
@@ -47,17 +49,14 @@ function fallbackFormatBadge(path: string): string {
   return ext === "MARKDOWN" ? "MD" : ext;
 }
 
-/** "62%"(scroll)/"第 N 页"(pdf);无记录返回 null(徽标不渲染)。 */
+/** "62%"(scroll); PDF 页码不在合集清单展示。无记录返回 null(徽标不渲染)。 */
 export function collectionProgressLabel(
   position: ReadingPosition | undefined | null,
 ): string | null {
   const progress = progressFromPosition(position);
-  if (!progress) return null;
-  if (progress.kind === "ratio") {
-    const percent = Math.round(progress.value * 100);
-    return percent > 0 ? `${percent}%` : null;
-  }
-  return progress.page > 0 ? `第 ${progress.page} 页` : null;
+  if (progress?.kind !== "ratio") return null;
+  const percent = Math.round(progress.value * 100);
+  return percent > 0 ? `${percent}%` : null;
 }
 
 type CollectionsState =

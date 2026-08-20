@@ -120,7 +120,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("collectionProgressLabel", () => {
-  it("maps positions to percent / page labels and hides empty ones", () => {
+  it("maps scroll positions to percent labels and hides PDF page labels", () => {
     expect(
       collectionProgressLabel({
         kind: "scroll",
@@ -131,7 +131,7 @@ describe("collectionProgressLabel", () => {
     ).toBe("62%");
     expect(
       collectionProgressLabel({ kind: "pdf", page: 3, offsetRatio: 0, maxPage: 12, updatedAt: 1 }),
-    ).toBe("第 12 页");
+    ).toBeNull();
     expect(collectionProgressLabel(null)).toBeNull();
     expect(
       collectionProgressLabel({
@@ -193,6 +193,20 @@ describe("CollectionsSection", () => {
     const missing = screen.getByTitle(/gone\/lost\.md（文档已移动或删除）/);
     expect(missing).toBeDisabled();
     expect(missing.closest(".collection-item")).toHaveClass("collection-item--missing");
+  });
+
+  it("does not show PDF page numbers on collection items", async () => {
+    vi.mocked(listCollections).mockResolvedValue([summary({ itemCount: 1, presentCount: 1 })]);
+    vi.mocked(listCollectionItems).mockResolvedValue([
+      item({ relativePath: "papers/exam.pdf" }),
+    ]);
+    writeReadingPosition(ROOT, "papers/exam.pdf", { kind: "pdf", page: 306, offsetRatio: 0 });
+    renderSection();
+
+    fireEvent.click(screen.getByRole("button", { name: "合集" }));
+    fireEvent.click(await screen.findByRole("button", { name: /考研数学/ }));
+    expect(await screen.findByTitle("papers/exam.pdf")).toBeInTheDocument();
+    expect(screen.queryByText(/第 \d+ 页/)).not.toBeInTheDocument();
   });
 
   it("expands the section and the target collection on a reveal request (CP-D2)", async () => {

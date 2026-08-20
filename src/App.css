@@ -961,7 +961,6 @@ a:focus-visible {
 .document-tree__index {
   width: 6px;
   height: 6px;
-  margin-left: auto;
   flex: 0 0 6px;
   border-radius: 50%;
   background: var(--muted);
@@ -3648,6 +3647,7 @@ a:focus-visible {
 /* 合集分区(CO-D1):文档树上方,搜索时由 App 隐藏。 */
 .collections-section {
   display: grid;
+  min-width: 0;
   gap: 4px;
   padding: 10px 10px 6px;
   border-bottom: 1px solid var(--line);
@@ -3655,13 +3655,16 @@ a:focus-visible {
 
 .collections-header {
   display: flex;
+  min-width: 0;
   align-items: center;
   gap: 4px;
 }
 
 .collections-toggle {
   display: flex;
+  overflow: hidden;
   flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   padding: 4px 6px;
@@ -3721,14 +3724,24 @@ a:focus-visible {
 
 .collections-list {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
   margin: 0;
   padding: 0 0 4px;
   gap: 2px;
   list-style: none;
 }
 
+.collection-block {
+  min-width: 0;
+  max-width: 100%;
+}
+
 .collection-row {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
 }
 
@@ -3736,6 +3749,7 @@ a:focus-visible {
   display: flex;
   overflow: hidden;
   flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 5px;
   padding: 5px 6px;
@@ -3754,6 +3768,7 @@ a:focus-visible {
 .collection-title {
   overflow: hidden;
   flex: 1;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3789,6 +3804,8 @@ a:focus-visible {
 
 .collection-items {
   display: grid;
+  min-width: 0;
+  max-width: 100%;
   margin: 0 0 4px;
   padding: 0 0 0 14px;
   gap: 1px;
@@ -3797,6 +3814,9 @@ a:focus-visible {
 
 .collection-item {
   display: flex;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
   align-items: center;
   border-radius: 8px;
 }
@@ -3810,6 +3830,7 @@ a:focus-visible {
   display: flex;
   overflow: hidden;
   flex: 1;
+  min-width: 0;
   align-items: center;
   gap: 6px;
   padding: 4px 6px;
@@ -3827,6 +3848,7 @@ a:focus-visible {
 .collection-item-title {
   overflow: hidden;
   flex: 1;
+  min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -5422,11 +5444,6 @@ button.links-panel-entry:focus-visible {
     --toc-width: 156px;
     --reader-gutter-inline: 28px;
     --reader-gutter-toc: 16px;
-  }
-
-  /* 窄窗下时长徽标让位给标题(TE 方案 §3.3)。 */
-  .document-tree__estimate {
-    display: none;
   }
 
   .toc-panel {
