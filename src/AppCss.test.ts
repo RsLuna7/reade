@@ -61,6 +61,14 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.document-tree__estimate\s*\{[^}]*white-space:\s*nowrap/s);
   });
 
+  it("styles tree drag handles and the context menu", () => {
+    expect(css).toMatch(/\.document-tree__handle\s*\{[^}]*cursor:\s*grab/s);
+    expect(css).toMatch(/\.document-tree-menu\s*\{[^}]*position:\s*fixed/s);
+    expect(css).toMatch(/\.document-tree-menu__item\s*\{/s);
+    expect(css).toMatch(/\.document-tree__node--drop-before::before/s);
+    expect(css).toMatch(/\.document-tree__node--pin-end\s*\{[^}]*border-bottom/s);
+  });
+
   it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
     // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
     // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。

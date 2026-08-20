@@ -43,7 +43,18 @@ import {
   setSeries,
   toggleThemeMode,
 } from "../lib/themes";
-import { buildDocumentTree, reconcileExpandedPaths } from "../lib/tree";
+import { buildDocumentTree, findChildNodes, reconcileExpandedPaths } from "../lib/tree";
+import {
+  type LibraryTreeLayout,
+  buildLaidOutDocumentTree,
+  moveSibling,
+  pinNode,
+  readTreeLayout,
+  reconcileTreeLayout,
+  resetFolderLayout,
+  unpinNode,
+  writeTreeLayout,
+} from "../lib/treeLayout";
 // 竖排模式（plan-vertical-writing VW-D1）：每文档记忆的读写在 lib，
 // store 只持有"当前文档是否竖排"的会话镜像。
 import { readVerticalPreference, writeVerticalPreference } from "../lib/verticalWriting";
@@ -360,6 +371,11 @@ interface ReaderState {
    */
   libraryViewMode: LibraryViewMode;
   expandedPaths: string[];
+  /**
+   * 当前书库文档树的置顶/手排（独立键 `reade-tree-layout`）。
+   * Session 镜像；切换/刷新书库时从存储读取并 reconcile。
+   */
+  treeLayout: LibraryTreeLayout;
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
   /** Daily reading goal in minutes; 0 disables the goal. Persisted. */
@@ -428,6 +444,10 @@ interface ReaderState {
   navForward: (current: NavLocation | null) => NavLocation | null;
   resetReaderPreferences: () => void;
   toggleDirectory: (path: string) => void;
+  pinTreeNode: (parentPath: string, nodeKey: string) => void;
+  unpinTreeNode: (parentPath: string, nodeKey: string) => void;
+  moveTreeNode: (parentPath: string, nodeKey: string, toIndex: number) => void;
+  resetFolderTreeLayout: (parentPath: string) => void;
   clearError: () => void;
 }
 
@@ -448,6 +468,22 @@ export const useReaderStore = create<ReaderState>()(
         set({ loading: pendingOperations > 0 });
       };
 
+      const loadTreeLayout = (
+        rootPath: string,
+        tree: ReturnType<typeof buildDocumentTree>,
+      ): LibraryTreeLayout => {
+        const next = reconcileTreeLayout(readTreeLayout(rootPath), tree);
+        writeTreeLayout(rootPath, next);
+        return next;
+      };
+
+      const commitTreeLayout = (next: LibraryTreeLayout) => {
+        const rootPath = get().snapshot?.rootPath;
+        if (!rootPath) return;
+        writeTreeLayout(rootPath, next);
+        set({ treeLayout: next });
+      };
+
       const openLibrary = async (rootPath: string) => {
         const trimmedPath = rootPath.trim();
         if (!trimmedPath) return;
@@ -455,10 +491,8 @@ export const useReaderStore = create<ReaderState>()(
         beginOperation();
         try {
           const snapshot = await openLibraryFromBackend(trimmedPath);
-          const expandedPaths = reconcileExpandedPaths(
-            get().expandedPaths,
-            buildDocumentTree(snapshot.documents),
-          );
+          const tree = buildDocumentTree(snapshot.documents);
+          const expandedPaths = reconcileExpandedPaths(get().expandedPaths, tree);
           set({
             snapshot,
             documents: snapshot.documents,
@@ -469,6 +503,7 @@ export const useReaderStore = create<ReaderState>()(
             searchQuery: "",
             searchResults: [],
             expandedPaths,
+            treeLayout: loadTreeLayout(snapshot.rootPath, tree),
             // 切换书库清空跳转历史:栈里的相对路径只对旧库有意义。
             navHistory: EMPTY_NAV_HISTORY,
             // 当前文档被清空,竖排镜像随之复位。
@@ -505,6 +540,7 @@ export const useReaderStore = create<ReaderState>()(
         readNextEnabled: true,
         libraryViewMode: "tree",
         expandedPaths: [],
+        treeLayout: {},
         activeView: "reader",
         dailyGoalMinutes: 0,
         ttsRate: TTS_DEFAULT_RATE,
@@ -543,6 +579,7 @@ export const useReaderStore = create<ReaderState>()(
               snapshot,
               documents: snapshot.documents,
               expandedPaths: reconcileExpandedPaths(get().expandedPaths, tree),
+              treeLayout: loadTreeLayout(snapshot.rootPath, tree),
               ...(currentStillExists
                 ? {}
                 : {
@@ -830,6 +867,32 @@ export const useReaderStore = create<ReaderState>()(
               ? state.expandedPaths.filter((item) => item !== path)
               : [...state.expandedPaths, path],
           }));
+        },
+
+        pinTreeNode: (parentPath, nodeKey) => {
+          const next = pinNode(get().treeLayout, parentPath, nodeKey);
+          if (next !== get().treeLayout) commitTreeLayout(next);
+        },
+
+        unpinTreeNode: (parentPath, nodeKey) => {
+          const siblings = findChildNodes(buildDocumentTree(get().documents), parentPath) ?? [];
+          const next = unpinNode(get().treeLayout, parentPath, nodeKey, siblings);
+          if (next !== get().treeLayout) commitTreeLayout(next);
+        },
+
+        moveTreeNode: (parentPath, nodeKey, toIndex) => {
+          const siblings = findChildNodes(
+            buildLaidOutDocumentTree(get().documents, get().treeLayout),
+            parentPath,
+          );
+          if (!siblings) return;
+          const next = moveSibling(get().treeLayout, parentPath, nodeKey, toIndex, siblings);
+          if (next && next !== get().treeLayout) commitTreeLayout(next);
+        },
+
+        resetFolderTreeLayout: (parentPath) => {
+          const next = resetFolderLayout(get().treeLayout, parentPath);
+          if (next !== get().treeLayout) commitTreeLayout(next);
         },
 
         clearError: () => set({ error: null }),

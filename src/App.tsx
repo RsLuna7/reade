@@ -1591,6 +1591,7 @@ function App() {
   const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
+  const treeLayout = useReaderStore((state) => state.treeLayout);
   // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
   const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
   const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
@@ -4543,10 +4544,10 @@ function App() {
   }, [snapshot?.rootPath]);
 
   useEffect(() => {
-    // 换文档收卡;合集增删改(version 递增)后推荐可能变化,缓存作废。
+    // 换文档收卡;合集增删改或树序变化后推荐可能变化,缓存作废。
     setReadNextCard(null);
     readNextCache.current.clear();
-  }, [currentPath, collectionsVersion]);
+  }, [currentPath, collectionsVersion, treeLayout]);
 
   const dismissReadNext = useCallback(() => {
     setReadNextCard((current) => {
@@ -4602,6 +4603,7 @@ function App() {
           listCollections,
           listCollectionItems,
           listDocumentLinks,
+          treeLayout: useReaderStore.getState().treeLayout,
         }).catch(() => null);
         if (disposed || request !== readNextRequest.current) return;
         readNextCache.current.set(path, suggestion);
@@ -5538,7 +5540,7 @@ function App() {
                 aria-pressed={libraryViewMode === "tree"}
                 onClick={() => setLibraryViewMode("tree")}
               >
-                树形
+                列表
               </button>
               <button
                 type="button"

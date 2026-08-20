@@ -7,7 +7,8 @@ import type {
 } from "./backend";
 import { highWaterCoverage } from "./readingTimeEstimate";
 import type { ReadingPosition } from "./readingPositions";
-import { documentTreeName, parentDirectoryPath, treePathCollator } from "./tree";
+import { findChildNodes, normalizeRelativePath, parentDirectoryPath, treePathCollator, type FileTreeNode } from "./tree";
+import { buildLaidOutDocumentTree, type LibraryTreeLayout } from "./treeLayout";
 
 /**
  * 读完接着读（plan-read-next）：三级回落的"下一篇"推荐纯逻辑。
@@ -47,24 +48,25 @@ export function pickNextInCollection(
 }
 
 /**
- * ②同文件夹下一篇：与文档树同一 collator、同一显示名排序；
+ * ②同文件夹下一篇：与文档树同一套置顶/手排后的树序；
  * 当前已是末篇时不跨文件夹（跨目录跳跃突兀）。
  */
 export function pickNextInFolder(
   documents: readonly DocumentInfo[],
   currentPath: string,
+  layout: LibraryTreeLayout = {},
 ): string | null {
   const current = documents.find((document) => document.relativePath === currentPath);
   if (!current) return null;
-  const parent = parentDirectoryPath(currentPath);
-  const siblings = documents
-    .filter((document) => parentDirectoryPath(document.relativePath) === parent)
-    .sort((left, right) =>
-      treePathCollator.compare(documentTreeName(left), documentTreeName(right)),
-    );
-  const index = siblings.findIndex((document) => document.relativePath === currentPath);
+  const parent = parentDirectoryPath(currentPath) ?? "";
+  const children = findChildNodes(buildLaidOutDocumentTree(documents, layout), parent) ?? [];
+  const siblings = children.filter((node): node is FileTreeNode => node.kind === "document");
+  const currentKey = normalizeRelativePath(currentPath);
+  const index = siblings.findIndex(
+    (node) => normalizeRelativePath(node.path) === currentKey,
+  );
   if (index < 0 || index + 1 >= siblings.length) return null;
-  return siblings[index + 1].relativePath;
+  return siblings[index + 1].path;
 }
 
 export interface BacklinkCandidateContext {
@@ -125,6 +127,8 @@ export interface ResolveReadNextInput extends BacklinkCandidateContext {
   listCollections: () => Promise<CollectionSummary[]>;
   listCollectionItems: (collectionId: string) => Promise<CollectionItem[]>;
   listDocumentLinks: (relativePath: string) => Promise<DocumentLinks>;
+  /** 同文件夹档与文档树共用的置顶/手排；缺省为默认 Collator 序。 */
+  treeLayout?: LibraryTreeLayout;
 }
 
 /**
@@ -153,7 +157,7 @@ export async function resolveReadNextSuggestion(
     // 合集读取失败 → 静默进入②。
   }
 
-  const folderNext = pickNextInFolder(input.documents, currentPath);
+  const folderNext = pickNextInFolder(input.documents, currentPath, input.treeLayout ?? {});
   if (folderNext) return { relativePath: folderNext, reason: "folder" };
 
   try {

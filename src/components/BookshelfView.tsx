@@ -8,7 +8,8 @@ import {
 import { generatedCover, shelfProgressLabel } from "../lib/coverArt";
 import { capturePdfCoverThumbnail, COVER_STORED_EVENT } from "../lib/coverCapture";
 import { listLibraryReadingPositions, type ReadingPosition } from "../lib/readingPositions";
-import { buildDocumentTree, documentTreeName, flattenDocumentsInTreeOrder } from "../lib/tree";
+import { documentTreeName, flattenDocumentsInTreeOrder } from "../lib/tree";
+import { buildLaidOutDocumentTree } from "../lib/treeLayout";
 import { useReaderStore } from "../store/useReaderStore";
 
 /**
@@ -127,14 +128,15 @@ function ShelfCard({
 
 export function BookshelfView({ onBeforeSelect, onOpenSecondary, extents }: BookshelfViewProps) {
   const documents = useReaderStore((state) => state.documents);
+  const treeLayout = useReaderStore((state) => state.treeLayout);
   const snapshot = useReaderStore((state) => state.snapshot);
   const currentPath = useReaderStore((state) => state.currentPath);
   const loading = useReaderStore((state) => state.loading);
   const selectDocument = useReaderStore((state) => state.selectDocument);
 
   const ordered = useMemo(
-    () => flattenDocumentsInTreeOrder(buildDocumentTree(documents)),
-    [documents],
+    () => flattenDocumentsInTreeOrder(buildLaidOutDocumentTree(documents, treeLayout)),
+    [documents, treeLayout],
   );
   const rootPath = snapshot?.rootPath ?? null;
   const positions = useMemo(

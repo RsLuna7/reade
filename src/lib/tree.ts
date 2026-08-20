@@ -48,20 +48,45 @@ export function documentTreeName(document: DocumentInfo): string {
   return document.title.trim() || fallbackDocumentName(document.relativePath);
 }
 
-function sortNodes(nodes: DocumentTreeNode[]): void {
-  nodes.sort((left, right) => {
-    if (left.kind !== right.kind) {
-      return left.kind === "directory" ? -1 : 1;
-    }
+/** 默认树序：目录优先，再按显示名 Collator。置顶/手排套在这之上。 */
+export function compareTreeNodesDefault(
+  left: DocumentTreeNode,
+  right: DocumentTreeNode,
+): number {
+  if (left.kind !== right.kind) {
+    return left.kind === "directory" ? -1 : 1;
+  }
+  return pathCollator.compare(left.name, right.name);
+}
 
-    return pathCollator.compare(left.name, right.name);
-  });
+function sortNodes(nodes: DocumentTreeNode[]): void {
+  nodes.sort(compareTreeNodesDefault);
 
   for (const node of nodes) {
     if (node.kind === "directory") {
       sortNodes(node.children);
     }
   }
+}
+
+/** 根用 `""`；找不到父目录时返回 null。 */
+export function findChildNodes(
+  nodes: DocumentTreeNode[],
+  parentPath: string,
+): DocumentTreeNode[] | null {
+  if (!parentPath) return nodes;
+
+  const visit = (items: DocumentTreeNode[]): DocumentTreeNode[] | null => {
+    for (const item of items) {
+      if (item.kind !== "directory") continue;
+      if (item.path === parentPath) return item.children;
+      const nested = visit(item.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  return visit(nodes);
 }
 
 export function buildDocumentTree(documents: DocumentInfo[]): DocumentTreeNode[] {

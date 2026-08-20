@@ -24,6 +24,11 @@ import {
   normalizeReadingSettings,
   useReaderStore,
 } from "./useReaderStore";
+import {
+  TREE_LAYOUT_ROOT,
+  TREE_LAYOUT_STORAGE_KEY,
+  readTreeLayout,
+} from "../lib/treeLayout";
 
 function mockReducedMotion(matches: boolean): void {
   Object.defineProperty(window, "matchMedia", {
@@ -61,6 +66,7 @@ describe("reading settings", () => {
       annotationColorNames: { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" },
       fuzzyAnnotationAnchoring: false,
       expandedPaths: [],
+      treeLayout: {},
       activeView: "reader",
       dailyGoalMinutes: 0,
       currentPath: null,
@@ -847,3 +853,56 @@ describe("navigation history (plan-nav-history)", () => {
     expect(useReaderStore.getState().navHistory).toEqual({ back: [], forward: [] });
   });
 });
+
+describe("document tree layout", () => {
+  const documents = [
+    {
+      relativePath: "b.md",
+      title: "b",
+      size: 1,
+      modified: 1,
+      format: "markdown" as const,
+      indexStatus: "ready" as const,
+      indexError: null,
+    },
+    {
+      relativePath: "a.md",
+      title: "a",
+      size: 1,
+      modified: 1,
+      format: "markdown" as const,
+      indexStatus: "ready" as const,
+      indexError: null,
+    },
+  ];
+
+  beforeEach(() => {
+    backendMocks.openLibrary.mockReset().mockImplementation(async (rootPath) => ({
+      rootPath,
+      documents,
+    }));
+    useReaderStore.setState({
+      snapshot: null,
+      documents: [],
+      treeLayout: {},
+      error: null,
+    });
+  });
+
+  it("pins a document and writes it to the tree-layout store", async () => {
+    await useReaderStore.getState().openLibrary("D:/books");
+    useReaderStore.getState().pinTreeNode(TREE_LAYOUT_ROOT, "b.md");
+    expect(useReaderStore.getState().treeLayout[TREE_LAYOUT_ROOT]?.pinned).toEqual(["b.md"]);
+    expect(readTreeLayout("D:/books")[TREE_LAYOUT_ROOT]?.pinned).toEqual(["b.md"]);
+    expect(localStorage.getItem(TREE_LAYOUT_STORAGE_KEY)).toContain("b.md");
+  });
+
+  it("reloads the saved layout when the same library opens again", async () => {
+    await useReaderStore.getState().openLibrary("D:/books");
+    useReaderStore.getState().pinTreeNode(TREE_LAYOUT_ROOT, "b.md");
+    useReaderStore.setState({ treeLayout: {}, snapshot: null, documents: [] });
+    await useReaderStore.getState().openLibrary("D:/books");
+    expect(useReaderStore.getState().treeLayout[TREE_LAYOUT_ROOT]?.pinned).toEqual(["b.md"]);
+  });
+});
+

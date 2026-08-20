@@ -855,8 +855,36 @@ a:focus-visible {
 }
 
 .document-tree__node {
+  position: relative;
   margin: 1px 0;
   list-style: none;
+}
+
+.document-tree__node--drop-before::before,
+.document-tree__node--drop-after::after {
+  position: absolute;
+  right: 0;
+  left: 0;
+  z-index: 1;
+  height: 2px;
+  border-radius: 99px;
+  content: "";
+  background: var(--accent);
+  pointer-events: none;
+}
+
+.document-tree__node--drop-before::before {
+  top: -1px;
+}
+
+.document-tree__node--drop-after::after {
+  bottom: -1px;
+}
+
+.document-tree__node--pin-end {
+  margin-bottom: 5px;
+  padding-bottom: 5px;
+  border-bottom: 1px solid var(--line);
 }
 
 .document-tree__item {
@@ -922,6 +950,23 @@ a:focus-visible {
   place-items: center;
   color: var(--muted);
   font-size: 13px;
+}
+
+.document-tree__handle {
+  cursor: grab;
+  touch-action: none;
+}
+
+.document-tree__handle:active {
+  cursor: grabbing;
+}
+
+.document-tree--dragging {
+  user-select: none;
+}
+
+.document-tree__item--dragging {
+  opacity: 0.42;
 }
 
 .document-tree__file-mark {
@@ -1039,6 +1084,36 @@ a:focus-visible {
   font-size: 11.5px;
   line-height: 1.65;
   text-align: center;
+}
+
+.document-tree-menu {
+  position: fixed;
+  z-index: 40;
+  min-width: 168px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+}
+
+.document-tree-menu__item {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12.5px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.document-tree-menu__item:hover,
+.document-tree-menu__item:focus-visible {
+  background: color-mix(in srgb, var(--accent-soft) 70%, transparent);
+  outline: none;
 }
 
 .document-tree__result {
@@ -5772,9 +5847,15 @@ button.links-panel-entry:focus-visible {
   }
 
   :root[data-runtime="web"] .tree-row,
+  :root[data-runtime="web"] .document-tree__item,
   :root[data-runtime="web"] .toc-link,
   :root[data-runtime="web"] .side-panel-tabs button {
     min-height: 44px;
+  }
+
+  :root[data-runtime="web"] .document-tree__handle {
+    min-width: 32px;
+    min-height: 32px;
   }
 
   /* 屏缘热区内的纵向滚动交给浏览器,横向位移由手势层判定

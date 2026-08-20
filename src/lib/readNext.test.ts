@@ -76,6 +76,15 @@ describe("pickNextInFolder", () => {
     expect(pickNextInFolder(documents, "notes/第2章.md")).toBe("notes/第10章.md");
   });
 
+  it("follows a custom unpinned tree order", () => {
+    const documents = [doc("notes/a.md", "a"), doc("notes/b.md", "b"), doc("notes/c.md", "c")];
+    const layout = {
+      notes: { pinned: [], order: ["notes/c.md", "notes/a.md", "notes/b.md"] },
+    };
+    expect(pickNextInFolder(documents, "notes/c.md", layout)).toBe("notes/a.md");
+    expect(pickNextInFolder(documents, "notes/b.md", layout)).toBeNull();
+  });
+
   it("stops at the last sibling instead of jumping across folders", () => {
     const documents = [
       doc("notes/a.md", "a"),
