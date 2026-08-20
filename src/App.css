@@ -985,18 +985,73 @@ a:focus-visible {
 
 .document-tree__name {
   min-width: 0;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+}
+
+/* 时长与索引点收成右侧栏，标题裁切边对齐。 */
+.document-tree__meta {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-left: auto;
+  font-size: 10px;
 }
 
 /* 阅读时间预估徽标(plan-reading-time-estimate §3.3)。 */
 .document-tree__estimate {
   flex: 0 0 auto;
+  min-width: 6.2em;
   color: var(--muted);
-  font-size: 10px;
+  font-size: inherit;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
   white-space: nowrap;
+}
+
+.overflow-marquee {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.overflow-marquee__text {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.document-tree__item:hover .overflow-marquee.is-overflowing,
+.collection-item-main:hover .overflow-marquee.is-overflowing,
+.document-tree__result-button:hover .overflow-marquee.is-overflowing {
+  mask-image: linear-gradient(to right, #000 0, #000 calc(100% - 12px), transparent);
+}
+
+.document-tree__item:hover .overflow-marquee.is-overflowing .overflow-marquee__text,
+.collection-item-main:hover .overflow-marquee.is-overflowing .overflow-marquee__text,
+.document-tree__result-button:hover .overflow-marquee.is-overflowing .overflow-marquee__text {
+  width: max-content;
+  max-width: none;
+  overflow: visible;
+  text-overflow: clip;
+  will-change: transform;
+  animation: overflow-marquee-scroll var(--marquee-duration, 6s) linear infinite;
+}
+
+@keyframes overflow-marquee-scroll {
+  0%,
+  10% {
+    transform: translateX(0);
+  }
+  50%,
+  60% {
+    transform: translateX(var(--marquee-shift, 0px));
+  }
+  100% {
+    transform: translateX(0);
+  }
 }
 
 .document-tree__empty {
@@ -1045,8 +1100,6 @@ a:focus-visible {
   color: var(--ink);
   font-size: 12.5px;
   font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .document-tree__result-path {
@@ -3847,10 +3900,8 @@ a:focus-visible {
 
 .collection-item-title {
   overflow: hidden;
-  flex: 1;
+  flex: 1 1 0;
   min-width: 0;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
 
 .collection-item-progress {
@@ -5762,7 +5813,8 @@ button.links-panel-entry:focus-visible {
 
 :root[data-motion="off"] .spinner,
 :root[data-motion="off"] .spin-icon,
-:root[data-motion="off"] .document-tree__index--indexing {
+:root[data-motion="off"] .document-tree__index--indexing,
+:root[data-motion="off"] .overflow-marquee.is-overflowing .overflow-marquee__text {
   animation: none;
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react"
 import { buildDocumentTree, parentDirectoryPath, type DocumentTreeNode } from "../lib/tree";
 import { cancelMotion, runMotion } from "../lib/motion";
 import { useReaderStore } from "../store/useReaderStore";
+import { OverflowMarquee, armOverflowMarquee, disarmOverflowMarquee } from "./OverflowMarquee";
 
 interface VisibleTreeItem {
   node: DocumentTreeNode;
@@ -216,6 +217,8 @@ export function DocumentTree({
                 else itemRefs.current.delete(node.id);
               }}
               onFocus={() => setFocusedId(node.id)}
+              onMouseEnter={(event) => armOverflowMarquee(event.currentTarget)}
+              onMouseLeave={(event) => disarmOverflowMarquee(event.currentTarget)}
               onKeyDown={(event) => handleTreeKeyDown(event, item)}
               onClick={(event) => {
                 if (isDirectory) toggleDirectory(node.path);
@@ -235,18 +238,22 @@ export function DocumentTree({
                   {node.document.format === "markdown" ? "MD" : node.document.format.toUpperCase()}
                 </span>
               )}
-              <span className="document-tree__name">{node.name}</span>
-              {estimate && (
-                <span className="document-tree__estimate" aria-label={`预计阅读时长 ${estimate}`}>
-                  {estimate}
+              <OverflowMarquee className="document-tree__name">{node.name}</OverflowMarquee>
+              {!isDirectory && (estimate || indexHint) && (
+                <span className="document-tree__meta">
+                  {indexHint && (
+                    <span
+                      className={`document-tree__index document-tree__index--${node.document.indexStatus}`}
+                      title={indexHint}
+                      aria-label={indexHint}
+                    />
+                  )}
+                  {estimate && (
+                    <span className="document-tree__estimate" aria-label={`预计阅读时长 ${estimate}`}>
+                      {estimate}
+                    </span>
+                  )}
                 </span>
-              )}
-              {indexHint && (
-                <span
-                  className={`document-tree__index document-tree__index--${node.document.indexStatus}`}
-                  title={indexHint}
-                  aria-label={indexHint}
-                />
               )}
             </button>
             {isDirectory && isExpanded && renderNodes(node.children, node.path)}
@@ -271,6 +278,8 @@ export function DocumentTree({
                     type="button"
                     aria-current={isCurrent ? "page" : undefined}
                     title={onOpenSecondary ? "Alt+点击在右侧分栏打开" : undefined}
+                    onMouseEnter={(event) => armOverflowMarquee(event.currentTarget)}
+                    onMouseLeave={(event) => disarmOverflowMarquee(event.currentTarget)}
                     onClick={(event) => {
                       if (event.altKey && onOpenSecondary) {
                         onOpenSecondary(result.relativePath);
@@ -280,7 +289,7 @@ export function DocumentTree({
                       void selectDocument(result.relativePath, result.locator);
                     }}
                   >
-                    <span className="document-tree__result-title">{result.title}</span>
+                    <OverflowMarquee className="document-tree__result-title">{result.title}</OverflowMarquee>
                     <span className="document-tree__result-path">{result.relativePath}</span>
                     {result.locator?.kind === "pdfPage" && <span className="document-tree__result-locator">第 {result.locator.page} 页</span>}
                     {result.locator?.kind === "epubChapter" && <span className="document-tree__result-locator">章节命中</span>}

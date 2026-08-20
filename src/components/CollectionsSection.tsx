@@ -19,6 +19,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronDown, ChevronRight, Plus, X } from "lucide-react";
+import { OverflowMarquee, armOverflowMarquee, disarmOverflowMarquee } from "./OverflowMarquee";
 import {
   addCollectionItem,
   createCollection,
@@ -480,6 +481,8 @@ export function CollectionsSection({
                                 ? `${item.relativePath}（文档已移动或删除）`
                                 : item.relativePath
                             }
+                            onMouseEnter={(event) => armOverflowMarquee(event.currentTarget)}
+                            onMouseLeave={(event) => disarmOverflowMarquee(event.currentTarget)}
                             onClick={() => onSelectDocument(item.relativePath)}
                           >
                             <span
@@ -488,7 +491,7 @@ export function CollectionsSection({
                             >
                               {badge}
                             </span>
-                            <span className="collection-item-title">{title}</span>
+                            <OverflowMarquee className="collection-item-title">{title}</OverflowMarquee>
                             {progress && !missing ? (
                               <span className="collection-item-progress">{progress}</span>
                             ) : null}
