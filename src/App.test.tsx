@@ -1972,6 +1972,72 @@ describe("reading time estimate (plan-reading-time-estimate)", () => {
     expect(screen.queryByText(/个人速度已校准/)).not.toBeInTheDocument();
   });
 
+  it("still shows the tree-row estimate when the document title is very long", async () => {
+    const longTitle =
+      "机械设计过程 原书第4版 (Pdg2Pic) 政治权力操作要论 (杨志荣) (z-library.org)";
+    const longDoc = markdownDocument("long-title.md", longTitle);
+    vi.mocked(listDocumentExtents).mockResolvedValue([
+      { relativePath: longDoc.relativePath, charCount: 1000, segmentCount: 1, needsOcrSegments: 0 },
+    ]);
+    useReaderStore.setState({
+      snapshot: { rootPath: HOME_ROOT, documents: [longDoc] },
+      documents: [longDoc],
+      currentPath: longDoc.relativePath,
+      currentContent: {
+        kind: "markdown",
+        relativePath: longDoc.relativePath,
+        markdown: "body",
+      },
+      motionLevel: "off",
+    });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".document-tree__estimate")).toHaveTextContent(
+        "约 2 分钟",
+      );
+    });
+    expect(view.container.querySelector(".document-tree__name")).toHaveTextContent(longTitle);
+  });
+
+  it("labels scan-heavy documents on the tree instead of inventing a duration", async () => {
+    const scan = {
+      relativePath: "scan.pdf",
+      title: "机械设计过程 原书第4版",
+      size: 10,
+      modified: 1,
+      format: "pdf" as const,
+      indexStatus: "partial" as const,
+      indexError: null,
+    };
+    const guide = markdownDocument("guide.md", "Guide");
+    vi.mocked(listDocumentExtents).mockResolvedValue([
+      { relativePath: "guide.md", charCount: 1000, segmentCount: 1, needsOcrSegments: 0 },
+      { relativePath: "scan.pdf", charCount: 9000, segmentCount: 10, needsOcrSegments: 8 },
+    ]);
+    useReaderStore.setState({
+      snapshot: { rootPath: HOME_ROOT, documents: [guide, scan] },
+      documents: [guide, scan],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "body",
+      },
+      motionLevel: "off",
+    });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".document-tree__estimate--unavailable")).toHaveTextContent(
+        "扫描版",
+      );
+    });
+    expect(
+      view.container.querySelector(".document-tree__estimate:not(.document-tree__estimate--unavailable)"),
+    ).toHaveTextContent("约 2 分钟");
+  });
+
   it("calibrates the personal speed from sessions and flags the TOC line", async () => {
     const now = Date.now();
     vi.mocked(listDocumentExtents).mockResolvedValue([

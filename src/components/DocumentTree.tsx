@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from "react";
 import { buildDocumentTree, parentDirectoryPath, type DocumentTreeNode } from "../lib/tree";
+import type { TreeEstimateBadge } from "../lib/readingTimeEstimate";
 import { cancelMotion, runMotion } from "../lib/motion";
 import { useReaderStore } from "../store/useReaderStore";
 import { OverflowMarquee, armOverflowMarquee, disarmOverflowMarquee } from "./OverflowMarquee";
@@ -26,14 +27,6 @@ function collectVisibleItems(
   return items;
 }
 
-function indexStatusHint(status: string, error: string | null): string {
-  if (status === "indexing") return "正在建立索引";
-  if (status === "partial") return "部分页面无法提取文本，搜索和时长可能不完整";
-  if (status === "failed") return error ?? "索引失败";
-  if (status === "unsupported") return error ?? "该格式不支持索引";
-  return error ?? `索引状态：${status}`;
-}
-
 export interface DocumentTreeProps {
   /**
    * Alt+点击文档/搜索结果 → 在右侧副栏打开(plan-split-view SP-D4)。
@@ -46,10 +39,10 @@ export interface DocumentTreeProps {
    */
   onBeforeSelect?: () => void;
   /**
-   * 阅读时间预估(plan-reading-time-estimate §3.3):返回"约 N 分钟"式
-   * 徽标文案,null 不渲染;数据装配留在 App,树保持展示组件。
+   * 阅读时间预估(plan-reading-time-estimate §3.3):返回时长或
+   * 「扫描版/无法估计」同级标签,null 不渲染;数据装配留在 App。
    */
-  estimateForPath?: (path: string) => string | null;
+  estimateForPath?: (path: string) => TreeEstimateBadge | null;
 }
 
 export function DocumentTree({
@@ -191,10 +184,6 @@ export function DocumentTree({
         const isExpanded = isDirectory && expanded.has(node.path);
         const isCurrent = !isDirectory && node.path === currentPath;
         const estimate = !isDirectory && estimateForPath ? estimateForPath(node.path) : null;
-        const indexHint =
-          !isDirectory && node.document.indexStatus !== "ready"
-            ? indexStatusHint(node.document.indexStatus, node.document.indexError)
-            : null;
         const item: VisibleTreeItem = { node, parentPath };
 
         return (
@@ -239,20 +228,21 @@ export function DocumentTree({
                 </span>
               )}
               <OverflowMarquee className="document-tree__name">{node.name}</OverflowMarquee>
-              {!isDirectory && (estimate || indexHint) && (
+              {!isDirectory && estimate && (
                 <span className="document-tree__meta">
-                  {indexHint && (
-                    <span
-                      className={`document-tree__index document-tree__index--${node.document.indexStatus}`}
-                      title={indexHint}
-                      aria-label={indexHint}
-                    />
-                  )}
-                  {estimate && (
-                    <span className="document-tree__estimate" aria-label={`预计阅读时长 ${estimate}`}>
-                      {estimate}
-                    </span>
-                  )}
+                  <span
+                    className={`document-tree__estimate${
+                      estimate.kind === "unavailable" ? " document-tree__estimate--unavailable" : ""
+                    }`}
+                    title={estimate.hint}
+                    aria-label={
+                      estimate.kind === "time"
+                        ? `预计阅读时长 ${estimate.label}`
+                        : (estimate.hint ?? estimate.label)
+                    }
+                  >
+                    {estimate.label}
+                  </span>
                 </span>
               )}
             </button>

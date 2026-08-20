@@ -861,13 +861,16 @@ a:focus-visible {
 
 .document-tree__item {
   position: relative;
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   width: 100%;
+  max-width: 100%;
   min-width: 0;
   height: 34px;
   align-items: center;
-  gap: 7px;
+  column-gap: 7px;
   padding: 0 9px;
+  overflow: hidden;
   border: 0;
   border-radius: 7px;
   color: var(--ink-soft);
@@ -958,51 +961,26 @@ a:focus-visible {
 
 .document-tree__format--pdf { color: var(--accent); }
 .document-tree__format--epub { color: var(--accent); }
-.document-tree__index {
-  width: 6px;
-  height: 6px;
-  flex: 0 0 6px;
-  border-radius: 50%;
-  background: var(--muted);
-}
-.document-tree__index--indexing { background: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
-.document-tree__index--partial { background: #c68b35; }
-.document-tree__index--failed,
-.document-tree__index--unsupported { background: #b34e42; }
 .document-tree__result-locator { color: var(--accent); font-size: 10px; font-weight: 650; }
-
-:root[data-motion="subtle"] .document-tree__index--indexing,
-:root[data-motion="full"] .document-tree__index--indexing {
-  animation: reade-index-pulse 1.6s ease-in-out infinite;
-}
-
-@keyframes reade-index-pulse {
-  50% {
-    opacity: 0.48;
-    transform: scale(0.82);
-  }
-}
 
 .document-tree__name {
   min-width: 0;
-  flex: 1 1 0;
+  max-width: 100%;
   overflow: hidden;
 }
 
-/* 时长与索引点收成右侧栏，标题裁切边对齐。 */
+/* 第三列固定给时长，长标题只裁中间，不能把右侧挤出侧栏。 */
 .document-tree__meta {
-  display: inline-flex;
-  flex: 0 0 auto;
+  display: flex;
+  min-width: 0;
   align-items: center;
   justify-content: flex-end;
-  gap: 6px;
-  margin-left: auto;
   font-size: 10px;
 }
 
-/* 阅读时间预估徽标(plan-reading-time-estimate §3.3)。 */
+/* 阅读时间预估徽标(plan-reading-time-estimate §3.3)。
+   「扫描版/无法估计」走同一槽位，右对齐与分钟数齐平。 */
 .document-tree__estimate {
-  flex: 0 0 auto;
   min-width: 6.2em;
   color: var(--muted);
   font-size: inherit;
@@ -5813,7 +5791,6 @@ button.links-panel-entry:focus-visible {
 
 :root[data-motion="off"] .spinner,
 :root[data-motion="off"] .spin-icon,
-:root[data-motion="off"] .document-tree__index--indexing,
 :root[data-motion="off"] .overflow-marquee.is-overflowing .overflow-marquee__text {
   animation: none;
 }

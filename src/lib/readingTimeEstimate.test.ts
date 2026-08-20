@@ -12,6 +12,9 @@ import {
   formatReadingEstimate,
   formatRemainingEstimate,
   highWaterCoverage,
+  treeEstimateBadge,
+  UNAVAILABLE_ESTIMATE_EMPTY,
+  UNAVAILABLE_ESTIMATE_SCAN,
 } from "./readingTimeEstimate";
 
 /** N 篇同速文档的校准输入：600 秒读 5000 字 × coverage 1 → 500 字/分钟。 */
@@ -119,6 +122,19 @@ describe("coverage and extent gates", () => {
     expect(extentSupportsEstimate({ charCount: 0, segmentCount: 3, needsOcrSegments: 0 })).toBe(
       false,
     );
+  });
+
+  it("puts a same-slot label on the tree when an estimate would mislead", () => {
+    expect(treeEstimateBadge(undefined, 500)).toBeNull();
+    expect(
+      treeEstimateBadge({ charCount: 1000, segmentCount: 1, needsOcrSegments: 0 }, 500),
+    ).toEqual({ kind: "time", label: "约 2 分钟" });
+    expect(
+      treeEstimateBadge({ charCount: 9000, segmentCount: 10, needsOcrSegments: 6 }, 500),
+    ).toMatchObject({ kind: "unavailable", label: UNAVAILABLE_ESTIMATE_SCAN });
+    expect(
+      treeEstimateBadge({ charCount: 0, segmentCount: 3, needsOcrSegments: 0 }, 500),
+    ).toMatchObject({ kind: "unavailable", label: UNAVAILABLE_ESTIMATE_EMPTY });
   });
 });
 

@@ -53,6 +53,14 @@ describe("application CSS isolation", () => {
     expect(css).toContain(':root[data-motion="full"]');
   });
 
+  it("pins tree-row duration in a trailing grid column so long titles cannot shove it out", () => {
+    expect(css).toMatch(
+      /\.document-tree__item\s*\{[^}]*grid-template-columns:\s*auto minmax\(0,\s*1fr\) auto/s,
+    );
+    expect(css).toMatch(/\.document-tree__name\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.document-tree__estimate\s*\{[^}]*white-space:\s*nowrap/s);
+  });
+
   it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
     // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
     // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。

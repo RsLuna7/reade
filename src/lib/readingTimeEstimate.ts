@@ -71,6 +71,55 @@ export function extentSupportsEstimate(
   return extent.needsOcrSegments / extent.segmentCount <= ESTIMATE_MAX_OCR_RATIO;
 }
 
+export type TreeEstimateKind = "time" | "unavailable";
+
+/** 文档树右侧时长列：有字数给出「约 N 分钟」，故意不估时给出同级标签。 */
+export interface TreeEstimateBadge {
+  kind: TreeEstimateKind;
+  label: string;
+  hint?: string;
+}
+
+export const UNAVAILABLE_ESTIMATE_SCAN = "扫描版";
+export const UNAVAILABLE_ESTIMATE_EMPTY = "无法估计";
+export const UNAVAILABLE_ESTIMATE_SCAN_HINT = "多数页面没有文本层，无法按字数估计阅读时长";
+export const UNAVAILABLE_ESTIMATE_EMPTY_HINT = "没有可统计的文本，无法估计阅读时长";
+
+type EstimateExtent = Pick<DocumentExtent, "charCount" | "segmentCount" | "needsOcrSegments">;
+
+function isOcrHeavy(extent: EstimateExtent): boolean {
+  return (
+    extent.segmentCount > 0 &&
+    extent.needsOcrSegments / extent.segmentCount > ESTIMATE_MAX_OCR_RATIO
+  );
+}
+
+/** 树条目徽标。无 extents（仍在索引）返回 null，不占位。 */
+export function treeEstimateBadge(
+  extent: EstimateExtent | null | undefined,
+  charsPerMinute: number,
+): TreeEstimateBadge | null {
+  if (!extent) return null;
+  if (extentSupportsEstimate(extent)) {
+    return {
+      kind: "time",
+      label: formatReadingEstimate(estimateReadingMinutes(extent.charCount, charsPerMinute)),
+    };
+  }
+  if (isOcrHeavy(extent)) {
+    return {
+      kind: "unavailable",
+      label: UNAVAILABLE_ESTIMATE_SCAN,
+      hint: UNAVAILABLE_ESTIMATE_SCAN_HINT,
+    };
+  }
+  return {
+    kind: "unavailable",
+    label: UNAVAILABLE_ESTIMATE_EMPTY,
+    hint: UNAVAILABLE_ESTIMATE_EMPTY_HINT,
+  };
+}
+
 export interface CalibrationInput {
   /** 近 90 天会话按文档聚合的 activeSeconds。 */
   activeSecondsByPath: ReadonlyMap<string, number>;

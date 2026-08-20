@@ -247,12 +247,10 @@ import {
   DEFAULT_READING_SPEED,
   aggregateActiveSeconds,
   calibrateReadingSpeed,
-  estimateReadingMinutes,
   estimateRemainingMinutes,
-  extentSupportsEstimate,
-  formatReadingEstimate,
   formatRemainingEstimate,
   highWaterCoverage,
+  treeEstimateBadge,
   type ReadingSpeed,
 } from "./lib/readingTimeEstimate";
 import { extractToc, type TocItem } from "./lib/markdown";
@@ -4492,16 +4490,19 @@ function App() {
       .catch(() => undefined);
   }, [currentContent]);
 
-  /** 树条目徽标:全文预估;扫描版/无字符不显示(TE-D5)。 */
+  /** 树条目徽标:有字数给出时长;扫描版/无字符给出同级「扫描版/无法估计」。 */
+  const treeEstimateForPath = useCallback(
+    (path: string) => treeEstimateBadge(documentExtents?.get(path), readingSpeed.charsPerMinute),
+    [documentExtents, readingSpeed.charsPerMinute],
+  );
+
+  /** 目录/读完接着读只用真实时长,扫描版保持不显示。 */
   const estimateForPath = useCallback(
     (path: string): string | null => {
-      const extent = documentExtents?.get(path);
-      if (!extent || !extentSupportsEstimate(extent)) return null;
-      return formatReadingEstimate(
-        estimateReadingMinutes(extent.charCount, readingSpeed.charsPerMinute),
-      );
+      const badge = treeEstimateForPath(path);
+      return badge?.kind === "time" ? badge.label : null;
     },
-    [documentExtents, readingSpeed.charsPerMinute],
+    [treeEstimateForPath],
   );
 
   /** 继续阅读卡:剩余时长 = chars × (1 - 高水位覆盖率)。 */
@@ -5558,7 +5559,7 @@ function App() {
             <DocumentTree
               onOpenSecondary={handleOpenSecondary}
               onBeforeSelect={recordNavDeparture}
-              estimateForPath={estimateForPath}
+              estimateForPath={treeEstimateForPath}
             />
           )}
         </div>
