@@ -191,4 +191,26 @@ describe("StatsView footprint card", () => {
     fireEvent.click(within(card).getByRole("button", { name: /笔记/ }));
     expect(useReaderStore.getState().activeView).toBe("annotations");
   });
+
+  it("lists other-library documents in the ranking but does not let them open", async () => {
+    setStatsState([doc("a.md", { title: "当前库" })]);
+    const now = Date.now();
+    const loadSessions = vi.fn(async () => [
+      session("a.md", now - HOUR_MS, { libraryRoot: ROOT, title: "当前库", id: "cur" }),
+      session("a.md", now - 2 * HOUR_MS, {
+        libraryRoot: "D:/papers",
+        title: "另一库",
+        id: "oth",
+      }),
+    ]);
+
+    render(<StatsView loadSessions={loadSessions} />);
+
+    const ranking = await screen.findByRole("region", { name: "文档时长排行" });
+    expect(within(ranking).getByTitle("打开 a.md")).toBeEnabled();
+    const foreign = within(ranking).getByTitle("来自文档库「papers」· 打开该库后可跳转");
+    expect(foreign).toBeDisabled();
+    expect(within(ranking).getByText("（papers）")).toBeInTheDocument();
+    expect(screen.getByText(/个人累计，跨文档库/)).toBeInTheDocument();
+  });
 });

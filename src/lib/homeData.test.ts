@@ -129,6 +129,23 @@ describe("buildContinueReading (desktop)", () => {
     expect(buildContinueReading([], [doc("a.md")], {}, NOW)).toEqual([]);
     expect(buildContinueReading([session("a.md", NOW)], [], {}, NOW)).toEqual([]);
   });
+
+  it("drops sessions recorded against another library even when the path exists", () => {
+    const items = buildContinueReading(
+      [
+        session("a.md", NOW - HOUR_MS, { libraryRoot: "D:/other", title: "别的库" }),
+        session("a.md", NOW - 2 * HOUR_MS, { libraryRoot: "D:/books", title: "当前库" }),
+      ],
+      [doc("a.md")],
+      {},
+      NOW,
+      5,
+      "D:/books",
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].title).toBe("a");
+    expect(items[0].lastReadAt).toBe(NOW - 2 * HOUR_MS);
+  });
 });
 
 describe("buildWebContinueReading (web fallback)", () => {

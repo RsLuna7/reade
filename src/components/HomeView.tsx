@@ -10,6 +10,7 @@ import {
 } from "../lib/backend";
 import { annotationKindLabel } from "../lib/annotations";
 import {
+  CONTINUE_READING_LIMIT,
   buildContinueReading,
   buildFreshDocuments,
   buildWebContinueReading,
@@ -19,7 +20,7 @@ import {
 } from "../lib/homeData";
 import { buildOnThisDay } from "../lib/onThisDay";
 import { listLibraryReadingPositions } from "../lib/readingPositions";
-import { buildSummary, dayKeyToDate, formatDuration } from "../lib/readingStats";
+import { buildSummary, dayKeyToDate, formatDuration, sessionsInLibrary } from "../lib/readingStats";
 import { runMotion } from "../lib/motion";
 import { useReaderStore } from "../store/useReaderStore";
 
@@ -210,8 +211,15 @@ export function HomeView({
     () =>
       IS_WEB_RUNTIME
         ? buildWebContinueReading(documents, positions)
-        : buildContinueReading(loaded, documents, positions, now),
-    [documents, loaded, now, positions],
+        : buildContinueReading(
+            loaded,
+            documents,
+            positions,
+            now,
+            CONTINUE_READING_LIMIT,
+            rootPath ?? undefined,
+          ),
+    [documents, loaded, now, positions, rootPath],
   );
   const fresh = useMemo(() => buildFreshDocuments(documents, baseline), [baseline, documents]);
   const summary = useMemo(() => buildSummary(loaded, now), [loaded, now]);
@@ -223,7 +231,7 @@ export function HomeView({
         ? []
         : buildOnThisDay({
             annotations: memoryAnnotations,
-            sessions: loaded,
+            sessions: rootPath ? sessionsInLibrary(loaded, rootPath) : loaded,
             documents,
             nowMs: now,
           }),

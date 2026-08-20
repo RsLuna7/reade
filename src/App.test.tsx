@@ -1560,6 +1560,28 @@ describe("cold-start landing (H-D1 option A)", () => {
     });
     expect(useReaderStore.getState().activeView).toBe("reader");
   });
+
+  it("ignores same-path sessions that belong to another library", async () => {
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      {
+        ...homeSession("guide.md", Date.now() - 60_000),
+        libraryRoot: "D:/other-library",
+      },
+    ]);
+    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
+      kind: "markdown" as const,
+      relativePath,
+      markdown: "# Guide\n\nBody",
+    }));
+    setColdStartState();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().currentPath).toBe("guide.md");
+    });
+    expect(useReaderStore.getState().activeView).toBe("reader");
+  });
 });
 
 describe("split view (SP)", () => {

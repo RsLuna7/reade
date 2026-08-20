@@ -15,7 +15,10 @@ import {
   fillDailyRange,
   formatDuration,
   isWeekendDay,
+  libraryFolderName,
   localDayKey,
+  sameLibraryRoot,
+  sessionsInLibrary,
   weekdayHourMatrix,
 } from "./readingStats";
 
@@ -89,6 +92,28 @@ describe("readingStats aggregation", () => {
       lastReadAt: local(2026, 8, 10, 10, 0),
     });
     expect(totals[1]).toMatchObject({ relativePath: "b.pdf", format: "pdf", seconds: 50 });
+  });
+
+  it("does not merge the same relative path from two libraries", () => {
+    const totals = aggregateByDocument([
+      session({ relativePath: "a.md", libraryRoot: "D:/one", title: "One", activeSeconds: 100 }),
+      session({ relativePath: "a.md", libraryRoot: "D:/two", title: "Two", activeSeconds: 50 }),
+    ]);
+    expect(totals).toHaveLength(2);
+    expect(totals.map((entry) => entry.libraryRoot).sort()).toEqual(["D:/one", "D:/two"]);
+    expect(totals[0].seconds).toBe(100);
+  });
+
+  it("counts documents by library-and-path, not path alone", () => {
+    const now = local(2026, 8, 12, 15, 0);
+    const summary = buildSummary(
+      [
+        session({ relativePath: "a.md", libraryRoot: "D:/one", activeSeconds: 60 }),
+        session({ relativePath: "a.md", libraryRoot: "D:/two", activeSeconds: 60 }),
+      ],
+      now,
+    );
+    expect(summary.documentCount).toBe(2);
   });
 
   it("totals formats in descending order", () => {
@@ -332,5 +357,40 @@ describe("readingStats aggregation", () => {
     expect(detail?.daily).toHaveLength(7);
     expect(detail?.daily.find((total) => total.date === "2026-08-11")?.seconds).toBe(900);
     expect(buildDocumentDetail([], "a.md", local(2026, 8, 12))).toBeNull();
+  });
+
+  it("scopes document detail to one library when the root is given", () => {
+    const detail = buildDocumentDetail(
+      [
+        session({ relativePath: "a.md", libraryRoot: "D:/one", activeSeconds: 300 }),
+        session({ relativePath: "a.md", libraryRoot: "D:/two", activeSeconds: 900 }),
+      ],
+      "a.md",
+      local(2026, 8, 12, 12, 0),
+      7,
+      "D:/one",
+    );
+    expect(detail).toMatchObject({
+      relativePath: "a.md",
+      libraryRoot: "D:/one",
+      totalSeconds: 300,
+      sessionCount: 1,
+    });
+  });
+
+  it("normalizes library roots and names the source folder", () => {
+    expect(sameLibraryRoot("D:\\books\\papers", "D:/books/papers/")).toBe(true);
+    expect(sameLibraryRoot("D:/one", "D:/two")).toBe(false);
+    expect(libraryFolderName("D:/books/papers")).toBe("papers");
+    expect(libraryFolderName("D:\\books\\papers\\")).toBe("papers");
+    const scoped = sessionsInLibrary(
+      [
+        session({ relativePath: "a.md", libraryRoot: "D:/one" }),
+        session({ relativePath: "a.md", libraryRoot: "D:/two" }),
+        session({ relativePath: "b.md" }),
+      ],
+      "D:/one",
+    );
+    expect(scoped.map((entry) => entry.relativePath)).toEqual(["a.md", "b.md"]);
   });
 });

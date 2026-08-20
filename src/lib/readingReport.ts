@@ -1,5 +1,5 @@
 import type { Annotation, DocumentFormat, DocumentInfo, ReadingSession } from "./backend";
-import { aggregateByDocument, aggregateByFormat, aggregateDaily, weekdayHourMatrix } from "./readingStats";
+import { aggregateByDocument, aggregateByFormat, aggregateDaily, sessionDocumentKey, weekdayHourMatrix } from "./readingStats";
 
 /**
  * 阅读报告数据聚合（docs/plan-reading-report-cards.md §3.1）——纯函数，
@@ -299,7 +299,7 @@ export function buildReadingReport(input: BuildReadingReportInput): ReadingRepor
     totalSeconds,
     activeDays: daily.length,
     longestStreakDays,
-    documentCount: new Set(clipped.map((session) => session.relativePath)).size,
+    documentCount: new Set(clipped.map((session) => sessionDocumentKey(session))).size,
     markCount: marks.length,
     totalDeltaPercent,
     peakSlot,

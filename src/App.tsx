@@ -240,6 +240,7 @@ import {
   writeHomeBaseline,
   type HomeProgress,
 } from "./lib/homeData";
+import { sessionsInLibrary } from "./lib/readingStats";
 // 阅读时间预估(plan-reading-time-estimate):纯函数在 lib,数据装配在此。
 import {
   CALIBRATION_WINDOW_MS,
@@ -4464,7 +4465,7 @@ function App() {
         }
         setReadingSpeed(
           calibrateReadingSpeed({
-            activeSecondsByPath: aggregateActiveSeconds(sessions),
+            activeSecondsByPath: aggregateActiveSeconds(sessionsInLibrary(sessions, rootPath)),
             charsByPath,
             coverageByPath,
           }),
@@ -4855,7 +4856,10 @@ function App() {
               hasCandidates = hasContinueCandidates(
                 scannedDocuments,
                 {},
-                await listReadingSessions(nowMs - CONTINUE_READING_WINDOW_MS, nowMs),
+                sessionsInLibrary(
+                  await listReadingSessions(nowMs - CONTINUE_READING_WINDOW_MS, nowMs),
+                  rootPath,
+                ),
               );
             } catch {
               hasCandidates = false;

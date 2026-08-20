@@ -67,7 +67,10 @@ import {
   dayKeyToDate,
   fillDailyRange,
   formatDuration,
+  isCurrentLibrarySession,
+  libraryFolderName,
   localDayKey,
+  sessionDocumentKey,
   weekdayHourMatrix,
   type DocumentTotal,
   type HourlyTotal,
@@ -122,6 +125,31 @@ function fileName(path: string): string {
   return parts[parts.length - 1] || path;
 }
 
+function rankingSource(libraryRoot: string | undefined, currentRoot: string | null): {
+  canOpen: boolean;
+  otherLibrary: boolean;
+  folder: string;
+} {
+  const otherLibrary = Boolean(libraryRoot) && !isCurrentLibrarySession(libraryRoot, currentRoot);
+  return {
+    canOpen: isCurrentLibrarySession(libraryRoot, currentRoot),
+    otherLibrary,
+    folder: libraryFolderName(libraryRoot),
+  };
+}
+
+function rankingTitleHint(
+  relativePath: string,
+  source: { canOpen: boolean; otherLibrary: boolean; folder: string },
+  exists: boolean,
+): string {
+  if (source.otherLibrary) {
+    return `来自文档库「${source.folder}」· 打开该库后可跳转`;
+  }
+  if (exists) return `打开 ${relativePath}`;
+  return "文档已从文档库移除";
+}
+
 function weekdayName(dayKey: string): string {
   return `周${WEEKDAY_LABELS[dayKeyToDate(dayKey).getDay()]}`;
 }
@@ -158,11 +186,12 @@ function csvField(value: string): string {
 }
 
 function sessionsToCsv(sessions: ReadingSession[]): string {
-  const rows = ["id,relativePath,format,title,startedAt,endedAt,activeSeconds"];
+  const rows = ["id,libraryRoot,relativePath,format,title,startedAt,endedAt,activeSeconds"];
   for (const session of sessions) {
     rows.push(
       [
         csvField(session.id),
+        csvField(session.libraryRoot ?? ""),
         csvField(session.relativePath),
         session.format,
         csvField(session.title ?? ""),
@@ -323,7 +352,7 @@ function FootprintCard({
         <button
           type="button"
           className="stats-fact"
-          title="查看读完的文档"
+          title="查看当前文档库中读完的文档"
           disabled={finishedCount === 0}
           onClick={onShowFinished}
         >
@@ -340,7 +369,7 @@ function FootprintCard({
         <button
           type="button"
           className="stats-fact"
-          title="打开批注中心"
+          title="打开当前文档库的批注中心"
           disabled={noteCount === null}
           onClick={onShowNotes}
         >
@@ -494,12 +523,21 @@ interface DayDrawerProps {
   dayKey: string;
   sessions: ReadingSession[];
   existingPaths: Set<string>;
+  currentRoot: string | null;
   motionLevel: ReaderMotionLevel;
   onClose: () => void;
   onOpenDocument: (relativePath: string) => void;
 }
 
-function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOpenDocument }: DayDrawerProps) {
+function DayDrawer({
+  dayKey,
+  sessions,
+  existingPaths,
+  currentRoot,
+  motionLevel,
+  onClose,
+  onOpenDocument,
+}: DayDrawerProps) {
   const timeline = useMemo(() => buildDayTimeline(sessions, dayKey), [sessions, dayKey]);
   const documents = useMemo(() => aggregateDayDocuments(sessions, dayKey), [sessions, dayKey]);
   const totalSeconds = documents.reduce((sum, total) => sum + total.seconds, 0);
@@ -524,7 +562,10 @@ function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOp
                 data-label={hour}
               />
             ))}
-            {timeline.map((segment) => (
+            {timeline.map((segment) => {
+              const source = rankingSource(segment.libraryRoot, currentRoot);
+              const exists = source.canOpen && existingPaths.has(segment.relativePath);
+              return (
               <button
                 key={`${segment.id}-${segment.startMs}`}
                 type="button"
@@ -534,11 +575,12 @@ function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOp
                   width: `${Math.max(0.6, (segment.endRatio - segment.startRatio) * 100)}%`,
                   background: FORMAT_COLORS[segment.format],
                 }}
-                title={`${segment.title ?? fileName(segment.relativePath)}\n${formatClock(segment.startMs)} – ${formatClock(segment.endMs)} · ${formatDuration(Math.round(segment.seconds))}`}
-                disabled={!existingPaths.has(segment.relativePath)}
+                title={`${segment.title ?? fileName(segment.relativePath)}\n${formatClock(segment.startMs)} – ${formatClock(segment.endMs)} · ${formatDuration(Math.round(segment.seconds))}${source.otherLibrary ? `\n来自文档库「${source.folder}」` : ""}`}
+                disabled={!exists}
                 onClick={() => onOpenDocument(segment.relativePath)}
               />
-            ))}
+              );
+            })}
           </div>
         </>
       )}
@@ -546,17 +588,23 @@ function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOp
         <>
           <h3 className="stats-drawer-subhead">文档分解</h3>
           <ul className="stats-drawer-docs">
-            {documents.map((total) => (
-              <li key={total.relativePath}>
+            {documents.map((total) => {
+              const source = rankingSource(total.libraryRoot, currentRoot);
+              const exists = source.canOpen && existingPaths.has(total.relativePath);
+              return (
+              <li key={sessionDocumentKey(total)}>
                 <button
                   type="button"
                   className="stats-ranking-row"
-                  disabled={!existingPaths.has(total.relativePath)}
-                  title={existingPaths.has(total.relativePath) ? `打开 ${total.relativePath}` : "文档已从文档库移除"}
+                  disabled={!exists}
+                  title={rankingTitleHint(total.relativePath, source, exists)}
                   onClick={() => onOpenDocument(total.relativePath)}
                 >
                   <span className="stats-ranking-main">
-                    <span className="stats-ranking-title">{total.title ?? fileName(total.relativePath)}</span>
+                    <span className="stats-ranking-title">
+                      {total.title ?? fileName(total.relativePath)}
+                      {source.otherLibrary && <em>（{source.folder}）</em>}
+                    </span>
                     <span
                       className="stats-ranking-bar"
                       style={{
@@ -572,7 +620,8 @@ function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOp
                   </span>
                 </button>
               </li>
-            ))}
+              );
+            })}
           </ul>
         </>
       )}
@@ -582,18 +631,32 @@ function DayDrawer({ dayKey, sessions, existingPaths, motionLevel, onClose, onOp
 
 interface DocDrawerProps {
   relativePath: string;
+  libraryRoot: string;
   sessions: ReadingSession[];
   nowMs: number;
   exists: boolean;
+  otherLibrary: boolean;
+  folder: string;
   motionLevel: ReaderMotionLevel;
   onClose: () => void;
   onOpenDocument: (relativePath: string) => void;
 }
 
-function DocDrawer({ relativePath, sessions, nowMs, exists, motionLevel, onClose, onOpenDocument }: DocDrawerProps) {
+function DocDrawer({
+  relativePath,
+  libraryRoot,
+  sessions,
+  nowMs,
+  exists,
+  otherLibrary,
+  folder,
+  motionLevel,
+  onClose,
+  onOpenDocument,
+}: DocDrawerProps) {
   const detail = useMemo(
-    () => buildDocumentDetail(sessions, relativePath, nowMs),
-    [sessions, relativePath, nowMs],
+    () => buildDocumentDetail(sessions, relativePath, nowMs, 30, libraryRoot),
+    [sessions, relativePath, libraryRoot, nowMs],
   );
   if (!detail) return null;
   const miniData = detail.daily.map((total) => ({
@@ -604,7 +667,11 @@ function DocDrawer({ relativePath, sessions, nowMs, exists, motionLevel, onClose
   return (
     <StatsDrawer
       title={detail.title ?? fileName(relativePath)}
-      subtitle={`${FORMAT_LABELS[detail.format]} · ${relativePath}`}
+      subtitle={
+        otherLibrary
+          ? `${FORMAT_LABELS[detail.format]} · ${relativePath} · 来自「${folder}」`
+          : `${FORMAT_LABELS[detail.format]} · ${relativePath}`
+      }
       motionLevel={motionLevel}
       onClose={onClose}
     >
@@ -643,7 +710,7 @@ function DocDrawer({ relativePath, sessions, nowMs, exists, motionLevel, onClose
         disabled={!exists}
         onClick={() => onOpenDocument(relativePath)}
       >
-        {exists ? "打开文档" : "文档已从文档库移除"}
+        {exists ? "打开文档" : otherLibrary ? `来自文档库「${folder}」` : "文档已从文档库移除"}
       </button>
     </StatsDrawer>
   );
@@ -675,7 +742,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const [rankSort, setRankSort] = useState<"time" | "recent">("time");
   const [rankExpanded, setRankExpanded] = useState(false);
   const [drillDay, setDrillDay] = useState<string | null>(null);
-  const [docDetailPath, setDocDetailPath] = useState<string | null>(null);
+  const [docDetail, setDocDetail] = useState<{ relativePath: string; libraryRoot: string } | null>(null);
   const [finishedOpen, setFinishedOpen] = useState(false);
   const [goalEditorOpen, setGoalEditorOpen] = useState(false);
   const [exportOpen, setExportOpen] = useState(false);
@@ -772,8 +839,8 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const overlayState = useRef({ report: false, goal: false, exportMenu: false, finished: false, doc: null as string | null, day: null as string | null });
-  overlayState.current = { report: reportOpen, goal: goalEditorOpen, exportMenu: exportOpen, finished: finishedOpen, doc: docDetailPath, day: drillDay };
+  const overlayState = useRef({ report: false, goal: false, exportMenu: false, finished: false, doc: null as { relativePath: string; libraryRoot: string } | null, day: null as string | null });
+  overlayState.current = { report: reportOpen, goal: goalEditorOpen, exportMenu: exportOpen, finished: finishedOpen, doc: docDetail, day: drillDay };
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
       if (event.key !== "Escape" || event.defaultPrevented) return;
@@ -782,7 +849,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
       else if (overlays.goal) setGoalEditorOpen(false);
       else if (overlays.exportMenu) setExportOpen(false);
       else if (overlays.finished) setFinishedOpen(false);
-      else if (overlays.doc) setDocDetailPath(null);
+      else if (overlays.doc) setDocDetail(null);
       else if (overlays.day) setDrillDay(null);
       else setActiveView("reader");
     };
@@ -899,22 +966,24 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   };
 
   const renderRanking = (entry: DocumentTotal, index: number) => {
-    const exists = existingPaths.has(entry.relativePath);
+    const source = rankingSource(entry.libraryRoot, rootPath);
+    const exists = source.canOpen && existingPaths.has(entry.relativePath);
     const width = rankingMax > 0 ? Math.max(4, (entry.seconds / rankingMax) * 100) : 0;
     return (
-      <li key={entry.relativePath} className="stats-enter" style={staggerStyle(Math.min(index, 9))}>
+      <li key={sessionDocumentKey(entry)} className="stats-enter" style={staggerStyle(Math.min(index, 9))}>
         <button
           type="button"
           className="stats-ranking-row"
           disabled={!exists}
-          title={exists ? `打开 ${entry.relativePath}` : "文档已从文档库移除"}
+          title={rankingTitleHint(entry.relativePath, source, exists)}
           onClick={() => openDocument(entry.relativePath)}
         >
           <span className="stats-ranking-index">{index + 1}</span>
           <span className="stats-ranking-main">
             <span className="stats-ranking-title">
               {entry.title ?? fileName(entry.relativePath)}
-              {!exists && <em>（已移除）</em>}
+              {source.otherLibrary && <em>（{source.folder}）</em>}
+              {!exists && !source.otherLibrary && <em>（已移除）</em>}
             </span>
             <span
               className="stats-ranking-bar"
@@ -935,7 +1004,12 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
           className="icon-button stats-ranking-info"
           aria-label={`查看 ${entry.title ?? fileName(entry.relativePath)} 的统计详情`}
           title="文档统计详情"
-          onClick={() => setDocDetailPath(entry.relativePath)}
+          onClick={() =>
+            setDocDetail({
+              relativePath: entry.relativePath,
+              libraryRoot: entry.libraryRoot,
+            })
+          }
         >
           <Info size={14} aria-hidden="true" />
         </button>
@@ -957,7 +1031,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
         </button>
         <div className="stats-heading">
           <h1>阅读统计</h1>
-          <span>数据仅保存在本机 · 按当前文档库统计</span>
+          <span>数据仅保存在本机 · 个人累计，跨文档库</span>
         </div>
         <div className="stats-header-tools">
           <div className="stats-popover-anchor">
@@ -1448,7 +1522,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
             <div className="stats-section-head">
               <h2>知识地图</h2>
               <span className="stats-section-hint">
-                面积 = 文本量 · 色深 = 到达覆盖率 · 点击文件夹下钻、文档直达
+                当前文档库 · 面积 = 文本量 · 色深 = 到达覆盖率 · 点击文件夹下钻、文档直达
               </span>
             </div>
             <CoverageTreemap
@@ -1494,24 +1568,31 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
           </ul>
         </StatsDrawer>
       )}
-      {drillDay && !docDetailPath && (
+      {drillDay && !docDetail && (
         <DayDrawer
           dayKey={drillDay}
           sessions={loaded}
           existingPaths={existingPaths}
+          currentRoot={rootPath}
           motionLevel={motionLevel}
           onClose={() => setDrillDay(null)}
           onOpenDocument={openDocument}
         />
       )}
-      {docDetailPath && (
+      {docDetail && (
         <DocDrawer
-          relativePath={docDetailPath}
+          relativePath={docDetail.relativePath}
+          libraryRoot={docDetail.libraryRoot}
           sessions={loaded}
           nowMs={now}
-          exists={existingPaths.has(docDetailPath)}
+          exists={
+            rankingSource(docDetail.libraryRoot, rootPath).canOpen &&
+            existingPaths.has(docDetail.relativePath)
+          }
+          otherLibrary={rankingSource(docDetail.libraryRoot, rootPath).otherLibrary}
+          folder={libraryFolderName(docDetail.libraryRoot)}
           motionLevel={motionLevel}
-          onClose={() => setDocDetailPath(null)}
+          onClose={() => setDocDetail(null)}
           onOpenDocument={openDocument}
         />
       )}

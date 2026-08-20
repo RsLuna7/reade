@@ -214,6 +214,11 @@ export interface ReviewSummary {
 
 export interface ReadingSession {
   id: string;
+  /**
+   * Open-library root stamped by the desktop backend on write.
+   * Present on list responses; omitted when recording a session.
+   */
+  libraryRoot?: string;
   relativePath: string;
   format: DocumentFormat;
   title: string | null;

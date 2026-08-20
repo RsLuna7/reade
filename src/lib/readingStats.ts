@@ -16,6 +16,8 @@ export interface DailyTotal {
 
 export interface DocumentTotal {
   relativePath: string;
+  /** Library the sessions were recorded against; empty when the source omitted it. */
+  libraryRoot: string;
   title: string | null;
   format: DocumentFormat;
   seconds: number;
@@ -47,6 +49,7 @@ export interface ReadingSummary {
 export interface DayTimelineSegment {
   id: string;
   relativePath: string;
+  libraryRoot: string;
   title: string | null;
   format: DocumentFormat;
   /** Session bounds clipped to the local day, unix ms. */
@@ -74,6 +77,7 @@ export interface CumulativePoint {
 
 export interface DocumentDetail {
   relativePath: string;
+  libraryRoot: string;
   title: string | null;
   format: DocumentFormat;
   totalSeconds: number;
@@ -85,6 +89,60 @@ export interface DocumentDetail {
 }
 
 const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Slash-normalize a library root so Windows `\\` and trailing slashes still match. */
+export function normalizeLibraryRoot(root: string | undefined | null): string {
+  if (!root) return "";
+  return root.replace(/\\/g, "/").replace(/\/+$/, "");
+}
+
+export function sameLibraryRoot(
+  a: string | undefined | null,
+  b: string | undefined | null,
+): boolean {
+  return normalizeLibraryRoot(a) === normalizeLibraryRoot(b);
+}
+
+/** Last path segment of a library root, used as a source-folder label. */
+export function libraryFolderName(root: string | undefined | null): string {
+  const normalized = normalizeLibraryRoot(root);
+  if (!normalized) return "";
+  const parts = normalized.split("/").filter(Boolean);
+  return parts[parts.length - 1] ?? normalized;
+}
+
+export function sessionDocumentKey(session: {
+  libraryRoot?: string;
+  relativePath: string;
+}): string {
+  return `${normalizeLibraryRoot(session.libraryRoot)}\n${session.relativePath}`;
+}
+
+/**
+ * Sessions recorded in `libraryRoot`. Rows with no `libraryRoot` (write path /
+ * test fixtures) are treated as belonging to the current library.
+ */
+export function sessionsInLibrary(
+  sessions: ReadingSession[],
+  libraryRoot: string | undefined | null,
+): ReadingSession[] {
+  return sessions.filter((session) => {
+    if (!session.libraryRoot) return true;
+    return sameLibraryRoot(session.libraryRoot, libraryRoot);
+  });
+}
+
+/**
+ * True when a listed session can be opened in the currently open library.
+ * Missing `libraryRoot` is treated as the current library (test fixtures).
+ */
+export function isCurrentLibrarySession(
+  libraryRoot: string | undefined | null,
+  currentRoot: string | undefined | null,
+): boolean {
+  if (!libraryRoot) return true;
+  return sameLibraryRoot(libraryRoot, currentRoot);
+}
 
 export function localDayKey(ms: number): string {
   const date = new Date(ms);
@@ -174,12 +232,14 @@ export function aggregateByHour(sessions: ReadingSession[]): HourlyTotal[] {
 }
 
 export function aggregateByDocument(sessions: ReadingSession[]): DocumentTotal[] {
-  const byPath = new Map<string, DocumentTotal & { latestEnd: number }>();
+  const byKey = new Map<string, DocumentTotal & { latestEnd: number }>();
   for (const session of sessions) {
-    const existing = byPath.get(session.relativePath);
+    const key = sessionDocumentKey(session);
+    const existing = byKey.get(key);
     if (!existing) {
-      byPath.set(session.relativePath, {
+      byKey.set(key, {
         relativePath: session.relativePath,
+        libraryRoot: session.libraryRoot ?? "",
         title: session.title,
         format: session.format,
         seconds: session.activeSeconds,
@@ -196,7 +256,7 @@ export function aggregateByDocument(sessions: ReadingSession[]): DocumentTotal[]
       existing.format = session.format;
     }
   }
-  return [...byPath.values()]
+  return [...byKey.values()]
     .map(({ latestEnd: _latestEnd, ...total }) => total)
     .sort((a, b) => b.seconds - a.seconds || b.lastReadAt - a.lastReadAt);
 }
@@ -244,7 +304,7 @@ export function buildSummary(sessions: ReadingSession[], nowMs: number): Reading
     totalSeconds: sessions.reduce((sum, session) => sum + session.activeSeconds, 0),
     todaySeconds: byDay.get(todayKey) ?? 0,
     last7DaySeconds,
-    documentCount: new Set(sessions.map((session) => session.relativePath)).size,
+    documentCount: new Set(sessions.map((session) => sessionDocumentKey(session))).size,
     activeDays: activeDayKeys.size,
     currentStreakDays,
     longestStreakDays,
@@ -304,6 +364,7 @@ export function buildDayTimeline(
         segments.push({
           id: session.id,
           relativePath: session.relativePath,
+          libraryRoot: session.libraryRoot ?? "",
           title: session.title,
           format: session.format,
           startMs: start,
@@ -321,6 +382,7 @@ export function buildDayTimeline(
     segments.push({
       id: session.id,
       relativePath: session.relativePath,
+      libraryRoot: session.libraryRoot ?? "",
       title: session.title,
       format: session.format,
       startMs: clippedStart,
@@ -338,12 +400,14 @@ export function aggregateDayDocuments(
   sessions: ReadingSession[],
   dayKey: string,
 ): DocumentTotal[] {
-  const byPath = new Map<string, DocumentTotal>();
+  const byKey = new Map<string, DocumentTotal>();
   for (const segment of buildDayTimeline(sessions, dayKey)) {
-    const existing = byPath.get(segment.relativePath);
+    const key = sessionDocumentKey(segment);
+    const existing = byKey.get(key);
     if (!existing) {
-      byPath.set(segment.relativePath, {
+      byKey.set(key, {
         relativePath: segment.relativePath,
+        libraryRoot: segment.libraryRoot,
         title: segment.title,
         format: segment.format,
         seconds: segment.seconds,
@@ -358,7 +422,7 @@ export function aggregateDayDocuments(
       existing.format = segment.format;
     }
   }
-  return [...byPath.values()]
+  return [...byKey.values()]
     .map((total) => ({ ...total, seconds: Math.round(total.seconds) }))
     .filter((total) => total.seconds > 0)
     .sort((a, b) => b.seconds - a.seconds || b.lastReadAt - a.lastReadAt);
@@ -417,14 +481,18 @@ export function buildDocumentDetail(
   relativePath: string,
   nowMs: number,
   rangeDays = 30,
+  libraryRoot?: string,
 ): DocumentDetail | null {
-  const documentSessions = sessions.filter(
-    (session) => session.relativePath === relativePath,
-  );
+  const documentSessions = sessions.filter((session) => {
+    if (session.relativePath !== relativePath) return false;
+    if (libraryRoot === undefined) return true;
+    return sameLibraryRoot(session.libraryRoot, libraryRoot);
+  });
   if (documentSessions.length === 0) return null;
   const totals = aggregateByDocument(documentSessions)[0];
   return {
     relativePath,
+    libraryRoot: totals.libraryRoot,
     title: totals.title,
     format: totals.format,
     totalSeconds: totals.seconds,

@@ -1,6 +1,6 @@
 import type { DocumentFormat, DocumentInfo, ReadingSession } from "./backend";
 import type { ReadingPosition } from "./readingPositions";
-import { aggregateByDocument } from "./readingStats";
+import { aggregateByDocument, sessionsInLibrary } from "./readingStats";
 
 /**
  * Pure aggregation helpers for the home ("今日") view — home-view plan §3.3.
@@ -50,7 +50,8 @@ export function progressFromPosition(
 /**
  * Desktop continue-reading list: sessions from the last 30 days, aggregated
  * per document, restricted to documents that still exist in the current
- * library, newest `lastReadAt` first.
+ * library, newest `lastReadAt` first. `libraryRoot` drops sessions recorded
+ * against a different folder so a colliding relative path cannot sneak in.
  */
 export function buildContinueReading(
   sessions: ReadingSession[],
@@ -58,9 +59,11 @@ export function buildContinueReading(
   positions: Record<string, ReadingPosition>,
   nowMs: number,
   limit: number = CONTINUE_READING_LIMIT,
+  libraryRoot?: string,
 ): ContinueReadingItem[] {
   const cutoff = nowMs - CONTINUE_READING_WINDOW_MS;
-  const windowed = sessions.filter((session) => session.endedAt >= cutoff);
+  const scoped = libraryRoot ? sessionsInLibrary(sessions, libraryRoot) : sessions;
+  const windowed = scoped.filter((session) => session.endedAt >= cutoff);
   const byPath = new Map(documents.map((document) => [document.relativePath, document]));
   return aggregateByDocument(windowed)
     .filter((total) => byPath.has(total.relativePath))

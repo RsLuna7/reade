@@ -160,6 +160,27 @@ describe("HomeView (desktop)", () => {
     expect(readDocument).toHaveBeenCalledWith("guide.md");
   });
 
+  it("keeps continue-reading on the current library while today still counts every library", async () => {
+    setHomeState([doc("guide.md", { title: "入门指南" })]);
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("guide.md", Date.now() - HOUR_MS, {
+        libraryRoot: "D:/other-shelf",
+        title: "别的库里的同名文件",
+        id: "foreign",
+      }),
+    ]);
+
+    render(<HomeView />);
+
+    expect(
+      await screen.findByText("还没有阅读记录，从左侧选择一篇文档开始。"),
+    ).toBeInTheDocument();
+    expect(screen.queryByText("别的库里的同名文件")).not.toBeInTheDocument();
+
+    const today = await screen.findByRole("region", { name: "今日进度" });
+    expect(within(today).getByText("10 分钟")).toBeInTheDocument();
+  });
+
   it("appends the remaining-time estimate when the callback provides one", async () => {
     const documents = [doc("guide.md", { title: "入门指南" })];
     setHomeState(documents);

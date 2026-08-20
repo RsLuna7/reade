@@ -31,6 +31,10 @@ const ALLOWED_SESSION_FORMATS: &[&str] = &["markdown", "mdx", "pdf", "epub"];
 #[serde(rename_all = "camelCase")]
 pub struct ReadingSession {
     pub id: String,
+    /// Present on list responses. Ignored on write: the open library is stamped
+    /// from `current_root` instead of trusting the client.
+    #[serde(default)]
+    pub library_root: String,
     pub relative_path: String,
     pub format: String,
     pub title: Option<String>,
@@ -90,9 +94,11 @@ pub fn list_reading_sessions(
     if from_ms > to_ms {
         return Err("The statistics range start must not exceed its end".to_owned());
     }
-    let root = current_root(&library)?;
+    // A library must be open (same gate as other user-data commands), but the
+    // list itself is personal: every stored library_root is returned.
+    current_root(&library)?;
     let connection = lock_stats(&stats)?;
-    list_sessions(&connection, &normalize_root(&root), from_ms, to_ms)
+    list_sessions(&connection, from_ms, to_ms)
 }
 
 fn open_stats_connection(path: &Path) -> CommandResult<Connection> {
@@ -134,7 +140,9 @@ fn initialize_stats(connection: &Connection) -> CommandResult<()> {
              CREATE INDEX IF NOT EXISTS sessions_by_time
                  ON reading_sessions(library_root, started_at);
              CREATE INDEX IF NOT EXISTS sessions_by_doc
-                 ON reading_sessions(library_root, relative_path);",
+                 ON reading_sessions(library_root, relative_path);
+             CREATE INDEX IF NOT EXISTS sessions_by_time_global
+                 ON reading_sessions(started_at);",
         )
         .map_err(|error| format!("Cannot create statistics schema: {error}"))?;
     if version < STATS_SCHEMA_VERSION {
@@ -253,7 +261,6 @@ fn upsert_session(
 
 fn list_sessions(
     connection: &Connection,
-    root: &str,
     from_ms: u64,
     to_ms: u64,
 ) -> CommandResult<Vec<ReadingSession>> {
@@ -262,22 +269,24 @@ fn list_sessions(
     let to = to_ms.min(i64::MAX as u64) as i64;
     let mut statement = connection
         .prepare(
-            "SELECT id, relative_path, format, title, started_at, ended_at, active_seconds
+            "SELECT id, library_root, relative_path, format, title,
+                    started_at, ended_at, active_seconds
              FROM reading_sessions
-             WHERE library_root = ?1 AND started_at <= ?2 AND ended_at >= ?3
+             WHERE started_at <= ?1 AND ended_at >= ?2
              ORDER BY started_at ASC, id ASC",
         )
         .map_err(|error| format!("Cannot prepare reading session list: {error}"))?;
     let mapped = statement
-        .query_map(params![root, to, from], |row| {
+        .query_map(params![to, from], |row| {
             Ok(ReadingSession {
                 id: row.get(0)?,
-                relative_path: row.get(1)?,
-                format: row.get(2)?,
-                title: row.get(3)?,
-                started_at: row.get::<_, i64>(4)? as u64,
-                ended_at: row.get::<_, i64>(5)? as u64,
-                active_seconds: row.get::<_, i64>(6)? as u64,
+                library_root: row.get(1)?,
+                relative_path: row.get(2)?,
+                format: row.get(3)?,
+                title: row.get(4)?,
+                started_at: row.get::<_, i64>(5)? as u64,
+                ended_at: row.get::<_, i64>(6)? as u64,
+                active_seconds: row.get::<_, i64>(7)? as u64,
             })
         })
         .map_err(|error| format!("Cannot list reading sessions: {error}"))?;
@@ -297,6 +306,7 @@ mod tests {
     fn sample_session(id: &str) -> ReadingSession {
         ReadingSession {
             id: id.to_owned(),
+            library_root: String::new(),
             relative_path: "notes/alpha.md".to_owned(),
             format: "markdown".to_owned(),
             title: Some("Alpha".to_owned()),
@@ -304,6 +314,11 @@ mod tests {
             ended_at: 1_700_000_060_000,
             active_seconds: 45,
         }
+    }
+
+    fn with_root(mut session: ReadingSession, root: &str) -> ReadingSession {
+        session.library_root = root.to_owned();
+        session
     }
 
     fn locked(state: &StatsState) -> MutexGuard<'_, Connection> {
@@ -327,6 +342,15 @@ mod tests {
             )
             .expect("inspect schema");
         assert_eq!(tables, 1);
+        let global_index: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM sqlite_master
+                 WHERE type = 'index' AND name = 'sessions_by_time_global'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("inspect global time index");
+        assert_eq!(global_index, 1);
     }
 
     #[test]
@@ -341,13 +365,13 @@ mod tests {
         session.active_seconds = 150;
         upsert_session(&connection, root, &session).expect("extend");
 
-        let listed = list_sessions(&connection, root, 0, u64::MAX).expect("list");
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
         assert_eq!(listed.len(), 1);
-        assert_eq!(listed[0], session);
+        assert_eq!(listed[0], with_root(session, root));
     }
 
     #[test]
-    fn list_filters_by_time_range_and_isolates_libraries() {
+    fn list_filters_by_time_range_and_returns_every_library() {
         let state = StatsState::in_memory().expect("state");
         let connection = locked(&state);
         let mut early = sample_session("early");
@@ -361,18 +385,30 @@ mod tests {
         upsert_session(&connection, "C:/two", &sample_session("other-root"))
             .expect("insert other library");
 
-        let in_range = list_sessions(&connection, "C:/one", 1_500, 3_000).expect("list overlap");
+        let in_range = list_sessions(&connection, 1_500, 3_000).expect("list overlap");
         assert_eq!(in_range.len(), 1);
         assert_eq!(in_range[0].id, "early");
+        assert_eq!(in_range[0].library_root, "C:/one");
 
-        let everything = list_sessions(&connection, "C:/one", 0, u64::MAX).expect("list all");
-        assert_eq!(everything.len(), 2);
+        let everything = list_sessions(&connection, 0, u64::MAX).expect("list all");
+        assert_eq!(everything.len(), 3);
         assert_eq!(everything[0].id, "early");
         assert_eq!(everything[1].id, "late");
+        assert_eq!(everything[2].id, "other-root");
+        assert_eq!(everything[2].library_root, "C:/two");
+    }
 
-        let other = list_sessions(&connection, "C:/two", 0, u64::MAX).expect("list other");
-        assert_eq!(other.len(), 1);
-        assert_eq!(other[0].id, "other-root");
+    #[test]
+    fn same_relative_path_in_different_libraries_stays_two_rows() {
+        let state = StatsState::in_memory().expect("state");
+        let connection = locked(&state);
+        upsert_session(&connection, "C:/one", &sample_session("one-alpha")).expect("insert one");
+        upsert_session(&connection, "C:/two", &sample_session("two-alpha")).expect("insert two");
+
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+        assert_eq!(listed.len(), 2);
+        assert_eq!(listed[0].relative_path, listed[1].relative_path);
+        assert_ne!(listed[0].library_root, listed[1].library_root);
     }
 
     #[test]
@@ -387,8 +423,8 @@ mod tests {
             error.contains("another library"),
             "unexpected error: {error}"
         );
-        let listed = list_sessions(&connection, "C:/one", 0, u64::MAX).expect("list");
-        assert_eq!(listed[0], session);
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+        assert_eq!(listed[0], with_root(session, "C:/one"));
     }
 
     #[test]
@@ -467,8 +503,8 @@ mod tests {
         {
             let state = StatsState::new(data_directory.path().to_path_buf()).expect("reopen");
             let connection = locked(&state);
-            let listed = list_sessions(&connection, "C:/one", 0, u64::MAX).expect("list");
-            assert_eq!(listed, vec![session.clone()]);
+            let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+            assert_eq!(listed, vec![with_root(session.clone(), "C:/one")]);
             connection
                 .pragma_update(None, "user_version", 99)
                 .expect("simulate newer schema");
@@ -480,7 +516,7 @@ mod tests {
         assert!(error.contains("newer"), "unexpected error: {error}");
         let connection = open_stats_connection(&data_directory.path().join("reade-stats.sqlite3"))
             .expect("reopen raw");
-        let listed = list_sessions(&connection, "C:/one", 0, u64::MAX).expect("data kept");
-        assert_eq!(listed, vec![session]);
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("data kept");
+        assert_eq!(listed, vec![with_root(session, "C:/one")]);
     }
 }
