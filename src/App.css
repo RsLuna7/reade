@@ -2533,13 +2533,6 @@ a:focus-visible {
   place-items: center;
 }
 
-.markdown-mermaid iframe {
-  width: 100%;
-  min-height: 360px;
-  border: 0;
-  background: transparent;
-}
-
 .markdown-mermaid-loading {
   color: var(--muted);
   font-size: 11px;

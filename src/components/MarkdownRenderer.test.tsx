@@ -1,10 +1,17 @@
 // @vitest-environment jsdom
 
 import "../test/setup";
-import { render, screen, within } from "@testing-library/react";
-import { describe, expect, it } from "vitest";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
 import { extractToc, safeUrlTransform } from "../lib/markdown";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+
+vi.mock("mermaid", () => ({
+  default: {
+    initialize: vi.fn(),
+    render: vi.fn(),
+  },
+}));
 
 describe("MarkdownRenderer", () => {
   it("renders GFM features and footnotes", () => {
@@ -105,5 +112,24 @@ describe("MarkdownRenderer", () => {
       "data-source-end",
       "14",
     );
+  });
+
+  it("renders mermaid sandbox iframes as inline SVG instead of blocked frames", async () => {
+    const mermaid = await import("mermaid");
+    const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 10"><text>flow</text></svg>`;
+    const encoded = btoa(`<body style="margin:0">${svg}</body>`);
+    vi.mocked(mermaid.default.render).mockResolvedValue({
+      svg: `<iframe src="data:text/html;charset=UTF-8;base64,${encoded}" sandbox="allow-popups"></iframe>`,
+      diagramType: "flowchart-v2",
+    });
+
+    const { container } = render(
+      <MarkdownRenderer content={"```mermaid\nflowchart LR\n  A --> B\n```"} />,
+    );
+
+    await waitFor(() => {
+      expect(container.querySelector(".markdown-mermaid svg")).toHaveTextContent("flow");
+    });
+    expect(container.querySelector("iframe")).toBeNull();
   });
 });

@@ -21,6 +21,7 @@ import {
   countMermaidEdges,
   safeUrlTransform,
 } from "../lib/markdown";
+import { sanitizeMermaidSvg } from "../lib/mermaidSvg";
 
 export interface MarkdownRendererProps {
   content: string;
@@ -264,7 +265,9 @@ function loadMermaid() {
   mermaidLoader ??= import("mermaid").then(({ default: mermaid }) => {
     mermaid.initialize({
       startOnLoad: false,
-      securityLevel: "sandbox",
+      // Inline SVG + DOMPurify. Sandbox iframes use data: URLs that Tauri CSP
+      // `frame-src` blocks, which WebView2 renders as "已阻止此内容".
+      securityLevel: "strict",
       suppressErrorRendering: true,
       maxTextSize: MAX_MERMAID_TEXT_SIZE,
       maxEdges: MAX_MERMAID_EDGES,
@@ -340,9 +343,16 @@ function MermaidBlock({
     void loadMermaid()
       .then((mermaid) => mermaid.render(id, source, renderHost))
       .then(({ svg: renderedSvg }) => {
-        if (!cancelled) {
-          setSvg(renderedSvg);
+        if (cancelled) {
+          return;
+        }
+        const safeSvg = sanitizeMermaidSvg(renderedSvg);
+        if (safeSvg) {
+          setSvg(safeSvg);
           setError(null);
+        } else {
+          setSvg(null);
+          setError("图表输出未通过安全检查");
         }
       })
       .catch((renderError: unknown) => {
