@@ -1,7 +1,7 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { Annotation } from "../lib/backend";
-import { ANNOTATION_COLORS, colorAccessibleLabel } from "../lib/annotations";
+import { ANNOTATION_TONES, ANNOTATION_TONE_META } from "../lib/annotationModel";
 import {
   AnnotationFilterControls,
   AnnotationLibraryGroupList,
@@ -51,6 +51,11 @@ export function AnnotationHubView({
 }: AnnotationHubViewProps) {
   const motionLevel = useReaderStore((state) => state.motionLevel);
   const colorNames = useReaderStore((state) => state.annotationColorNames);
+  const toneLabels = {
+    sand: colorNames.yellow || ANNOTATION_TONE_META.sand.label,
+    sage: colorNames.green || ANNOTATION_TONE_META.sage.label,
+    slate: colorNames.blue || ANNOTATION_TONE_META.slate.label,
+  };
   const resultsRef = useRef<HTMLDivElement>(null);
 
   // 与 StatsView 一致:Esc 返回阅读面(已被其他层处理过的按键不重复响应)。
@@ -147,18 +152,17 @@ export function AnnotationHubView({
       <div className="annotation-hub-layout">
         <aside className="annotation-hub-filters" aria-label="筛选标注">
           <AnnotationFilterControls filters={filters} onChange={onFiltersChange} />
-          {/* 颜色语义图例(plan-annotation-color-names §2.2):常显命名,
-              名字互相易混时也有纠错线索;在阅读设置中可改名。 */}
+          {/* 三色外观图例；自定义名来自阅读设置。 */}
           <section className="annotation-hub-legend" aria-label="颜色外观">
             <h3>颜色外观</h3>
             <ul>
-              {ANNOTATION_COLORS.map((color) => (
-                <li key={color}>
+              {ANNOTATION_TONES.map((tone) => (
+                <li key={tone}>
                   <span
-                    className={`annotation-color-dot annotation-color-dot--${color}`}
+                    className={`annotation-tone-swatch annotation-tone-swatch--${tone}`}
                     aria-hidden="true"
                   />
-                  <span>{colorAccessibleLabel(color, colorNames)}</span>
+                  <span>{toneLabels[tone]}</span>
                 </li>
               ))}
             </ul>

@@ -2,7 +2,7 @@
 
 - 日期：2026-08-25（傍晚更新）
 - 分支：`main`（未提交）
-- 状态：**阶段 0–6 代码已接线；Web 视觉抽检 + Desktop Tauri Markdown 明暗截图已落盘；D-009 已修。真实 PDF / 桌面划词静默标记 / EPUB 窄窗仍缺；PDF/EPUB 新捕获仍走旧路径**
+- 状态：**阶段 0–6 代码已接线；旧顶栏「标注工具」面板与连续落笔模式已移除；改色/筛选/Hub/ScrollMap/设置统一三色；Web 视觉抽检 + Desktop Tauri Markdown 明暗截图已落盘；D-009 已修。真实 PDF / 桌面划词静默标记 / EPUB 窄窗仍缺；PDF/EPUB 新捕获仍走旧路径**
 - 规格真源：`docs/plan-annotation-system-redesign.md`
 - 实施账本：`docs/annotation-redesign-implementation-notes.md`
 - 视觉证据：`output/playwright/annotation-redesign-2026-08-25/`（含 `VISUAL-REPORT.md`）

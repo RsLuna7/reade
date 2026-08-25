@@ -25,7 +25,6 @@ import {
   FolderPlus,
   Globe2,
   HardDrive,
-  Highlighter,
   House,
   Library,
   ListTree,
@@ -169,9 +168,7 @@ import {
   verticalWritingUnavailableReason,
 } from "./lib/verticalWriting";
 import {
-  ANNOTATION_COLORS,
   ANNOTATION_COLOR_NAME_MAX_CHARS,
-  ANNOTATION_COLOR_WORDS,
   buildTextIndex,
   clearAnnotationMarks,
   collectElementText,
@@ -223,7 +220,11 @@ import {
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { useDocumentAnnotationBundle } from "./lib/useDocumentAnnotationBundle";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
-import { toneToLegacyColor } from "./lib/annotationModel";
+import {
+  ANNOTATION_TONES,
+  ANNOTATION_TONE_META,
+  toneToLegacyColor,
+} from "./lib/annotationModel";
 import { useReadAloud } from "./lib/useReadAloud";
 // 聚焦模式(plan-focus-mode):spotlight/打字机共享驱动在 lib,
 // 标尺是纯视觉组件;PDF 原版式无段落 DOM,三者一律不接线。
@@ -235,7 +236,6 @@ import {
   AnnotationImportConfirm,
   AnnotationList,
   AnnotationLibraryPanel,
-  AnnotationToolsPanel,
   SelectionToolbar,
   type AnnotationLibraryFilters,
   type AnnotationLibraryGroup,
@@ -1095,34 +1095,37 @@ export function ReadingSettingsPanel({
       <fieldset className="setting-row color-names-setting">
         <legend className="setting-label">颜色外观名</legend>
         <div className="color-name-grid">
-          {ANNOTATION_COLORS.map((color) => (
-            <label className="color-name-row" key={color}>
-              <span
-                className={`annotation-color-dot annotation-color-dot--${color}`}
-                aria-hidden="true"
-              />
-              <input
-                type="text"
-                className="color-name-input"
-                value={colorNameDrafts[color]}
-                maxLength={ANNOTATION_COLOR_NAME_MAX_CHARS}
-                aria-label={`${ANNOTATION_COLOR_WORDS[color]}色的外观名`}
-                onChange={(event) =>
-                  setColorNameDrafts((drafts) => ({
-                    ...drafts,
-                    [color]: event.target.value,
-                  }))
-                }
-                onBlur={(event) => setAnnotationColorName(color, event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") event.currentTarget.blur();
-                }}
-              />
-            </label>
-          ))}
+          {ANNOTATION_TONES.map((tone) => {
+            const legacyColor = ANNOTATION_TONE_META[tone].legacyColor;
+            return (
+              <label className="color-name-row" key={tone}>
+                <span
+                  className={`annotation-tone-swatch annotation-tone-swatch--${tone}`}
+                  aria-hidden="true"
+                />
+                <input
+                  type="text"
+                  className="color-name-input"
+                  value={colorNameDrafts[legacyColor]}
+                  maxLength={ANNOTATION_COLOR_NAME_MAX_CHARS}
+                  aria-label={`${ANNOTATION_TONE_META[tone].label}的外观名`}
+                  onChange={(event) =>
+                    setColorNameDrafts((drafts) => ({
+                      ...drafts,
+                      [legacyColor]: event.target.value,
+                    }))
+                  }
+                  onBlur={(event) => setAnnotationColorName(legacyColor, event.target.value)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") event.currentTarget.blur();
+                  }}
+                />
+              </label>
+            );
+          })}
         </div>
         <p className="setting-hint">
-          命名显示在颜色选择、筛选与图例中；清空某项则恢复该色默认名。
+          命名显示在颜色选择、筛选与图例中；清空某项则恢复该色默认名。新标记只有暖砂、青灰、墨蓝三种外观。
         </p>
         <button
           className="settings-reset color-names-reset"
@@ -1599,9 +1602,6 @@ function App() {
   const theme = useReaderStore((state) => state.theme);
   const readingSettings = useReaderStore((state) => state.readingSettings);
   const motionLevel = useReaderStore((state) => state.motionLevel);
-  const annotationTool = useReaderStore((state) => state.annotationTool);
-  const highlightColor = useReaderStore((state) => state.highlightColor);
-  const underlineColor = useReaderStore((state) => state.underlineColor);
   const excerptTone = useReaderStore((state) => state.excerptTone);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
@@ -1613,9 +1613,6 @@ function App() {
   // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
   const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
   const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
-  const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
-  const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
-  const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
   const setExcerptTone = useReaderStore((state) => state.setExcerptTone);
   const loading = useReaderStore((state) => state.loading);
   const error = useReaderStore((state) => state.error);
@@ -1642,7 +1639,6 @@ function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
-  const [annotationPanelOpen, setAnnotationPanelOpen] = useState(false);
   // 最近书库 MRU(plan-library-mru):列表、失效探测结果与侧栏菜单开关。
   // 挂载时做一次旧单值键播种迁移;Web 端无文件系统语义,恒空。
   const [libraryMru, setLibraryMru] = useState<LibraryMruEntry[]>(() =>
@@ -1810,7 +1806,6 @@ function App() {
     reload: reloadAnnotationBundle,
     saveReflection,
   } = useDocumentAnnotationBundle(currentPath);
-  const activeMarkColor = annotationTool === "underline" ? underlineColor : highlightColor;
   const initialWebRoute = useRef(
     IS_WEB_RUNTIME ? parseWebRoute(window.location) : null,
   );
@@ -2710,7 +2705,6 @@ function App() {
         badge: "命令",
         run: () => {
           setSettingsOpen(true);
-          setAnnotationPanelOpen(false);
         },
       },
       snapshot
@@ -3096,21 +3090,21 @@ function App() {
           mode: "create",
           pending: pendingSelection,
           kind: "highlight",
-          color: highlightColor,
+          color: toneToLegacyColor(excerptTone),
           text: "",
         });
         closeToolbar();
         return;
       }
-      await handleSaveMark(pendingSelection, "highlight", highlightColor, null);
+      await handleSaveMark(pendingSelection, "highlight", toneToLegacyColor(excerptTone), null);
     },
-    [closeToolbar, handleSaveMark, highlightColor, pendingSelection],
+    [closeToolbar, excerptTone, handleSaveMark, pendingSelection],
   );
 
   const handleSaveUnderline = useCallback(async () => {
     if (!pendingSelection) return;
-    await handleSaveMark(pendingSelection, "underline", underlineColor, null);
-  }, [handleSaveMark, pendingSelection, underlineColor]);
+    await handleSaveMark(pendingSelection, "underline", toneToLegacyColor(excerptTone), null);
+  }, [excerptTone, handleSaveMark, pendingSelection]);
 
   const handlePickTone = useCallback(
     async (tone: typeof excerptTone) => {
@@ -3664,6 +3658,7 @@ function App() {
             annotations={markdownFallbackAnnotations}
             brokenIds={brokenAnnotationIds}
             approximateIds={approximateAnnotationIds}
+            geometricFallbackIds={geometricFallbackIds}
             loading={annotationsLoading}
             sort={annotationSort}
             onSortChange={setAnnotationSort}
@@ -4215,7 +4210,6 @@ function App() {
     setRelatedPassages(null);
     setCollectionsPopoverOpen(false);
     setSidePanelTab((current) => (current === "library" ? current : "toc"));
-    setAnnotationPanelOpen(false);
     // 编纂视图是单文档的:换文档即关闭,防 overlay 展示上一篇的报告。
     setBookDigestOpen(false);
     setMarkdownBrokenIds([]);
@@ -4274,11 +4268,6 @@ function App() {
         setPendingSelection(null);
         return;
       }
-      if (annotationTool === "highlight" || annotationTool === "underline") {
-        const color = annotationTool === "underline" ? underlineColor : highlightColor;
-        void handleSaveMark(pending, annotationTool, color, null, { undoable: true });
-        return;
-      }
       const padding = 12;
       setToolbarPos({
         x: Math.min(window.innerWidth - 360, Math.max(padding, pending.rect.left)),
@@ -4319,7 +4308,7 @@ function App() {
       document.removeEventListener("pointercancel", onPointerEnd);
       document.removeEventListener("selectionchange", onSelectionChange);
     };
-  }, [annotationTool, currentContent, handleSaveMark, highlightColor, underlineColor]);
+  }, [currentContent]);
 
   useEffect(() => {
     const reader = readerRef.current;
@@ -5151,12 +5140,8 @@ function App() {
             stopReadAloud();
             return;
           }
-          if (annotationTool !== "view") {
-            setAnnotationTool("view");
-          }
           setSettingsOpen(false);
           setStylePickerOpen(false);
-          setAnnotationPanelOpen(false);
           setCollectionsPopoverOpen(false);
           setLibrarySwitcherOpen(false);
           setCommandPaletteOpen(false);
@@ -5208,7 +5193,6 @@ function App() {
     window.addEventListener("keydown", onKeyDown);
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
-    annotationTool,
     canUndo,
     chooseAndOpenLibrary,
     clearRelocatePreview,
@@ -5221,7 +5205,6 @@ function App() {
     handleUndoAnnotation,
     closeRelatedPassages,
     readAloudBarOpen,
-    setAnnotationTool,
     stopReadAloud,
   ]);
 
@@ -5955,43 +5938,6 @@ function App() {
                 <Columns2 size={16} aria-hidden="true" />
               </button>
             )}
-            {currentContent && !overlayViewOpen && (
-              <>
-                <button
-                  className={`icon-button${annotationTool !== "view" ? " is-armed" : ""}`}
-                  type="button"
-                  aria-label="标注工具"
-                  title={
-                    annotationTool === "highlight"
-                      ? "标注工具（高亮模式）"
-                      : annotationTool === "underline"
-                        ? "标注工具（下划线模式）"
-                        : "标注工具"
-                  }
-                  aria-expanded={annotationPanelOpen}
-                  onClick={() => {
-                    setAnnotationPanelOpen((open) => !open);
-                    setSettingsOpen(false);
-                  }}
-                >
-                  <Highlighter size={16} aria-hidden="true" />
-                </button>
-                <AnnotationToolsPanel
-                  open={annotationPanelOpen}
-                  tool={annotationTool}
-                  color={activeMarkColor}
-                  canUndo={canUndo}
-                  canClear={annotations.length > 0}
-                  onToolChange={setAnnotationTool}
-                  onColorChange={(color) => {
-                    if (annotationTool === "underline") setUnderlineColor(color);
-                    else setHighlightColor(color);
-                  }}
-                  onUndo={() => void handleUndoAnnotation()}
-                  onClear={() => void handleClearAnnotations()}
-                />
-              </>
-            )}
             {currentContent && currentPath && !overlayViewOpen && (
               <>
                 <button
@@ -6003,7 +5949,6 @@ function App() {
                   onClick={() => {
                     setCollectionsPopoverOpen((open) => !open);
                     setSettingsOpen(false);
-                    setAnnotationPanelOpen(false);
                   }}
                 >
                   <FolderPlus size={16} aria-hidden="true" />
@@ -6039,7 +5984,6 @@ function App() {
               aria-expanded={settingsOpen}
               onClick={() => {
                 setSettingsOpen((open) => !open);
-                setAnnotationPanelOpen(false);
               }}
             >
               <Settings2 size={16} aria-hidden="true" />
@@ -6498,7 +6442,7 @@ function App() {
         )}
 
         <SelectionToolbar
-          open={Boolean(pendingSelection) && annotationTool === "view"}
+          open={Boolean(pendingSelection)}
           x={toolbarPos.x}
           y={toolbarPos.y}
           tone={excerptTone}

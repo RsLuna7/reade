@@ -115,6 +115,29 @@ describe("application CSS isolation", () => {
     );
   });
 
+  it("keeps the right TOC panel from clipping annotation cards horizontally", () => {
+    // #1: library-group 若用 auto 轨，子项 width/max-width:100% 与内容宽度循环，
+    // 卡片会撑到面板外再被 overflow-x:hidden 硬裁。
+    expect(css).toMatch(/\.toc-panel\s*\{[^}]*overflow-x:\s*hidden/s);
+    expect(css).toMatch(/\.toc-panel\s*\{[^}]*overflow-y:\s*auto/s);
+    expect(css).toMatch(/\.toc-panel\s*\{[^}]*padding:\s*43px\s+16px\s+28px\s+12px/s);
+    expect(css).toMatch(
+      /\.annotation-library-group\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+    );
+    expect(css).toMatch(
+      /\.annotation-list-wrap\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)/s,
+    );
+    expect(css).toMatch(/\.annotation-library-group\s*\{[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.annotation-list\s*\{[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(/\.annotation-list-item\s*\{[^}]*overflow:\s*hidden/s);
+    expect(css).toMatch(
+      /\.annotation-list-title\s*\{[^}]*overflow-wrap:\s*anywhere/s,
+    );
+    expect(css).toMatch(
+      /\.content-grid\s*\{[^}]*minmax\(var\(--toc-width\),\s*0\.32fr\)/s,
+    );
+  });
+
   it("uses dark Shiki token colors for always-dark code blocks", () => {
     expect(css).toMatch(
       /\.markdown-code-highlight \.shiki(?:\s*,\s*\.markdown-code-highlight \.shiki span)?\s*\{[^}]*color:\s*var\(--shiki-dark\)\s*!important/s,
@@ -212,20 +235,25 @@ describe("annotation interaction CSS", () => {
 });
 
 describe("annotation color tokens", () => {
-  // 明暗两套、OKLCH 调平的标注四色(见 App.css token 块注释):
-  // 每色三个 token——裸色(UI 身份色)、-fill(高亮底)、-line(下划线)。
+  // UI chrome aliases --annot-* → --excerpt-*; dark mode only redefines excerpt.
   const ANNOT_TOKENS = (["yellow", "green", "blue", "pink"] as const).flatMap(
     (color) => [`--annot-${color}`, `--annot-${color}-fill`, `--annot-${color}-line`],
   );
+  const EXCERPT_TOKENS = (["sand", "sage", "slate"] as const).flatMap((tone) => [
+    `--excerpt-${tone}`,
+    `--excerpt-${tone}-fill`,
+    `--excerpt-${tone}-line`,
+  ]);
 
-  it("defines the light palette on :root and a complete dark override", () => {
-    // 暗色靠主题 id 后缀匹配(`${series}-${mode}` 契约)一次覆盖四个暗主题;
-    // 三组 token 必须成套出现,缺一个就会出现明暗混用的脏色。
+  it("defines the light palette on :root and a complete dark excerpt override", () => {
     const darkBlock = css.match(/:root\[data-theme\$="-dark"\]\s*\{([^}]*)\}/)?.[1];
     expect(darkBlock, 'missing :root[data-theme$="-dark"] annotation block').toBeTruthy();
-    for (const token of ANNOT_TOKENS) {
+    for (const token of EXCERPT_TOKENS) {
       expect(css).toContain(`${token}:`);
       expect(darkBlock).toContain(`${token}:`);
+    }
+    for (const token of ANNOT_TOKENS) {
+      expect(css).toMatch(new RegExp(`${token}:\\s*var\\(--excerpt-`));
     }
   });
 
@@ -242,8 +270,10 @@ describe("annotation color tokens", () => {
     expect(css).toMatch(/\.annotation-color-dot--green\s*\{\s*background:\s*var\(--annot-green\)/);
     expect(css).toMatch(/\.annotation-color-swatch--pink\s*\{\s*background:\s*var\(--annot-pink\)/);
     expect(css).toMatch(/\.scroll-map-tick--blue\s*\{\s*background:\s*var\(--annot-blue\)/);
+    expect(css).toMatch(/\.annotation-tone-swatch--sand\s*\{\s*background:\s*var\(--excerpt-sand\)/);
     // 旧的单套荧光色值不得回流(暗色主题下文字对比度 2.87-3.80:1,不达标)。
     expect(css).not.toMatch(/#ffe650|#78dc8c|#78b4ff|#ff8cbe/i);
+    expect(css).not.toMatch(/#efcf53|#87e2a8|#a1cfff|#ffb0ca/i);
   });
 
   it("keeps PDF highlights on the fixed light palette (pages stay white)", () => {

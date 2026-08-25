@@ -196,6 +196,31 @@ export function toneToLegacyColor(tone: AnnotationTone): AnnotationColor {
   return ANNOTATION_TONE_META[tone].legacyColor;
 }
 
+/** Filter chips: sand includes legacy pink as well as yellow. */
+export function colorsForTone(tone: AnnotationTone): AnnotationColor[] {
+  if (tone === "sage") return ["green"];
+  if (tone === "slate") return ["blue"];
+  return ["yellow", "pink"];
+}
+
+export function isToneFilterActive(
+  colors: readonly AnnotationColor[],
+  tone: AnnotationTone,
+): boolean {
+  return colorsForTone(tone).some((color) => colors.includes(color));
+}
+
+export function toggleToneFilter(
+  colors: readonly AnnotationColor[],
+  tone: AnnotationTone,
+): AnnotationColor[] {
+  const mapped = colorsForTone(tone);
+  if (isToneFilterActive(colors, tone)) {
+    return colors.filter((color) => !mapped.includes(color));
+  }
+  return [...new Set([...colors, ...mapped])];
+}
+
 /** Preserve pink while its mapped tone stays sand; a deliberate recolor spends it. */
 export function projectedLegacyColor(excerpt: Excerpt): AnnotationColor {
   if (

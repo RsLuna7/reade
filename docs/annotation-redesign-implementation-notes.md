@@ -111,4 +111,10 @@
 - 保守取舍：先把源库各 store `getAll` 读进内存快照并等事务完成，再打开备份库写入；失败后若 meta 带 `error` 允许重试备份。
 - 影响：Web 新建摘录恢复可用；fake-indexeddb 与真浏览器行为对齐。Desktop SQLite 路径不受影响。
 
+### D-010：移除顶栏旧标注工具并统一三色 chrome
+
+- 发现：顶栏 `AnnotationToolsPanel`（浏览/高亮/下划线 + 四色荧光）与静默选区工具条并存；改色气泡、列表、全库筛选、Hub 图例、ScrollMap、`--annot-*` UI chrome 仍用旧四色。
+- 保守取舍：删除顶栏入口与连续落笔路径；改色/筛选/设置只暴露 sand/sage/slate；砂色筛选含 legacy pink；`--annot-*` 别名到 `--excerpt-*`。PDF/EPUB 侧栏仍用 `AnnotationList`（已三色），新捕获仍不改 `createExcerpt`。`annotationTool` / `highlightColor` 等 store 字段保留兼容，UI 不再驱动。
+- 影响：阅读主路径只剩划选 →「标记 / 更多」；旧粉数据在筛选暖砂时仍可见。
+
 任何后续偏离规格的保守取舍都必须先写在此处，再继续实现。

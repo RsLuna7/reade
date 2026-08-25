@@ -6,19 +6,19 @@ import type {
   AnnotationKind,
 } from "../lib/backend";
 import {
-  ANNOTATION_COLORS,
   APPROXIMATE_ANCHOR_LABEL,
   GEOMETRIC_FALLBACK_LABEL,
   annotationKindLabel,
   annotationListTitle,
-  colorAccessibleLabel,
-  colorDisplayName,
   isAnnotationMarkKind,
-  type AnnotationMarkKind,
 } from "../lib/annotations";
 import {
   ANNOTATION_TONES,
   ANNOTATION_TONE_META,
+  isToneFilterActive,
+  legacyColorToTone,
+  toneToLegacyColor,
+  toggleToneFilter,
   type AnnotationTone,
 } from "../lib/annotationModel";
 import { previewGroupAnnotations } from "../lib/annotationHub";
@@ -26,14 +26,14 @@ import { isRelocatableAnnotation } from "../lib/annotationRelocate";
 import type { RebindDryRunReport } from "../lib/rebindDryRun";
 import { useReaderStore } from "../store/useReaderStore";
 
-export type AnnotationTool = "view" | AnnotationMarkKind;
-
-/**
- * 颜色语义命名(plan-annotation-color-names CN-D5):组件直接读 store,
- * 改名即时反映到所有色块;label 恒带颜色词("暖砂（黄色）"),无障碍不丢底色。
- */
-function useAnnotationColorNames(): Record<AnnotationColor, string> {
-  return useReaderStore((state) => state.annotationColorNames);
+/** Appearance label for a tone; custom names live on the mapped legacy color key. */
+function useToneLabels(): Record<AnnotationTone, string> {
+  const colorNames = useReaderStore((state) => state.annotationColorNames);
+  return {
+    sand: colorNames.yellow || ANNOTATION_TONE_META.sand.label,
+    sage: colorNames.green || ANNOTATION_TONE_META.sage.label,
+    slate: colorNames.blue || ANNOTATION_TONE_META.slate.label,
+  };
 }
 
 interface SelectionToolbarProps {
@@ -191,7 +191,7 @@ interface AnnotationEditBubbleProps {
   onClose: () => void;
 }
 
-/** 点击正文中的标注 mark 后弹出的小型编辑气泡(改色/笔记/删除)。 */
+/** 点击正文中的标注 mark 后弹出的小型编辑气泡(改色/感悟/删除)。 */
 export function AnnotationEditBubble({
   annotation,
   x,
@@ -203,7 +203,8 @@ export function AnnotationEditBubble({
   onClose,
 }: AnnotationEditBubbleProps) {
   const ref = useRef<HTMLDivElement>(null);
-  const colorNames = useAnnotationColorNames();
+  const toneLabels = useToneLabels();
+  const activeTone = legacyColorToTone(annotation.color);
 
   useEffect(() => {
     const onPointerDown = (event: Event) => {
@@ -233,17 +234,17 @@ export function AnnotationEditBubble({
     >
       {isAnnotationMarkKind(annotation.kind) ? (
         <div className="annotation-toolbar-colors" role="group" aria-label="更改颜色">
-          {ANNOTATION_COLORS.map((item) => (
+          {ANNOTATION_TONES.map((tone) => (
             <button
-              key={item}
+              key={tone}
               type="button"
-              className={`annotation-color-swatch annotation-color-swatch--${item}${
-                annotation.color === item ? " active" : ""
+              className={`annotation-tone-swatch annotation-tone-swatch--${tone}${
+                activeTone === tone ? " active" : ""
               }`}
-              aria-label={`改为${colorAccessibleLabel(item, colorNames)}`}
-              title={colorAccessibleLabel(item, colorNames)}
-              aria-pressed={annotation.color === item}
-              onClick={() => onChangeColor(annotation, item)}
+              aria-label={`改为${toneLabels[tone]}`}
+              title={toneLabels[tone]}
+              aria-pressed={activeTone === tone}
+              onClick={() => onChangeColor(annotation, toneToLegacyColor(tone))}
             />
           ))}
         </div>
@@ -272,93 +273,6 @@ export function AnnotationEditBubble({
     </div>
   );
 }
-
-interface AnnotationToolsPanelProps {
-  open: boolean;
-  tool: AnnotationTool;
-  color: AnnotationColor;
-  canUndo: boolean;
-  canClear: boolean;
-  onToolChange: (tool: AnnotationTool) => void;
-  onColorChange: (color: AnnotationColor) => void;
-  onUndo: () => void;
-  onClear: () => void;
-}
-
-export function AnnotationToolsPanel({
-  open,
-  tool,
-  color,
-  canUndo,
-  canClear,
-  onToolChange,
-  onColorChange,
-  onUndo,
-  onClear,
-}: AnnotationToolsPanelProps) {
-  const colorNames = useAnnotationColorNames();
-  const showColors = tool === "highlight" || tool === "underline";
-  return (
-    <div
-      className="annotation-tools-popover reade-motion-panel"
-      role="dialog"
-      aria-label="标注工具"
-      aria-hidden={!open}
-      data-open={open}
-      inert={!open}
-    >
-      <div className="annotation-tools-heading">标注工具</div>
-      <p className="annotation-tools-hint">
-        选择高亮或下划线后，在正文中划选即可落笔；浏览模式下划选会出现浮动工具条。
-      </p>
-      <div className="annotation-mode-tools" role="toolbar" aria-label="标注模式">
-        {(
-          [
-            ["view", "浏览"],
-            ["highlight", "高亮"],
-            ["underline", "下划线"],
-          ] as const
-        ).map(([value, label]) => (
-          <button
-            key={value}
-            type="button"
-            className={tool === value ? "active" : ""}
-            aria-pressed={tool === value}
-            onClick={() => onToolChange(value)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
-      {showColors ? (
-        <div className="annotation-toolbar-colors" aria-label="标注颜色">
-          {ANNOTATION_COLORS.map((item) => (
-            <button
-              key={item}
-              type="button"
-              className={`annotation-color-swatch annotation-color-swatch--${item}${color === item ? " active" : ""}`}
-              aria-label={`选择${colorAccessibleLabel(item, colorNames)}`}
-              title={colorAccessibleLabel(item, colorNames)}
-              aria-pressed={color === item}
-              onClick={() => onColorChange(item)}
-            />
-          ))}
-        </div>
-      ) : null}
-      <div className="annotation-mode-actions">
-        <button type="button" disabled={!canUndo} onClick={onUndo}>
-          撤销
-        </button>
-        <button type="button" disabled={!canClear} onClick={onClear}>
-          清空本文档
-        </button>
-      </div>
-    </div>
-  );
-}
-
-/** @deprecated Use AnnotationToolsPanel */
-export const AnnotationModeBar = AnnotationToolsPanel;
 
 export type AnnotationListSort = "time" | "position";
 
@@ -404,7 +318,7 @@ export function AnnotationList({
   onCompileDigest,
   onClearAll,
 }: AnnotationListProps) {
-  const colorNames = useAnnotationColorNames();
+  const toneLabels = useToneLabels();
   if (loading) {
     return <p className="toc-empty">获取标注中…</p>;
   }
@@ -425,6 +339,7 @@ export function AnnotationList({
       : approximate
         ? APPROXIMATE_ANCHOR_LABEL
         : null;
+    const activeTone = legacyColorToTone(annotation.color);
     return (
       <li key={annotation.id} className={`annotation-list-item${broken ? " is-broken" : ""}`}>
         <button type="button" className="annotation-list-main" onClick={() => onSelect(annotation)}>
@@ -453,17 +368,17 @@ export function AnnotationList({
             aria-label="更改颜色"
             onMouseDown={(event) => event.preventDefault()}
           >
-            {ANNOTATION_COLORS.map((item) => (
+            {ANNOTATION_TONES.map((tone) => (
               <button
-                key={item}
+                key={tone}
                 type="button"
-                className={`annotation-color-swatch annotation-color-swatch--${item}${
-                  annotation.color === item ? " active" : ""
+                className={`annotation-tone-swatch annotation-tone-swatch--${tone}${
+                  activeTone === tone ? " active" : ""
                 }`}
-                aria-label={`改为${colorAccessibleLabel(item, colorNames)}`}
-                title={colorAccessibleLabel(item, colorNames)}
-                aria-pressed={annotation.color === item}
-                onClick={() => onChangeColor?.(annotation, item)}
+                aria-label={`改为${toneLabels[tone]}`}
+                title={toneLabels[tone]}
+                aria-pressed={activeTone === tone}
+                onClick={() => onChangeColor?.(annotation, toneToLegacyColor(tone))}
               />
             ))}
           </div>
@@ -603,8 +518,8 @@ function toggleFilterValue<T>(values: readonly T[], value: T): T[] {
 }
 
 /**
- * 检索框 + 类型 chip × 颜色点(方案四 §3.1 前端接线)。侧栏 tab 与全屏
- * 中枢共用;chip/色点为纯前端过滤,与检索结果求交由调用方完成。
+ * 检索框 + 类型 chip × 三色 tone 点。侧栏 tab 与全屏中枢共用;
+ * chip 为纯前端过滤,与检索结果求交由调用方完成。砂色筛选含旧粉。
  */
 export function AnnotationFilterControls({
   filters,
@@ -613,7 +528,7 @@ export function AnnotationFilterControls({
   filters: AnnotationLibraryFilters;
   onChange: (filters: AnnotationLibraryFilters) => void;
 }) {
-  const colorNames = useAnnotationColorNames();
+  const toneLabels = useToneLabels();
   return (
     <div className="annotation-filter-controls">
       <div className="annotation-library-search">
@@ -638,28 +553,30 @@ export function AnnotationFilterControls({
             {label}
           </button>
         ))}
-        {/* 色点升级为「圆点 + 语义名」chip:名字是 chip 的脸,筛选值仍是色键。 */}
-        {ANNOTATION_COLORS.map((color) => (
-          <button
-            key={color}
-            type="button"
-            className={`annotation-filter-chip annotation-filter-chip--color${
-              filters.colors.includes(color) ? " active" : ""
-            }`}
-            aria-label={`筛选${colorAccessibleLabel(color, colorNames)}标注`}
-            title={colorAccessibleLabel(color, colorNames)}
-            aria-pressed={filters.colors.includes(color)}
-            onClick={() =>
-              onChange({ ...filters, colors: toggleFilterValue(filters.colors, color) })
-            }
-          >
-            <span
-              className={`annotation-color-dot annotation-color-dot--${color}`}
-              aria-hidden="true"
-            />
-            {colorDisplayName(color, colorNames)}
-          </button>
-        ))}
+        {ANNOTATION_TONES.map((tone) => {
+          const active = isToneFilterActive(filters.colors, tone);
+          return (
+            <button
+              key={tone}
+              type="button"
+              className={`annotation-filter-chip annotation-filter-chip--color${
+                active ? " active" : ""
+              }`}
+              aria-label={`筛选${toneLabels[tone]}标注`}
+              title={toneLabels[tone]}
+              aria-pressed={active}
+              onClick={() =>
+                onChange({ ...filters, colors: toggleToneFilter(filters.colors, tone) })
+              }
+            >
+              <span
+                className={`annotation-tone-swatch annotation-tone-swatch--${tone}`}
+                aria-hidden="true"
+              />
+              {toneLabels[tone]}
+            </button>
+          );
+        })}
         <button
           type="button"
           className={`annotation-filter-chip${filters.hasReflection ? " active" : ""}`}

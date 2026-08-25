@@ -133,7 +133,7 @@ describe("AnnotationEditBubble", () => {
     render(<AnnotationEditBubble {...baseProps} onChangeColor={onChangeColor} onDelete={onDelete} />);
     expect(screen.getByRole("dialog", { name: "编辑标注" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝（蓝色）" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝" }));
     expect(onChangeColor).toHaveBeenCalledWith(baseProps.annotation, "blue");
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
@@ -197,7 +197,10 @@ describe("AnnotationList", () => {
     render(<AnnotationList {...baseProps} onExport={onExport} />);
     fireEvent.click(screen.getByRole("button", { name: "导出本文档" }));
     expect(onExport).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "改为旧粉（粉色）" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改为暖砂" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改为青灰" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改为墨蓝" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "改为旧粉" })).not.toBeInTheDocument();
   });
 
   it("offers the quote-card action only for marks with an excerpt (QC-D3 M2)", () => {
@@ -266,7 +269,7 @@ describe("AnnotationList unanchored group (§5.6 A)", () => {
     const item = view.container.querySelector(".annotation-list-item.is-broken");
     expect(item).not.toBeNull();
     expect(item!.querySelector(".annotation-list-title")).toHaveTextContent("消失的文字");
-    expect(item!.querySelectorAll("button.annotation-color-swatch").length).toBe(4);
+    expect(item!.querySelectorAll("button.annotation-tone-swatch").length).toBe(3);
     expect(item!.textContent).toContain("感悟");
     expect(item!.textContent).toContain("删除");
 
@@ -561,11 +564,11 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
       colors: [],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "筛选墨蓝（蓝色）标注" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选墨蓝标注" }));
     expect(onFiltersChange).toHaveBeenCalledWith({ query: "", kinds: [], colors: ["blue"] });
   });
 
-  it("shows the semantic name as the face of each color chip", () => {
+  it("shows the tone name as the face of each color chip", () => {
     render(
       <AnnotationLibraryPanel
         {...baseProps}
@@ -573,9 +576,26 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
         onFiltersChange={vi.fn()}
       />,
     );
-    const chip = screen.getByRole("button", { name: "筛选暖砂（黄色）标注" });
+    const chip = screen.getByRole("button", { name: "筛选暖砂标注" });
     expect(chip).toHaveTextContent("暖砂");
-    expect(chip).toHaveAttribute("title", "暖砂（黄色）");
+    expect(chip).toHaveAttribute("title", "暖砂");
+  });
+
+  it("sand filter includes legacy pink alongside yellow", () => {
+    const onFiltersChange = vi.fn();
+    render(
+      <AnnotationLibraryPanel
+        {...baseProps}
+        filters={emptyFilters}
+        onFiltersChange={onFiltersChange}
+      />,
+    );
+    fireEvent.click(screen.getByRole("button", { name: "筛选暖砂标注" }));
+    expect(onFiltersChange).toHaveBeenCalledWith({
+      query: "",
+      kinds: [],
+      colors: ["yellow", "pink"],
+    });
   });
 
   it("switches the count line and export label while filtering", () => {

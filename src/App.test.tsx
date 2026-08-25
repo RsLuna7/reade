@@ -516,7 +516,7 @@ describe("annotation mark editing (B1)", () => {
     const bubble = await screen.findByRole("dialog", { name: "编辑标注" });
     expect(bubble).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝（蓝色）" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝" }));
     await waitFor(() => {
       expect(upsertAnnotation).toHaveBeenCalledWith(
         expect.objectContaining({ id: "ann-body", color: "blue" }),
@@ -1248,7 +1248,7 @@ describe("annotation color naming (plan-annotation-color-names)", () => {
   it("commits a rename on blur, truncates it and resets from the panel", () => {
     render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
 
-    const input = screen.getByRole("textbox", { name: "黄色的外观名" });
+    const input = screen.getByRole("textbox", { name: "暖砂的外观名" });
     fireEvent.change(input, { target: { value: "灵感摘录" } });
     // 输入过程不提交:store 仍是默认名。
     expect(useReaderStore.getState().annotationColorNames.yellow).toBe("暖砂");

@@ -3,12 +3,15 @@ import { ANNOTATION_MIGRATION_FIXTURE } from "./annotationMigrationFixture";
 import {
   ANNOTATION_TONES,
   excerptToLegacyAnnotation,
+  colorsForTone,
+  isToneFilterActive,
   legacyColorToTone,
   migrateLegacyAnnotation,
   projectedLegacyColor,
   readingPlaceToLegacyAnnotation,
   sourceAnchorToLegacyLocator,
   toneToLegacyColor,
+  toggleToneFilter,
 } from "./annotationModel";
 
 describe("annotation v5 → v6 semantic mapping", () => {
@@ -46,6 +49,10 @@ describe("annotation v5 → v6 semantic mapping", () => {
     expect(toneToLegacyColor("sand")).toBe("yellow");
     expect(toneToLegacyColor("sage")).toBe("green");
     expect(toneToLegacyColor("slate")).toBe("blue");
+    expect(colorsForTone("sand")).toEqual(["yellow", "pink"]);
+    expect(isToneFilterActive(["pink"], "sand")).toBe(true);
+    expect(toggleToneFilter([], "sand")).toEqual(["yellow", "pink"]);
+    expect(toggleToneFilter(["yellow", "pink", "green"], "sand")).toEqual(["green"]);
   });
 
   it("keeps legacy pink until the user deliberately recolors", () => {

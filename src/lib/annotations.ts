@@ -685,7 +685,7 @@ export function isSelectionInsideForbidden(selection: Selection, root: HTMLEleme
   if (!anchor) return true;
   return Boolean(
     anchor.closest(
-      "pre, code, .mermaid, .katex, .pdf-toolbar, .annotation-toolbar, .annotation-tools-popover, .annotation-note-editor, .markdown-code-copy, input, textarea",
+      "pre, code, .mermaid, .katex, .pdf-toolbar, .annotation-toolbar, .annotation-note-editor, .markdown-code-copy, input, textarea",
     ),
   );
 }

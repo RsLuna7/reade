@@ -7,9 +7,10 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  /* ~18.5% : 67.5% : 14% at 1440px (264 / 976 / 200). */
+  /* ~18.5% : 65% : 16.5% at 1440px (264 / 936 / 240).
+     右侧栏要装全库筛选 + 摘录卡，200px 过窄易横向撑破后被裁切。 */
   --sidebar-width: 264px;
-  --toc-width: 200px;
+  --toc-width: 240px;
   --reader-font-size: 17px;
   --reader-line-height: 1.86;
   /* Fallback; runtime may set a px cap or `none` for fluid measure. */
@@ -26,18 +27,13 @@
 }
 
 /*
-  标注四色 token:明暗两套、OKLCH 等明度调平(黄/绿/蓝/粉 = 金句/疑问/行动/术语)。
-  - 明色系:基色收敛在 OKLCH L84-86,四色感知重量一致;文字对高亮底 ≥10:1。
-  - 暗色系:降明度(L76-78)、降彩度、降透明度(30-32%)——半透明亮色直接叠暗纸
-    会"沉成脏色",实测旧黄高亮在四个暗主题的文字对比度只有 2.87-3.80:1。
-    换成本组后全部主题 ≥5.4:1(WCAG 1.4.3 正文线 4.5:1)。
-  - *-line 下划线:非文本指示,对纸面 ≥3:1(WCAG 1.4.11);明暗各一组。
-  - 裸色(--annot-*)给圆点/色块/滚动条刻度等 UI 身份色,与高亮底同源。
-  PDF 页面恒为白底、不随主题,故 .pdf-user-highlight--* 固定用明色系字面量。
+  标注色板：阅读正文与 UI chrome 统一走三色低彩度 --excerpt-*（暖砂/青灰/墨蓝）。
+  旧四色键 yellow/green/blue/pink 仍出现在数据层与 class 名；粉映射为砂。
+  --annot-* 作为兼容别名指向 excerpt，避免列表/刻度/圆点再亮成荧光色。
+  PDF 页面恒为白底，pdf 用户高亮层固定用明色系字面量。
 */
 :root {
-  /* Reading-first excerpt palette (v6): low-chroma, appearance only.
-     Body marks use these fills/lines; --annot-* stays for 4-color UI chrome. */
+  /* Reading-first excerpt palette (v6): low-chroma, appearance only. */
   --excerpt-sand: #b5965d;
   --excerpt-sand-fill: rgb(181 150 93 / 22%);
   --excerpt-sand-line: #7f6537;
@@ -47,18 +43,18 @@
   --excerpt-slate: #6d829d;
   --excerpt-slate-fill: rgb(109 130 157 / 20%);
   --excerpt-slate-line: #50657f;
-  --annot-yellow: #efcf53;
-  --annot-yellow-fill: rgb(239 207 83 / 50%);
-  --annot-yellow-line: #a07a00;
-  --annot-green: #87e2a8;
-  --annot-green-fill: rgb(135 226 168 / 45%);
-  --annot-green-line: #318f5a;
-  --annot-blue: #a1cfff;
-  --annot-blue-fill: rgb(161 207 255 / 45%);
-  --annot-blue-line: #407bc5;
-  --annot-pink: #ffb0ca;
-  --annot-pink-fill: rgb(255 176 202 / 45%);
-  --annot-pink-line: #c5547c;
+  --annot-yellow: var(--excerpt-sand);
+  --annot-yellow-fill: var(--excerpt-sand-fill);
+  --annot-yellow-line: var(--excerpt-sand-line);
+  --annot-green: var(--excerpt-sage);
+  --annot-green-fill: var(--excerpt-sage-fill);
+  --annot-green-line: var(--excerpt-sage-line);
+  --annot-blue: var(--excerpt-slate);
+  --annot-blue-fill: var(--excerpt-slate-fill);
+  --annot-blue-line: var(--excerpt-slate-line);
+  --annot-pink: var(--excerpt-sand);
+  --annot-pink-fill: var(--excerpt-sand-fill);
+  --annot-pink-line: var(--excerpt-sand-line);
 }
 
 /* 主题 id 契约为 `${series}-${mode}`(theme-tokens.css),后缀匹配即覆盖全部暗色系。 */
@@ -72,18 +68,7 @@
   --excerpt-slate: #899db7;
   --excerpt-slate-fill: rgb(137 157 183 / 22%);
   --excerpt-slate-line: #9fb2c9;
-  --annot-yellow: #d1b64a;
-  --annot-yellow-fill: rgb(209 182 74 / 30%);
-  --annot-yellow-line: #d8bd51;
-  --annot-green: #74c692;
-  --annot-green-fill: rgb(116 198 146 / 30%);
-  --annot-green-line: #7bcc98;
-  --annot-blue: #7fb6ee;
-  --annot-blue-fill: rgb(127 182 238 / 32%);
-  --annot-blue-line: #7fb6ee;
-  --annot-pink: #e596b1;
-  --annot-pink-fill: rgb(229 150 177 / 32%);
-  --annot-pink-line: #ea93b1;
+  /* --annot-* stay as aliases to --excerpt-* from :root; only excerpt values change. */
 }
 
 :root[data-motion="subtle"] {
@@ -1458,13 +1443,14 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  grid-template-columns: minmax(0, 1fr) var(--toc-width);
+  /* 右侧栏用 minmax 保底，避免被正文列挤没；上限随窗口略增。 */
+  grid-template-columns: minmax(0, 1fr) minmax(var(--toc-width), 0.32fr);
 }
 
 /* 分栏对照(plan-split-view §3.1):主栏轨道 30–70%,--split-pos 由分割条写入;
    --reader-measure 继续管每栏内正文上限,两者正交(SP-D5)。 */
 .content-grid[data-split="true"] {
-  grid-template-columns: clamp(30%, var(--split-pos, 50%), 70%) 6px minmax(0, 1fr) var(--toc-width);
+  grid-template-columns: clamp(30%, var(--split-pos, 50%), 70%) 6px minmax(0, 1fr) minmax(var(--toc-width), 0.32fr);
 }
 
 .split-divider {
@@ -2582,8 +2568,10 @@ a:focus-visible {
 
 .toc-panel {
   min-width: 0;
-  padding: 43px 14px 28px 0;
-  overflow: auto;
+  /* 左右都留白；热力点在 toc-link 右侧，不再依赖「左 0 右有」的不对称 padding。 */
+  padding: 43px 16px 28px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
   border-left: 1px solid var(--line);
   background: color-mix(in srgb, var(--paper) 95%, var(--chrome));
   scrollbar-width: none;
@@ -2600,7 +2588,12 @@ a:focus-visible {
 
 .toc-inner {
   position: relative;
-  padding-left: 18px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  /* 热力点在链接右侧绝对定位，左侧不再预留 18px 空轨。 */
+  padding-left: 0;
 }
 
 .toc-label {
@@ -2762,15 +2755,24 @@ a:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  /* 不定 width:100%——父级若是 auto 轨，百分比会与内容宽度循环，撑破侧栏。 */
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
   margin: 0;
+  overflow: hidden;
   list-style: none;
 }
 
 .annotation-list-item {
   display: grid;
   gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   padding: 8px;
+  overflow: hidden;
   border: 1px solid var(--line);
   border-radius: 10px;
   background: color-mix(in srgb, var(--paper) 88%, var(--chrome));
@@ -2783,8 +2785,11 @@ a:focus-visible {
 .annotation-list-main {
   display: grid;
   gap: 4px;
-  width: 100%;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
   padding: 0;
+  overflow: hidden;
   border: 0;
   color: inherit;
   background: transparent;
@@ -2841,6 +2846,11 @@ a:focus-visible {
 .annotation-list-wrap {
   display: grid;
   gap: 8px;
+  /* 与 library-group 相同：定宽轨，避免本文标注列表被长摘录撑破。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .annotation-list-toolbar {
@@ -2849,6 +2859,8 @@ a:focus-visible {
   gap: 6px;
   align-items: center;
   justify-content: space-between;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-list-toolbar button {
@@ -2880,6 +2892,11 @@ a:focus-visible {
 .annotation-library {
   display: grid;
   gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   /* 同上:嵌套内容的 min-content 不得撑破窄侧栏列宽。 */
   grid-template-columns: minmax(0, 1fr);
 }
@@ -2892,6 +2909,11 @@ a:focus-visible {
 .annotation-library-group {
   display: grid;
   gap: 8px;
+  /* 显式 minmax(0,1fr) 提供确定宽度，打断子项 max-width:100% 的循环百分比。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
 }
 
 .annotation-library-doc {
@@ -2940,6 +2962,8 @@ a:focus-visible {
 .annotation-filter-controls {
   display: grid;
   gap: 8px;
+  min-width: 0;
+  max-width: 100%;
   /* 搜索框的内在宽度(约 220px)不得把窄侧栏的单列轨道撑溢出。 */
   grid-template-columns: minmax(0, 1fr);
 }
@@ -2986,10 +3010,13 @@ a:focus-visible {
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
+  min-width: 0;
+  max-width: 100%;
 }
 
 .annotation-filter-chip {
-  flex-shrink: 0;
+  flex: 0 1 auto;
+  max-width: 100%;
   padding: 3px 9px;
   border: 1px solid var(--line);
   border-radius: 999px;
@@ -2998,6 +3025,8 @@ a:focus-visible {
   font-size: 11px;
   font-weight: 650;
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* 颜色语义命名(plan-annotation-color-names):圆点 + 语义名的通用件。 */
@@ -3088,95 +3117,9 @@ a:focus-visible {
   cursor: default;
 }
 
-.annotation-tools-popover {
-  position: absolute;
-  top: 44px;
-  right: 0;
-  z-index: 10;
-  display: grid;
-  gap: 12px;
-  width: min(300px, calc(100vw - 32px));
-  padding: 16px;
-  border: 1px solid var(--line-strong);
-  border-radius: 14px;
-  background: var(--paper-raised);
-  box-shadow: var(--shadow);
-  opacity: 0;
-  pointer-events: none;
-  transform: translateY(calc(-1 * var(--motion-distance))) scale(0.99);
-  visibility: hidden;
-  transition:
-    opacity var(--motion-standard) var(--motion-ease),
-    transform var(--motion-standard) var(--motion-ease),
-    visibility 0s linear var(--motion-standard);
-}
-
-.annotation-tools-popover[data-open="true"] {
-  opacity: 1;
-  pointer-events: auto;
-  transform: translateY(0) scale(1);
-  visibility: visible;
-  transition-delay: 0s;
-}
-
-.annotation-tools-heading {
-  color: var(--ink);
-  font-size: 13px;
-  font-weight: 650;
-}
-
-.annotation-tools-hint {
-  margin: 0;
-  color: var(--muted);
-  font-size: 12px;
-  line-height: 1.45;
-}
-
-.annotation-mode-tools,
-.annotation-mode-actions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-}
-
-.annotation-tools-popover button:not(.annotation-color-swatch) {
-  padding: 5px 10px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink-soft);
-  background: transparent;
-  font-size: 12px;
-}
-
-.annotation-tools-popover button:not(.annotation-color-swatch).active {
-  border-color: var(--line-strong);
-  background: color-mix(in srgb, var(--accent) 16%, transparent);
-}
-
-.annotation-tools-popover button:not(.annotation-color-swatch):disabled {
-  opacity: 0.45;
-}
-
-.annotation-tools-popover .annotation-toolbar-colors {
+.annotation-list-colors {
   gap: 8px;
 }
-
-.annotation-tools-popover .annotation-color-swatch {
-  width: 22px;
-  height: 22px;
-  border: 1px solid rgb(0 0 0 / 22%);
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 35%);
-}
-
-.annotation-tools-popover .annotation-color-swatch--yellow { background: var(--annot-yellow); }
-.annotation-tools-popover .annotation-color-swatch--green { background: var(--annot-green); }
-.annotation-tools-popover .annotation-color-swatch--blue { background: var(--annot-blue); }
-.annotation-tools-popover .annotation-color-swatch--pink { background: var(--annot-pink); }
-
-.annotation-list-colors .annotation-color-swatch--yellow { background: var(--annot-yellow); }
-.annotation-list-colors .annotation-color-swatch--green { background: var(--annot-green); }
-.annotation-list-colors .annotation-color-swatch--blue { background: var(--annot-blue); }
-.annotation-list-colors .annotation-color-swatch--pink { background: var(--annot-pink); }
 
 .icon-button.is-armed {
   color: var(--accent-ink);
@@ -3184,15 +3127,25 @@ a:focus-visible {
 }
 
 .annotation-list-title {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
   color: var(--ink-soft);
   font-size: 12px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .annotation-list-note {
+  display: block;
+  min-width: 0;
+  max-width: 100%;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .annotation-list-actions {
@@ -3220,6 +3173,10 @@ a:focus-visible {
 .lost-documents {
   display: grid;
   gap: 8px;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
   padding-top: 10px;
   border-top: 1px dashed var(--line-strong);
 }
@@ -3507,6 +3464,21 @@ a:focus-visible {
   border: 1px solid rgb(0 0 0 / 18%);
   border-radius: 999px;
   flex-shrink: 0;
+  padding: 0;
+}
+
+.annotation-toolbar-colors .annotation-tone-swatch,
+.annotation-list-colors .annotation-tone-swatch,
+.annotation-edit-bubble .annotation-tone-swatch,
+.color-name-row .annotation-tone-swatch {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+}
+
+.annotation-tone-swatch.active {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .annotation-tone-swatch--sand { background: var(--excerpt-sand); }
@@ -3517,7 +3489,9 @@ a:focus-visible {
   display: flex;
   flex-direction: column;
   gap: 10px;
+  min-width: 0;
   min-height: 0;
+  max-width: 100%;
   padding: 4px 2px 12px;
 }
 
@@ -3614,8 +3588,11 @@ a:focus-visible {
 .document-annotations-entry-text {
   display: -webkit-box;
   overflow: hidden;
+  min-width: 0;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 1;
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-size: 13px;
   line-height: 1.45;
 }
@@ -5794,17 +5771,18 @@ button.links-panel-entry:focus-visible {
 @media (max-width: 1180px) {
   :root {
     --sidebar-width: 200px;
-    --toc-width: 156px;
+    --toc-width: 180px;
     --reader-gutter-inline: 28px;
     --reader-gutter-toc: 16px;
   }
 
   .toc-panel {
-    padding-right: 10px;
+    padding-right: 14px;
+    padding-left: 10px;
   }
 
   .toc-inner {
-    padding-left: 14px;
+    padding-left: 0;
   }
 
   /* 156px 目录轨道放不下完整角标,tab 收紧、计数降级为圆点。 */
@@ -5879,7 +5857,8 @@ button.links-panel-entry:focus-visible {
     display: block;
     width: var(--compact-toc-width, min(318px, calc(100% - 30px)));
     padding: 28px 17px;
-    overflow: auto;
+    overflow-x: hidden;
+    overflow-y: auto;
     border-left: 1px solid var(--line-strong);
     background: var(--paper-raised);
     box-shadow: -18px 0 46px rgba(35, 31, 25, 0.14);
