@@ -275,6 +275,10 @@ describe("annotation color tokens", () => {
     expect(css).toMatch(/\.scroll-map-tick--blue\s*\{\s*background:\s*var\(--annot-blue\)/);
     expect(css).toMatch(/\.annotation-tone-swatch--sand\s*\{\s*background:\s*var\(--excerpt-sand\)/);
     expect(css).toContain(".annotation-tools-popover");
+    // 高亮角标:仅在 settings data 属性开启时画 lead 倒三角。
+    expect(css).toMatch(
+      /\.reading-scroll\[data-highlight-carets\].*\.annotation-mark--highlight\.annotation-mark--lead::before/s,
+    );
     // 旧的单套荧光色值不得回流(暗色主题下文字对比度 2.87-3.80:1,不达标)。
     expect(css).not.toMatch(/#ffe650|#78dc8c|#78b4ff|#ff8cbe/i);
     expect(css).not.toMatch(/#efcf53|#87e2a8|#a1cfff|#ffb0ca/i);

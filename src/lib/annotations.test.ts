@@ -305,6 +305,25 @@ describe("paintTextQuoteMarks", () => {
       expect(segment.title).toBe("");
     }
   });
+
+  it("marks the first highlight segment as lead for the optional caret", () => {
+    const root = document.createElement("div");
+    root.innerHTML = "<p>Alpha <em>and</em> omega here</p>";
+    paintTextQuoteMarks(root, [
+      mark({ id: "hi", quote: "Alpha and omega", markKind: "highlight" }),
+      mark({ id: "ul", quote: "here", markKind: "underline", color: "blue" }),
+    ]);
+    const highlightSegments = Array.from(
+      root.querySelectorAll<HTMLElement>('[data-annotation-id="hi"]'),
+    );
+    expect(highlightSegments.length).toBeGreaterThan(1);
+    expect(highlightSegments[0]?.classList.contains("annotation-mark--lead")).toBe(true);
+    for (const segment of highlightSegments.slice(1)) {
+      expect(segment.classList.contains("annotation-mark--lead")).toBe(false);
+    }
+    const underline = root.querySelector<HTMLElement>('[data-annotation-id="ul"]');
+    expect(underline?.classList.contains("annotation-mark--lead")).toBe(false);
+  });
 });
 
 describe("pdf highlight paint honesty", () => {

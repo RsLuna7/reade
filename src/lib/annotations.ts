@@ -521,6 +521,10 @@ export function wrapRangeWithMark(
       // Cross-boundary edge cases: skip this piece rather than corrupt DOM.
     }
   }
+  // Lead segment carries the optional highlight caret (settings-gated in CSS).
+  if (markKind === "highlight" && marks.length > 0) {
+    marks[0]?.classList.add("annotation-mark--lead");
+  }
   return marks;
 }
 

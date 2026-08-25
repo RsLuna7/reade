@@ -807,6 +807,8 @@ export function ReadingSettingsPanel({
   const setFuzzyAnnotationAnchoring = useReaderStore(
     (state) => state.setFuzzyAnnotationAnchoring,
   );
+  const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
+  const setShowHighlightCaret = useReaderStore((state) => state.setShowHighlightCaret);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const setShowScrollMap = useReaderStore((state) => state.setShowScrollMap);
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
@@ -975,6 +977,29 @@ export function ReadingSettingsPanel({
         </div>
         <p className="setting-hint">
           文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
+        </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">高亮角标</legend>
+        <div className="motion-level-control" role="group" aria-label="高亮角标开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={showHighlightCaret === enabled}
+              className={showHighlightCaret === enabled ? "active" : undefined}
+              onClick={() => setShowHighlightCaret(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          在高亮标注左上角显示红色倒三角，便于扫视定位；不影响下划线标注。
         </p>
       </fieldset>
 
@@ -1511,6 +1536,7 @@ function App() {
   const underlineColor = useReaderStore((state) => state.underlineColor);
   const excerptTone = useReaderStore((state) => state.excerptTone);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
+  const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
   const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
@@ -6001,6 +6027,7 @@ function App() {
               ref={readerRef}
               onScroll={handleReaderScroll}
               data-writing={verticalActive ? "vertical" : undefined}
+              data-highlight-carets={showHighlightCaret ? "on" : undefined}
             >
               <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
                 {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,

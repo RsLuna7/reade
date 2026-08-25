@@ -244,6 +244,7 @@ type PersistedReaderPreferences = Partial<
     | "annotationColorNames"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
+    | "showHighlightCaret"
     | "showScrollMap"
     | "focusSpotlight"
     | "typewriterScroll"
@@ -302,6 +303,10 @@ export function migrateReaderPreferences(
       : {}),
     ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
       ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
+      : {}),
+    // 高亮角标:缺键/坏值回默认关(按需启用)。
+    ...(typeof state.showHighlightCaret === "boolean"
+      ? { showHighlightCaret: state.showHighlightCaret }
       : {}),
     // 文档地图开关(plan-rich-scrollbar RS-D10):缺键/坏值回默认开。
     ...(typeof state.showScrollMap === "boolean"
@@ -365,6 +370,11 @@ interface ReaderState {
    * default: fuzzy may anchor a mark to similar but different text. Persisted.
    */
   fuzzyAnnotationAnchoring: boolean;
+  /**
+   * 高亮角标:在高亮标注首段左上角画红色倒三角,便于扫视定位。
+   * 默认关(按需启用);持久化、双端同构。仅影响高亮,不影响下划线。
+   */
+  showHighlightCaret: boolean;
   /**
    * 文档地图刻度层开关(plan-rich-scrollbar RS-D4/RS-D10):默认开,
    * 持久化;关掉后不做任何刻度测量。
@@ -442,6 +452,7 @@ interface ReaderState {
   setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
   resetAnnotationColorNames: () => void;
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
+  setShowHighlightCaret: (enabled: boolean) => void;
   setShowScrollMap: (enabled: boolean) => void;
   setFocusSpotlight: (enabled: boolean) => void;
   setTypewriterScroll: (enabled: boolean) => void;
@@ -552,6 +563,7 @@ export const useReaderStore = create<ReaderState>()(
         excerptTone: "sand",
         annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
         fuzzyAnnotationAnchoring: false,
+        showHighlightCaret: false,
         showScrollMap: true,
         focusSpotlight: false,
         typewriterScroll: false,
@@ -794,6 +806,10 @@ export const useReaderStore = create<ReaderState>()(
           set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
         },
 
+        setShowHighlightCaret: (enabled) => {
+          set({ showHighlightCaret: enabled === true });
+        },
+
         setShowScrollMap: (enabled) => {
           set({ showScrollMap: typeof enabled === "boolean" ? enabled : true });
         },
@@ -879,6 +895,7 @@ export const useReaderStore = create<ReaderState>()(
             excerptTone: "sand",
             annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
             fuzzyAnnotationAnchoring: false,
+            showHighlightCaret: false,
             showScrollMap: true,
             focusSpotlight: false,
             typewriterScroll: false,
@@ -939,6 +956,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationColorNames: state.annotationColorNames,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
+        showHighlightCaret: state.showHighlightCaret,
         showScrollMap: state.showScrollMap,
         focusSpotlight: state.focusSpotlight,
         typewriterScroll: state.typewriterScroll,
@@ -1003,6 +1021,10 @@ export const useReaderStore = create<ReaderState>()(
             preferences.fuzzyAnnotationAnchoring,
             current.fuzzyAnnotationAnchoring,
           ),
+          showHighlightCaret:
+            typeof preferences.showHighlightCaret === "boolean"
+              ? preferences.showHighlightCaret
+              : current.showHighlightCaret,
           showScrollMap:
             typeof preferences.showScrollMap === "boolean"
               ? preferences.showScrollMap

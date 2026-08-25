@@ -3719,6 +3719,36 @@ a:focus-visible {
 .annotation-mark--highlight.annotation-mark--green { background: var(--excerpt-sage-fill); }
 .annotation-mark--highlight.annotation-mark--blue { background: var(--excerpt-slate-fill); }
 
+/* 高亮角标(阅读设置按需开启):仅首段 lead 画红色倒三角,多段换行不重复。 */
+.reading-scroll[data-highlight-carets] .annotation-mark--highlight.annotation-mark--lead {
+  position: relative;
+}
+.reading-scroll[data-highlight-carets] .annotation-mark--highlight.annotation-mark--lead::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  /* 倒三角高 7px + 1px 缝隙，整颗坐在高亮矩形上方，不压字。 */
+  top: -8px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #c43c3c;
+  pointer-events: none;
+}
+.reading-scroll[data-highlight-carets] .pdf-user-highlight--highlight.pdf-user-highlight--lead::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: -8px;
+  width: 0;
+  height: 0;
+  border-left: 5px solid transparent;
+  border-right: 5px solid transparent;
+  border-top: 7px solid #c43c3c;
+  pointer-events: none;
+}
+
 .annotation-mark--underline {
   background: transparent;
   border-radius: 0;

@@ -65,6 +65,7 @@ describe("reading settings", () => {
       underlineColor: "blue",
       annotationColorNames: { yellow: "暖砂", green: "青灰", blue: "墨蓝", pink: "旧粉" },
       fuzzyAnnotationAnchoring: false,
+      showHighlightCaret: false,
       expandedPaths: [],
       treeLayout: {},
       activeView: "reader",
@@ -423,6 +424,49 @@ describe("reading settings", () => {
     useReaderStore.getState().setFuzzyAnnotationAnchoring(true);
     useReaderStore.getState().resetReaderPreferences();
     expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+  });
+
+  it("persists the highlight-caret switch and defaults it off", async () => {
+    useReaderStore.setState({ showHighlightCaret: false });
+
+    useReaderStore.getState().setShowHighlightCaret(true);
+    expect(useReaderStore.getState().showHighlightCaret).toBe(true);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ showHighlightCaret: true });
+
+    useReaderStore.setState({ showHighlightCaret: false });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { showHighlightCaret: true },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().showHighlightCaret).toBe(true);
+  });
+
+  it("collapses corrupt highlight-caret values to the default-off state", async () => {
+    useReaderStore.setState({ showHighlightCaret: false });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { showHighlightCaret: "yes" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().showHighlightCaret).toBe(false);
+
+    expect(
+      migrateReaderPreferences({ theme: "paper-light" }, READER_PREFERENCES_VERSION),
+    ).not.toHaveProperty("showHighlightCaret");
+
+    useReaderStore.getState().setShowHighlightCaret(true);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().showHighlightCaret).toBe(false);
   });
 
   it("persists the scroll-map switch and defaults it on (plan-rich-scrollbar RS-D10)", async () => {

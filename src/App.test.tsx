@@ -216,6 +216,7 @@ beforeEach(() => {
     motionLevel: "subtle",
     annotationColorNames: { yellow: "暖砂", green: "青灰", blue: "墨蓝", pink: "旧粉" },
     fuzzyAnnotationAnchoring: false,
+    showHighlightCaret: false,
     expandedPaths: [],
     activeView: "reader",
     verticalWriting: false,
@@ -1411,6 +1412,45 @@ describe("fuzzy anchoring preference (§5.6 D)", () => {
     fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
     expect(screen.queryByRole("region", { name: "未锚定标注" })).not.toBeInTheDocument();
     expect(await screen.findByRole("img", { name: "非精确定位" })).toBeInTheDocument();
+  });
+});
+
+describe("highlight caret preference", () => {
+  it("toggles the persisted switch from the reading settings panel", () => {
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+    expect(
+      screen.getByText("在高亮标注左上角显示红色倒三角，便于扫视定位；不影响下划线标注。"),
+    ).toBeInTheDocument();
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "高亮角标开关" })).getByRole("button", {
+        name: "开启",
+      }),
+    );
+    expect(useReaderStore.getState().showHighlightCaret).toBe(true);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ showHighlightCaret: true });
+  });
+
+  it("writes data-highlight-carets on the reading scroll when enabled", async () => {
+    setMarkdownState();
+    useReaderStore.setState({ showHighlightCaret: true });
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".reading-scroll")).toHaveAttribute(
+        "data-highlight-carets",
+        "on",
+      );
+    });
+
+    useReaderStore.getState().setShowHighlightCaret(false);
+    await waitFor(() => {
+      expect(view.container.querySelector(".reading-scroll")).not.toHaveAttribute(
+        "data-highlight-carets",
+      );
+    });
   });
 });
 

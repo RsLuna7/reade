@@ -583,10 +583,15 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
       reported.push({ id: annotation.id, resolution: resolved.resolution });
       const paint = pdfHighlightPaintDecision(resolved.resolution);
       if (!paint.paint) continue;
+      let isLead = markKind === "highlight";
       for (const rect of resolved.rects) {
         const mark = globalThis.document.createElement("span");
         mark.className = `pdf-user-highlight pdf-user-highlight--${markKind} pdf-user-highlight--${annotation.color ?? "yellow"}`;
         if (paint.className) mark.classList.add(paint.className);
+        if (isLead) {
+          mark.classList.add("pdf-user-highlight--lead");
+          isLead = false;
+        }
         if (paint.title) mark.title = paint.title;
         mark.dataset.annotationId = annotation.id;
         mark.dataset.annotationKind = markKind;
