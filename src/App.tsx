@@ -25,6 +25,7 @@ import {
   FolderPlus,
   Globe2,
   HardDrive,
+  Highlighter,
   House,
   Library,
   ListTree,
@@ -223,6 +224,7 @@ import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
 import {
   ANNOTATION_TONES,
   ANNOTATION_TONE_META,
+  legacyColorToTone,
   toneToLegacyColor,
 } from "./lib/annotationModel";
 import { useReadAloud } from "./lib/useReadAloud";
@@ -236,6 +238,7 @@ import {
   AnnotationImportConfirm,
   AnnotationList,
   AnnotationLibraryPanel,
+  AnnotationToolsPanel,
   SelectionToolbar,
   type AnnotationLibraryFilters,
   type AnnotationLibraryGroup,
@@ -1602,6 +1605,9 @@ function App() {
   const theme = useReaderStore((state) => state.theme);
   const readingSettings = useReaderStore((state) => state.readingSettings);
   const motionLevel = useReaderStore((state) => state.motionLevel);
+  const annotationTool = useReaderStore((state) => state.annotationTool);
+  const highlightColor = useReaderStore((state) => state.highlightColor);
+  const underlineColor = useReaderStore((state) => state.underlineColor);
   const excerptTone = useReaderStore((state) => state.excerptTone);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
@@ -1613,6 +1619,9 @@ function App() {
   // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
   const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
   const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
+  const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
+  const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
+  const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
   const setExcerptTone = useReaderStore((state) => state.setExcerptTone);
   const loading = useReaderStore((state) => state.loading);
   const error = useReaderStore((state) => state.error);
@@ -1639,6 +1648,7 @@ function App() {
 
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [stylePickerOpen, setStylePickerOpen] = useState(false);
+  const [annotationPanelOpen, setAnnotationPanelOpen] = useState(false);
   // 最近书库 MRU(plan-library-mru):列表、失效探测结果与侧栏菜单开关。
   // 挂载时做一次旧单值键播种迁移;Web 端无文件系统语义,恒空。
   const [libraryMru, setLibraryMru] = useState<LibraryMruEntry[]>(() =>
@@ -1806,6 +1816,8 @@ function App() {
     reload: reloadAnnotationBundle,
     saveReflection,
   } = useDocumentAnnotationBundle(currentPath);
+  const activeMarkTone =
+    annotationTool === "underline" ? legacyColorToTone(underlineColor) : excerptTone;
   const initialWebRoute = useRef(
     IS_WEB_RUNTIME ? parseWebRoute(window.location) : null,
   );
@@ -4268,6 +4280,14 @@ function App() {
         setPendingSelection(null);
         return;
       }
+      if (annotationTool === "highlight" || annotationTool === "underline") {
+        const color = annotationTool === "underline" ? underlineColor : highlightColor;
+        void handleSaveMark(pending, annotationTool, color, null, {
+          undoable: true,
+          tone: legacyColorToTone(color),
+        });
+        return;
+      }
       const padding = 12;
       setToolbarPos({
         x: Math.min(window.innerWidth - 360, Math.max(padding, pending.rect.left)),
@@ -4308,7 +4328,7 @@ function App() {
       document.removeEventListener("pointercancel", onPointerEnd);
       document.removeEventListener("selectionchange", onSelectionChange);
     };
-  }, [currentContent]);
+  }, [annotationTool, currentContent, handleSaveMark, highlightColor, underlineColor]);
 
   useEffect(() => {
     const reader = readerRef.current;
@@ -5140,8 +5160,12 @@ function App() {
             stopReadAloud();
             return;
           }
+          if (annotationTool !== "view") {
+            setAnnotationTool("view");
+          }
           setSettingsOpen(false);
           setStylePickerOpen(false);
+          setAnnotationPanelOpen(false);
           setCollectionsPopoverOpen(false);
           setLibrarySwitcherOpen(false);
           setCommandPaletteOpen(false);
@@ -5205,6 +5229,8 @@ function App() {
     handleUndoAnnotation,
     closeRelatedPassages,
     readAloudBarOpen,
+    annotationTool,
+    setAnnotationTool,
     stopReadAloud,
   ]);
 
@@ -5938,6 +5964,46 @@ function App() {
                 <Columns2 size={16} aria-hidden="true" />
               </button>
             )}
+            {currentContent && !overlayViewOpen && (
+              <>
+                <button
+                  className={`icon-button${annotationTool !== "view" ? " is-armed" : ""}`}
+                  type="button"
+                  aria-label="标注工具"
+                  title={
+                    annotationTool === "highlight"
+                      ? "标注工具（高亮模式）"
+                      : annotationTool === "underline"
+                        ? "标注工具（下划线模式）"
+                        : "标注工具"
+                  }
+                  aria-expanded={annotationPanelOpen}
+                  aria-pressed={annotationTool !== "view"}
+                  onClick={() => {
+                    setAnnotationPanelOpen((open) => !open);
+                    setSettingsOpen(false);
+                    setCollectionsPopoverOpen(false);
+                  }}
+                >
+                  <Highlighter size={16} aria-hidden="true" />
+                </button>
+                <AnnotationToolsPanel
+                  open={annotationPanelOpen}
+                  tool={annotationTool}
+                  tone={activeMarkTone}
+                  canUndo={canUndo}
+                  canClear={annotations.length > 0}
+                  onToolChange={setAnnotationTool}
+                  onToneChange={(tone) => {
+                    setExcerptTone(tone);
+                    if (annotationTool === "underline") setUnderlineColor(toneToLegacyColor(tone));
+                    else setHighlightColor(toneToLegacyColor(tone));
+                  }}
+                  onUndo={() => void handleUndoAnnotation()}
+                  onClear={() => void handleClearAnnotations()}
+                />
+              </>
+            )}
             {currentContent && currentPath && !overlayViewOpen && (
               <>
                 <button
@@ -5949,6 +6015,7 @@ function App() {
                   onClick={() => {
                     setCollectionsPopoverOpen((open) => !open);
                     setSettingsOpen(false);
+                    setAnnotationPanelOpen(false);
                   }}
                 >
                   <FolderPlus size={16} aria-hidden="true" />
@@ -5984,6 +6051,7 @@ function App() {
               aria-expanded={settingsOpen}
               onClick={() => {
                 setSettingsOpen((open) => !open);
+                setAnnotationPanelOpen(false);
               }}
             >
               <Settings2 size={16} aria-hidden="true" />
@@ -6442,7 +6510,7 @@ function App() {
         )}
 
         <SelectionToolbar
-          open={Boolean(pendingSelection)}
+          open={Boolean(pendingSelection) && annotationTool === "view"}
           x={toolbarPos.x}
           y={toolbarPos.y}
           tone={excerptTone}

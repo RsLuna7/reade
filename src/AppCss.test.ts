@@ -274,6 +274,7 @@ describe("annotation color tokens", () => {
     expect(css).toMatch(/\.annotation-color-swatch--pink\s*\{\s*background:\s*var\(--annot-pink\)/);
     expect(css).toMatch(/\.scroll-map-tick--blue\s*\{\s*background:\s*var\(--annot-blue\)/);
     expect(css).toMatch(/\.annotation-tone-swatch--sand\s*\{\s*background:\s*var\(--excerpt-sand\)/);
+    expect(css).toContain(".annotation-tools-popover");
     // 旧的单套荧光色值不得回流(暗色主题下文字对比度 2.87-3.80:1,不达标)。
     expect(css).not.toMatch(/#ffe650|#78dc8c|#78b4ff|#ff8cbe/i);
     expect(css).not.toMatch(/#efcf53|#87e2a8|#a1cfff|#ffb0ca/i);

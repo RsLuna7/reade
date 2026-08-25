@@ -1,8 +1,8 @@
 # Handoff：Reade 标注系统重设计
 
-- 日期：2026-08-25（傍晚更新）
-- 分支：`main`（未提交）
-- 状态：**阶段 0–6 代码已接线；旧顶栏「标注工具」面板与连续落笔模式已移除；改色/筛选/Hub/ScrollMap/设置统一三色；Web 视觉抽检 + Desktop Tauri Markdown 明暗截图已落盘；D-009 已修。真实 PDF / 桌面划词静默标记 / EPUB 窄窗仍缺；PDF/EPUB 新捕获仍走旧路径**
+- 日期：2026-08-25（晚间收口）
+- 分支：`main`
+- 状态：**阶段 0–6 + D-011（可选连续落笔）已收口；用户确认真机验收可结束。下一轮：PDF/EPUB `createExcerpt` 新捕获。当前 PDF/EPUB 新捕获仍走 `upsertAnnotation`**
 - 规格真源：`docs/plan-annotation-system-redesign.md`
 - 实施账本：`docs/annotation-redesign-implementation-notes.md`
 - 视觉证据：`output/playwright/annotation-redesign-2026-08-25/`（含 `VISUAL-REPORT.md`）
@@ -15,7 +15,7 @@
    - vertical writing 下 `margin-inline: 0`；
    - 对应 “centers a measured article” 测试。
 3. 不提交、不发布，除非用户另行授权。
-4. 阶段 0–6 代码与 D-009 Web 备份修复已接线。不要开始 PDF/EPUB `createExcerpt` 新捕获。
+4. 本轮已收口。下一轮开工前先读账本暂停点；**未再授权前不要开始 PDF/EPUB `createExcerpt`**。
 5. `.cursor/`、`skills/`、`skills-lock.json` 是用户已有未跟踪内容，不纳入本任务。
 
 ## 2. 已确认的产品方向
@@ -66,61 +66,34 @@
 
 早期 handoff 曾记录 `user_store.rs` command 外壳缺 helper、`cargo check` E0425。**现已全部补齐并接线**。若再出现编译错误，按当前源码诊断，不要按本节旧清单照搬。
 
-## 5. 推荐接手顺序（残余验收）
+## 5. 推荐接手顺序（下一轮：PDF/EPUB 新捕获）
 
-1. Desktop：用户划词一次或加固选区自动化 → 截「标记后仍停在目录」
-2. Desktop：在用户库点开真实 PDF → 验收「旧版面位置」/ GeometricFallback 并截图（勿依赖 demo-library）
-3. EPUB 窄窗；可选连续手工标记约 20 次
-4. 仍不要开始 PDF/EPUB `createExcerpt`，除非用户明确授权
+1. 确认本轮已 push、工作区无未提交标注改动。
+2. PDF 原版式 / 阅读视图：有文本层时划选走 `createExcerpt`；静默标记、三色、不抢目录 tab。
+3. EPUB：chapter/block 选区同样走 `createExcerpt`。
+4. Exact / Approximate / GeometricFallback / Detached / 无文本层不可摘录 —— 文案与视觉诚实。
+5. Web 不新增 PDF/EPUB；共享语义 DTO，不假装格式同构。
+6. 定向测试：`PdfReader` / `EpubReader` / capture / relocate + 相关 App 接线。
+
+未获用户明确授权前不要开始上述切片。
 
 ## 6. 当前验证状态
 
 | 验证 | 结果 |
 |---|---|
-| `pnpm exec vitest run src/lib/webAnnotations.test.ts src/lib/webAnnotationRepository.test.ts` | 28 passed（含 v5→v6 备份回归） |
-| Web 视觉抽检（色板 + 关键场景） | 已落盘 |
-| Desktop Tauri Markdown 明暗 · 目录/标注面板 | 已落盘（`tauri-01`…`03`） |
-| Desktop 划词静默标记保 TOC | 未做（自动化难） |
-| Desktop 真实 PDF GeometricFallback | 未做（`tauri-05` 失败） |
-| EPUB 窄窗 / 连续 20 次标记 | 未做 |
+| D-011 相关 `App` / `AnnotationUi` / `AppCss` 定向测试 | 146 passed |
+| `pnpm exec tsc --noEmit` | 通过（收口时） |
+| 真机验收 | 用户确认可结束，不再阻塞下一轮 |
+| PDF/EPUB `createExcerpt` | **未开始** |
 | HomeView / StatsView 跨午夜日期测试 | 基线失败，不要改 |
-
-下一接手：优先补桌面划词证据与真实 PDF 截图。方案代码侧已完成。不要开始 PDF/EPUB `createExcerpt`。
 
 ## 7. 工作区文件边界
 
-任务相关已修改/新增（不完全列表）：
+任务相关已修改（不完全列表）：见实施账本与 git history（`ebb42e9` 起）。不纳入：`.cursor/`、`skills/`、`skills-lock.json`、临时 fixture。
 
-```text
-docs/plan-annotation-system-redesign.md
-docs/annotation-redesign-implementation-notes.md
-docs/HANDOFF-annotation-redesign-2026-08-25.md
-docs/USER_GUIDE.md
-README.md
-output/playwright/annotation-redesign-2026-08-25/*   # 含 VISUAL-REPORT.md、Web + tauri-*.png
-src/lib/annotation*.ts
-src/lib/webAnnotation*.ts
-src/lib/backend.ts
-src/lib/tauriBackend.ts
-src-tauri/src/user_store.rs
-src-tauri/src/lib.rs
-src/App.css
-src/AppCss.test.ts
-src/App.tsx
-src/components/AnnotationUi.tsx
-src/components/DocumentAnnotationsView.tsx
-src/lib/annotationCapture.ts
-src/lib/useDocumentAnnotations.ts
-src/lib/useDocumentAnnotationBundle.ts
-src/store/useReaderStore.ts
-```
+## 8. 完成定义（本轮）
 
-PDF/EPUB **新捕获**路径未改成 `createExcerpt`。不纳入：`.cursor/`、`skills/`、无关改动。
-
-## 8. 完成定义
-
-不要把「方案代码接线」或「Web/MD 抽检」当成全部完成。最终仍需：
-
-- 真实 Tauri 关键证据（划词静默标记、PDF 诚实锚点、可选 EPUB 窄窗）；
-- 全量测试/构建与未验证项如实报告；
-- 用户授权前不做 PDF/EPUB `createExcerpt`。
+- [x] Markdown MVS + v6 双端 + enrollment 回顾 + 三色 + 文档
+- [x] D-011 可选连续落笔
+- [x] 真机验收按用户确认收口
+- [ ] 下一轮：PDF/EPUB `createExcerpt`（另开工）

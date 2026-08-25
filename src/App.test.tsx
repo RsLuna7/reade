@@ -219,6 +219,10 @@ beforeEach(() => {
     expandedPaths: [],
     activeView: "reader",
     verticalWriting: false,
+    annotationTool: "view",
+    highlightColor: "yellow",
+    underlineColor: "blue",
+    excerptTone: "sand",
     loading: false,
     error: null,
   });
@@ -657,6 +661,40 @@ describe("selection capture upgrade (B2/B3)", () => {
     expect(screen.getByRole("toolbar", { name: "标注工具条" })).toBeInTheDocument();
     expect(screen.queryByText("已标记")).not.toBeInTheDocument();
     expect(upsertAnnotation).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("saves immediately after arming highlight from the annotation tools panel", async () => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "标注工具" }));
+    const panel = screen.getByRole("dialog", { name: "标注工具" });
+    fireEvent.click(within(panel).getByRole("button", { name: "高亮" }));
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.pointerDown(reader);
+    fireEvent.pointerUp(document);
+    await waitFor(() => {
+      expect(createExcerpt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceText: "Body",
+          appearance: expect.objectContaining({ style: "highlight", tone: "sand" }),
+        }),
+      );
+    });
+    expect(screen.queryByRole("toolbar", { name: "标注工具条" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
   });
 });

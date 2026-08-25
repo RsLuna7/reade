@@ -3468,6 +3468,7 @@ a:focus-visible {
 .annotation-toolbar-colors .annotation-tone-swatch,
 .annotation-list-colors .annotation-tone-swatch,
 .annotation-edit-bubble .annotation-tone-swatch,
+.annotation-tools-popover .annotation-tone-swatch,
 .color-name-row .annotation-tone-swatch {
   width: 18px;
   height: 18px;
@@ -4218,6 +4219,79 @@ a:focus-visible {
 }
 
 /* 加入合集 popover(CO-D2):挂 topbar-actions,复用 settings-popover 定位。 */
+.annotation-tools-popover {
+  position: absolute;
+  top: 44px;
+  right: 0;
+  z-index: 10;
+  display: grid;
+  gap: 12px;
+  width: min(300px, calc(100vw - 32px));
+  padding: 16px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(calc(-1 * var(--motion-distance))) scale(0.99);
+  visibility: hidden;
+  transition:
+    opacity var(--motion-standard) var(--motion-ease),
+    transform var(--motion-standard) var(--motion-ease),
+    visibility 0s linear var(--motion-standard);
+}
+
+.annotation-tools-popover[data-open="true"] {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+  visibility: visible;
+  transition-delay: 0s;
+}
+
+.annotation-tools-heading {
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.annotation-tools-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.annotation-mode-tools,
+.annotation-mode-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.annotation-tools-popover button:not(.annotation-tone-swatch) {
+  padding: 5px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+}
+
+.annotation-tools-popover button:not(.annotation-tone-swatch).active {
+  border-color: var(--line-strong);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+}
+
+.annotation-tools-popover button:not(.annotation-tone-swatch):disabled {
+  opacity: 0.45;
+}
+
+.annotation-tools-popover .annotation-toolbar-colors {
+  gap: 8px;
+}
+
 .collections-popover {
   position: absolute;
   top: 44px;

@@ -274,6 +274,94 @@ export function AnnotationEditBubble({
   );
 }
 
+export type AnnotationTool = "view" | "highlight" | "underline";
+
+interface AnnotationToolsPanelProps {
+  open: boolean;
+  tool: AnnotationTool;
+  tone: AnnotationTone;
+  canUndo: boolean;
+  canClear: boolean;
+  onToolChange: (tool: AnnotationTool) => void;
+  onToneChange: (tone: AnnotationTone) => void;
+  onUndo: () => void;
+  onClear: () => void;
+}
+
+export function AnnotationToolsPanel({
+  open,
+  tool,
+  tone,
+  canUndo,
+  canClear,
+  onToolChange,
+  onToneChange,
+  onUndo,
+  onClear,
+}: AnnotationToolsPanelProps) {
+  const toneLabels = useToneLabels();
+  const showTones = tool === "highlight" || tool === "underline";
+  return (
+    <div
+      className="annotation-tools-popover reade-motion-panel"
+      role="dialog"
+      aria-label="标注工具"
+      aria-hidden={!open}
+      data-open={open}
+      inert={!open}
+    >
+      <div className="annotation-tools-heading">标注工具</div>
+      <p className="annotation-tools-hint">
+        选择高亮或下划线后，在正文中划选即可落笔；浏览模式下划选会出现浮动工具条。
+      </p>
+      <div className="annotation-mode-tools" role="toolbar" aria-label="标注模式">
+        {(
+          [
+            ["view", "浏览"],
+            ["highlight", "高亮"],
+            ["underline", "下划线"],
+          ] as const
+        ).map(([value, label]) => (
+          <button
+            key={value}
+            type="button"
+            className={tool === value ? "active" : ""}
+            aria-pressed={tool === value}
+            onClick={() => onToolChange(value)}
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {showTones ? (
+        <div className="annotation-toolbar-colors" role="group" aria-label="标注颜色">
+          {ANNOTATION_TONES.map((item) => (
+            <button
+              key={item}
+              type="button"
+              className={`annotation-tone-swatch annotation-tone-swatch--${item}${
+                item === tone ? " active" : ""
+              }`}
+              aria-label={`选择${toneLabels[item]}`}
+              title={toneLabels[item]}
+              aria-pressed={item === tone}
+              onClick={() => onToneChange(item)}
+            />
+          ))}
+        </div>
+      ) : null}
+      <div className="annotation-mode-actions">
+        <button type="button" disabled={!canUndo} onClick={onUndo}>
+          撤销
+        </button>
+        <button type="button" disabled={!canClear} onClick={onClear}>
+          清空本文档
+        </button>
+      </div>
+    </div>
+  );
+}
+
 export type AnnotationListSort = "time" | "position";
 
 interface AnnotationListProps {

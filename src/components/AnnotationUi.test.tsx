@@ -8,6 +8,7 @@ import {
   AnnotationImportConfirm,
   AnnotationLibraryPanel,
   AnnotationList,
+  AnnotationToolsPanel,
   LostDocumentsSection,
   SelectionToolbar,
 } from "./AnnotationUi";
@@ -113,6 +114,42 @@ describe("SelectionToolbar", () => {
     const related = screen.getByRole("menuitem", { name: "相关" });
     expect(related).toBeDisabled();
     expect(related).toHaveAttribute("title", "至少选中 8 个字符");
+  });
+});
+
+describe("AnnotationToolsPanel", () => {
+  const baseProps = {
+    open: true,
+    tool: "highlight" as const,
+    tone: "sand" as const,
+    canUndo: false,
+    canClear: false,
+    onToolChange: vi.fn(),
+    onToneChange: vi.fn(),
+    onUndo: vi.fn(),
+    onClear: vi.fn(),
+  };
+
+  it("lets the reader arm highlight or underline for swipe-to-mark", () => {
+    const onToolChange = vi.fn();
+    render(<AnnotationToolsPanel {...baseProps} onToolChange={onToolChange} />);
+    expect(screen.getByRole("dialog", { name: "标注工具" })).toBeInTheDocument();
+    expect(screen.getByText(/划选即可落笔/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "下划线" }));
+    expect(onToolChange).toHaveBeenCalledWith("underline");
+  });
+
+  it("exposes the three tones once a pen mode is armed", () => {
+    const onToneChange = vi.fn();
+    render(<AnnotationToolsPanel {...baseProps} onToneChange={onToneChange} />);
+    fireEvent.click(screen.getByRole("button", { name: "选择青灰" }));
+    expect(onToneChange).toHaveBeenCalledWith("sage");
+    expect(screen.queryByRole("button", { name: /旧粉|粉色|选择粉/ })).not.toBeInTheDocument();
+  });
+
+  it("hides the color row while browsing", () => {
+    render(<AnnotationToolsPanel {...baseProps} tool="view" />);
+    expect(screen.queryByRole("group", { name: "标注颜色" })).not.toBeInTheDocument();
   });
 });
 
