@@ -91,11 +91,9 @@ import {
   readSnapshotDiff,
   rebindDocumentAnnotations,
   recordReadingSession,
-  recordReviewOutcome,
   saveAnnotationExportFile,
   searchAnnotations,
   setReviewEnrollment,
-  upsertReflection,
   type Annotation,
   type AnnotationColor,
   type CollectionSummary,
@@ -209,7 +207,7 @@ import {
   type ReadeUserDataArchiveV2,
 } from "./lib/annotationTransfer";
 import { groupAnnotationsByDocument } from "./lib/annotationHub";
-import { filterAnnotations, normalizeAnnotationQuery } from "./lib/annotationSearch";
+import { filterAnnotations, buildLibraryAnchorStatusMap, normalizeAnnotationQuery } from "./lib/annotationSearch";
 import { REVIEW_DUE_FUTURE_LIMIT_MS } from "./lib/reviewScheduler";
 import {
   buildBookmarkForContext,
@@ -3789,11 +3787,25 @@ function App() {
     colors: [],
     hasReflection: false,
     enrolled: false,
+    anchorStatuses: [],
   });
   const [librarySearch, setLibrarySearch] = useState<
     { query: string; items: Annotation[] } | null
   >(null);
   const [enrolledIds, setEnrolledIds] = useState<ReadonlySet<string> | null>(null);
+  const [verifiedExactIds, setVerifiedExactIds] = useState<string[]>([]);
+  // 必须稳定：内联回调会让 AnnotatedMarkdown 的 paint effect 每帧重跑，
+  // 选区工具条与 mark 回放在测试里会丢。
+  const handleMarkdownResolutionsChange = useCallback(
+    (resolutions: Array<{ id: string; resolution: { status: string } }>) => {
+      setVerifiedExactIds(
+        resolutions
+          .filter((item) => item.resolution.status === "exact")
+          .map((item) => item.id),
+      );
+    },
+    [],
+  );
   const librarySearchRequest = useRef(0);
 
   useEffect(() => {
@@ -3876,7 +3888,28 @@ function App() {
     libraryFilters.kinds.length > 0 ||
     libraryFilters.colors.length > 0 ||
     Boolean(libraryFilters.hasReflection) ||
-    Boolean(libraryFilters.enrolled);
+    Boolean(libraryFilters.enrolled) ||
+    Boolean(libraryFilters.anchorStatuses?.length);
+
+  const libraryAnchorStatusById = useMemo(() => {
+    const base =
+      libraryAnnotations.status === "ready" ? libraryAnnotations.items : [];
+    return buildLibraryAnchorStatusMap({
+      annotations: base,
+      presentPaths: presentDocumentPaths,
+      detachedIds: brokenAnnotationIds,
+      approximateIds: approximateAnnotationIds,
+      geometricFallbackIds: geometricFallbackIds,
+      exactIds: new Set(verifiedExactIds),
+    });
+  }, [
+    approximateAnnotationIds,
+    brokenAnnotationIds,
+    geometricFallbackIds,
+    libraryAnnotations,
+    presentDocumentPaths,
+    verifiedExactIds,
+  ]);
 
   const libraryHubItems = useMemo(() => {
     const base = librarySearch
@@ -3888,7 +3921,8 @@ function App() {
       !libraryFilters.kinds.length &&
       !libraryFilters.colors.length &&
       !libraryFilters.hasReflection &&
-      !libraryFilters.enrolled
+      !libraryFilters.enrolled &&
+      !libraryFilters.anchorStatuses?.length
     ) {
       return base;
     }
@@ -3898,10 +3932,14 @@ function App() {
       hasReflection: libraryFilters.hasReflection,
       enrolled: libraryFilters.enrolled,
       enrolledIds: enrolledIds ?? undefined,
+      anchorStatuses: libraryFilters.anchorStatuses,
+      anchorStatusById: libraryAnchorStatusById,
     });
   }, [
     enrolledIds,
     libraryAnnotations,
+    libraryAnchorStatusById,
+    libraryFilters.anchorStatuses,
     libraryFilters.colors,
     libraryFilters.enrolled,
     libraryFilters.hasReflection,
@@ -4181,33 +4219,29 @@ function App() {
     const { plan, archive } = importReview;
     setImportBusy(true);
     try {
-      const written = await importAnnotations(plan.toUpsert, plan.fingerprintRows);
-      if (archive) {
-        for (const reflection of archive.reflections) {
-          if (reflection.deletedAt != null || !reflection.body.trim()) continue;
-          try {
-            await upsertReflection(reflection.entryId, reflection.entryKind, reflection.body);
-          } catch {
-            // Extra sections are best-effort after the v5 annotation import.
-          }
-        }
-        for (const enrollment of archive.reviewEnrollments) {
-          if (enrollment.deletedAt != null) continue;
-          try {
-            await setReviewEnrollment(enrollment.excerptId, !enrollment.suspended);
-            if (!enrollment.suspended) {
-              await recordReviewOutcome(enrollment.excerptId, {
-                box: enrollment.box,
-                dueAt: enrollment.dueAt,
-                lastReviewedAt: enrollment.lastReviewedAt,
-                totalReviews: enrollment.totalReviews,
-                suspended: enrollment.suspended,
-              });
+      const written = await importAnnotations(
+        plan.toUpsert,
+        plan.fingerprintRows,
+        archive
+          ? {
+              reflections: archive.reflections,
+              reviewEnrollments: archive.reviewEnrollments,
             }
-          } catch {
-            // Due-window or ledger mismatch must not undo imported annotations.
-          }
+          : undefined,
+      );
+      if (archive?.preferences) {
+        const next: Record<string, unknown> = {};
+        const tone = archive.preferences.excerptTone;
+        if (tone === "sand" || tone === "sage" || tone === "slate") {
+          next.excerptTone = tone;
         }
+        if (archive.preferences.annotationColorNames) {
+          next.annotationColorNames = {
+            ...useReaderStore.getState().annotationColorNames,
+            ...archive.preferences.annotationColorNames,
+          };
+        }
+        if (Object.keys(next).length) useReaderStore.setState(next);
       }
       setImportReview(null);
       // 当前文档与全库列表都可能包含刚导入的记录。
@@ -4228,7 +4262,7 @@ function App() {
     } finally {
       setImportBusy(false);
     }
-  }, [importReview, recordReviewOutcome, reloadAnnotations, setReviewEnrollment, showNotice, upsertReflection]);
+  }, [importReview, reloadAnnotations, showNotice]);
 
   useEffect(() => {
     setPendingSelection(null);
@@ -4244,6 +4278,7 @@ function App() {
     setMarkdownApproximateIds([]);
     setReaderApproximateIds([]);
     setReaderGeometricFallbackIds([]);
+    setVerifiedExactIds([]);
     // PdfReader 换文档会自回原版式;这里同步归位,避免聚焦模式在
     // 新 PDF 上短暂沿用上一篇的"阅读模式可用"判定。
     setPdfViewMode("original");
@@ -6154,6 +6189,7 @@ function App() {
                     onLinkPreviewCancel={hoverPreviewCancel}
                     onBrokenIdsChange={setMarkdownBrokenIds}
                     onApproximateIdsChange={setMarkdownApproximateIds}
+                    onResolutionsChange={handleMarkdownResolutionsChange}
                   />
                 )}
                 {currentContent.kind === "pdf" && <Suspense fallback={<div className="pdf-state"><span className="spinner" />正在加载 PDF 阅读器…</div>}><PdfReader

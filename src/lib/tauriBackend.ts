@@ -233,8 +233,21 @@ export function listDocumentFingerprints(): Promise<DocumentFingerprintEntry[]> 
 export function importAnnotations(
   annotations: Annotation[],
   fingerprints: DocumentFingerprintEntry[],
+  extras?: {
+    reflections?: import("./annotationModel").Reflection[];
+    reviewEnrollments?: import("./annotationModel").ReviewEnrollment[];
+  },
 ): Promise<number> {
-  return invoke("import_annotations", { annotations, fingerprints });
+  return invoke("import_annotations", {
+    annotations,
+    fingerprints,
+    extras: extras
+      ? {
+          reflections: extras.reflections ?? [],
+          reviewEnrollments: extras.reviewEnrollments ?? [],
+        }
+      : null,
+  });
 }
 // The Rust side opens the save dialog itself and only ever writes to the
 // path picked there; null means the user cancelled.

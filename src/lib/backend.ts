@@ -861,10 +861,16 @@ export async function listDocumentFingerprints(): Promise<DocumentFingerprintEnt
 /**
  * Applies a confirmed import plan in one transaction (no partial writes).
  * Returns the number of annotation records written.
+ * Optional ArchiveV2 extras (reflections / enrollments) are applied in the
+ * same transaction on Desktop when v6 is ready; Web mirrors in one IDB tx.
  */
 export async function importAnnotations(
   records: Annotation[],
   fingerprints: DocumentFingerprintEntry[],
+  extras?: {
+    reflections?: import("./annotationModel").Reflection[];
+    reviewEnrollments?: import("./annotationModel").ReviewEnrollment[];
+  },
 ): Promise<number> {
   if (APP_RUNTIME === "web") {
     const [{ importWebAnnotations }, manifest] = await Promise.all([
@@ -872,9 +878,9 @@ export async function importAnnotations(
       getWebLibrary().loadManifest(),
     ]);
     const present = new Set(manifest.documents.map((document) => document.relativePath));
-    return importWebAnnotations(records, fingerprints, present);
+    return importWebAnnotations(records, fingerprints, present, Date.now(), extras);
   }
-  return (await getTauriBackend()).importAnnotations(records, fingerprints);
+  return (await getTauriBackend()).importAnnotations(records, fingerprints, extras);
 }
 
 /**

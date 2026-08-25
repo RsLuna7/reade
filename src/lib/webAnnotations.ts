@@ -15,6 +15,8 @@ import {
   projectAnnotationIntoV6,
   rebindV6Paths,
   removeV6EntriesForPath,
+  REFLECTIONS_STORE,
+  REVIEW_ENROLLMENTS_STORE,
   V6_WRITE_STORES,
 } from "./webAnnotationV6";
 
@@ -349,6 +351,10 @@ export async function importWebAnnotations(
   fingerprints: ReadonlyArray<{ relativePath: string; contentHash: string }>,
   presentPaths: ReadonlySet<string>,
   now = Date.now(),
+  extras?: {
+    reflections?: import("./annotationModel").Reflection[];
+    reviewEnrollments?: import("./annotationModel").ReviewEnrollment[];
+  },
 ): Promise<number> {
   if (records.length > MAX_IMPORT_ANNOTATIONS) {
     throw new Error(`Import exceeds the ${MAX_IMPORT_ANNOTATIONS}-annotation limit`);
@@ -394,6 +400,35 @@ export async function importWebAnnotations(
   }
   for (const record of prepared) {
     await projectLegacyIntoV6(tx, record);
+  }
+  for (const reflection of extras?.reflections ?? []) {
+    if (reflection.deletedAt != null || !reflection.body.trim()) continue;
+    tx.objectStore(REFLECTIONS_STORE).put({
+      ...reflection,
+      body: reflection.body.trim(),
+    });
+    const legacy = (await requestToPromise(store.get(reflection.entryId))) as
+      | Annotation
+      | undefined;
+    if (legacy) {
+      store.put({ ...legacy, note: reflection.body.trim(), updatedAt: reflection.updatedAt });
+    }
+  }
+  for (const enrollment of extras?.reviewEnrollments ?? []) {
+    if (enrollment.deletedAt != null) continue;
+    const min = now - 60 * 60 * 1000;
+    const max = now + 180 * 24 * 60 * 60 * 1000;
+    const dueAt = Math.min(max, Math.max(min, enrollment.dueAt));
+    tx.objectStore(REVIEW_ENROLLMENTS_STORE).put({ ...enrollment, dueAt });
+    tx.objectStore(REVIEWS_STORE).put({
+      annotationId: enrollment.excerptId,
+      box: enrollment.box,
+      dueAt,
+      lastReviewedAt: enrollment.lastReviewedAt,
+      totalReviews: enrollment.totalReviews,
+      suspended: enrollment.suspended,
+      updatedAt: enrollment.updatedAt,
+    });
   }
   await transactionDone(tx);
   return prepared.length;

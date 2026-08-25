@@ -2,7 +2,7 @@
 
 - 开始日期：2026-08-25
 - 规格：`docs/plan-annotation-system-redesign.md`
-- 状态：**D-012 已推送；用户真机确认 PDF 划选「标记」不抢目录 tab。阶段 0–6 + D-011 + PDF/EPUB createExcerpt + 侧栏统一回看已收口**
+- 状态：**D-007/D-008 已落地；停双写按规格仍禁止（D-013）。D-012 真机已确认**
 
 ## 冻结基线
 
@@ -39,16 +39,12 @@
 - [x] 阶段 5：间隔回顾改为 enrollment-only；主页去掉今日回顾卡；命令面板 / 全库摘录入口；ArchiveV2 导出与 v1 导入兼容
 - [x] 阶段 6：README / USER_GUIDE / 旧计划文档取代声明（Web + Tauri Markdown 明暗抽检已做；完整 §12 矩阵与 PDF/EPUB 真机仍未做）
 
-## 暂停点（2026-08-25 晚；D-012 已接线并真机确认）
+## 暂停点（2026-08-25；D-007/D-008 已收口，停双写按 D-013 搁置）
 
-- 阅读主路径：默认划选 →「标记 / 更多」；顶栏可开连续落笔（三色）。
-- **D-012**：Markdown/PDF/EPUB 文字选区统一 `createExcerpt`；书签仍 upsert；无文本层不可摘录。
-- **侧栏**：三格式均用 `DocumentAnnotationsView`；失效与「旧版面位置」仍由下方 `AnnotationList` 诚实展示。
-- **真机（用户确认，2026-08-25）**：PDF 划选「标记」后**不抢目录 tab**。
+- **D-007**：全库定位状态 chip（会话态；未检查不升格为失效）已接线。
+- **D-008**：ArchiveV2 extras 同事务导入 + dueAt 钳制；偏好客户端套用。
+- **D-013**：**不停双写、不删旧表**（规格要求 parity 观测期；需另行批准）。
 - HomeView/StatsView 跨午夜测试仍是基线失败，不要改。
-- Web 不新增 PDF/EPUB 阅读能力。
-
-下一可选项（未开工）：全库定位状态筛选（D-007）、ArchiveV2 同事务导入（D-008）、停双写观察期。
 
 ## 偏差记录
 
@@ -88,17 +84,23 @@
 - 保守取舍：ledger ready 时 `upsert_annotation` 事务内 legacy 写入 + `mirror_legacy_annotation_into_v6`；保留已有 Excerpt tone / `legacy_color` / `created_at`，并用当前文档指纹刷新 `source_revision`。未 ready 的 fallback root 仍只写旧表。不把 PDF/EPUB 新捕获改成 `createExcerpt`。
 - 影响：旧捕获路径（PDF/EPUB 选区、书签、重定位）在已迁移库上与 Web 一样进入 v6；新 UI 捕获仍只有 Markdown `createExcerpt`。
 
-### D-007：全库定位状态筛选未做
+### D-007：全库定位状态筛选（会话态，不伪造）
 
-- 发现：`AnchorResolution` 只在打开文档时按当前 revision 计算，全库列表没有每条摘录的 exact/detached 状态。
-- 保守取舍：阶段 5 落地「有感悟 / 已加入间隔回顾」筛选；来源文档仍用左列文档导航。不伪造全库定位状态 chip。
-- 影响：规格「默认筛选含定位状态」延后，避免把未检查条目标成失效。
+- 发现：`AnchorResolution` 只在打开文档时按当前 revision 计算，全库没有持久化定位状态。
+- 保守取舍：全库增加会话态 chip（失效 / 旧版面 / 非精确 / 文档缺失 / 未检查）。`sourceMissing` 来自路径是否在当前库；其余来自打开文档的 live paint；未打开或未绘制页一律 `unchecked`，**永不**升格为 detached。
+- 影响：规格「定位状态筛选」落地且不把未检查条目标成失效。
 
-### D-008：ArchiveV2 extras 在标注导入之后尽力补写
+### D-008：ArchiveV2 extras 同事务导入 + dueAt 钳制
 
-- 发现：现有 `import_annotations` 只写 v5 行；把 reflections / enrollments / collections 放进同一 SQLite 事务需要新的 Rust command。
-- 保守取舍：导出写完整 v2（v5 documents + 能收集到的 v6 extras + collections + 偏好 + checksum）。导入先走现有 dry-run/确认写 v5；确认后再逐条 `upsertReflection` / `setReviewEnrollment`。过期 `dueAt` 可能导致进度恢复失败，不回滚已导入标注。v1 envelope 继续可读。
-- 影响：回滚物比 v1 完整；跨进程单事务和完整 Leitner 进度还原仍待专门 command。
+- 发现：导入只写 v5，再尽力补写 reflection/enrollment，过期 dueAt 会丢掉 Leitner 进度；Desktop 还不镜像 v6。
+- 保守取舍：`import_annotations` 增加可选 `extras`；v6 ledger ready 时在同一 SQLite/IDB 事务内：legacy upsert → mirror v6 → reflections → enrollments（dueAt 钳到 `[now−1h, now+180d]`）→ 一次 ledger refresh。失败整批回滚。偏好在确认成功后客户端套用；合集仍后续。
+- 影响：Desktop/Web ArchiveV2 往返可保留感悟与间隔回顾阶梯；未 ready 的 root 仍只写 legacy。
+
+### D-013：停双写仍不可执行
+
+- 发现：用户要求「全开」延期项，但规格要求「一个稳定发布周期内 parity 零差异」且「停止双写须另行批准；仍不得自动删除旧表」。
+- 保守取舍：**本轮不关闭双写、不删旧表**。D-008 使导入也走 mirror，减少 ledger 分叉；继续依赖写时 `refresh_v6_migration_ledger`。
+- 影响：兼容回退路径保留；真正停双写需后续观测期 + 单独授权。
 
 ### D-009：IndexedDB v5 备份先读后写
 

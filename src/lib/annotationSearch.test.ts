@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { Annotation } from "./backend";
 import {
   annotationMatchesQuery,
+  buildLibraryAnchorStatusMap,
   filterAnnotations,
   normalizeAnnotationQuery,
 } from "./annotationSearch";
@@ -242,11 +243,55 @@ describe("filterAnnotations", () => {
     expect(filterAnnotations(withNote, { enrolled: true }).map((item) => item.id)).toEqual([]);
   });
 
+  it("filters by session anchor status without promoting unchecked to detached", () => {
+    const statusById = new Map([
+      ["ann-cn", "detached" as const],
+      ["ann-en", "unchecked" as const],
+      ["ann-bm", "sourceMissing" as const],
+    ]);
+    expect(
+      filterAnnotations(items, {
+        anchorStatuses: ["detached"],
+        anchorStatusById: statusById,
+      }).map((item) => item.id),
+    ).toEqual(["ann-cn"]);
+    expect(
+      filterAnnotations(items, {
+        anchorStatuses: ["unchecked"],
+        anchorStatusById: statusById,
+      }).map((item) => item.id),
+    ).toEqual(["ann-en"]);
+    // Missing map entries stay unchecked, never detached.
+    expect(
+      filterAnnotations(items, {
+        anchorStatuses: ["detached"],
+        anchorStatusById: new Map(),
+      }),
+    ).toEqual([]);
+  });
+
   it("keeps input order and treats empty chip arrays as no filter", () => {
     expect(filterAnnotations(items, { kinds: [], colors: [] }).map((item) => item.id)).toEqual([
       "ann-cn",
       "ann-en",
       "ann-bm",
     ]);
+  });
+});
+
+describe("buildLibraryAnchorStatusMap", () => {
+  it("never promotes unknown or unread items to detached", () => {
+    const map = buildLibraryAnchorStatusMap({
+      annotations: [
+        makeAnnotation("a", { relativePath: "gone.md" }),
+        makeAnnotation("b", { relativePath: "live.md" }),
+        makeAnnotation("c", { relativePath: "live.md" }),
+      ],
+      presentPaths: new Set(["live.md"]),
+      detachedIds: new Set(["c"]),
+    });
+    expect(map.get("a")).toBe("sourceMissing");
+    expect(map.get("b")).toBe("unchecked");
+    expect(map.get("c")).toBe("detached");
   });
 });

@@ -1101,6 +1101,15 @@ pub struct DocumentFingerprintEntry {
     pub content_hash: String,
 }
 
+#[derive(Debug, Clone, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AnnotationImportExtras {
+    #[serde(default)]
+    pub reflections: Vec<Reflection>,
+    #[serde(default)]
+    pub review_enrollments: Vec<ReviewEnrollment>,
+}
+
 /// Stored content fingerprints of the current root. Rows for vanished paths
 /// are included on purpose: they carry the last known identity of missing
 /// annotated documents into the export envelope.
@@ -1124,10 +1133,15 @@ pub fn list_document_fingerprints(
 /// library-relative keys. Envelope fingerprints are only inserted for paths
 /// absent from the current scan and never overwrite existing rows — they
 /// merely seed the §5.5 move-detection chain.
+///
+/// Optional `extras` (ArchiveV2 reflections / enrollments) are applied in the
+/// same transaction when the root's v6 ledger is ready. Stale `dueAt` values
+/// are clamped into the live review window so Leitner progress survives.
 #[tauri::command]
 pub fn import_annotations(
     annotations: Vec<Annotation>,
     fingerprints: Vec<DocumentFingerprintEntry>,
+    extras: Option<AnnotationImportExtras>,
     library: State<'_, AppState>,
     user: State<'_, UserState>,
 ) -> CommandResult<u64> {
@@ -1138,6 +1152,7 @@ pub fn import_annotations(
         &normalize_root(&root),
         annotations,
         &fingerprints,
+        extras.unwrap_or_default(),
         &present,
         now_millis(),
     )
@@ -2946,11 +2961,18 @@ fn is_valid_transfer_content_hash(value: &str) -> bool {
         .unwrap_or(false)
 }
 
+fn clamp_import_due_at(due_at: u64, now: u64) -> u64 {
+    let min = now.saturating_sub(REVIEW_DUE_PAST_SLACK_MS);
+    let max = now.saturating_add(REVIEW_DUE_FUTURE_LIMIT_MS);
+    due_at.clamp(min, max)
+}
+
 fn import_annotation_rows(
     connection: &mut Connection,
     root: &str,
     annotations: Vec<Annotation>,
     fingerprints: &[DocumentFingerprintEntry],
+    extras: AnnotationImportExtras,
     present: &HashSet<String>,
     now: u64,
 ) -> CommandResult<u64> {
@@ -2982,6 +3004,36 @@ fn import_annotation_rows(
         }
         fingerprint_rows.push((normalized, entry.content_hash.as_str()));
     }
+    let mut reflections = Vec::with_capacity(extras.reflections.len());
+    for reflection in extras.reflections {
+        validate_annotation_id(&reflection.entry_id)?;
+        let body = reflection.body.trim();
+        if reflection.deleted_at.is_none() && body.is_empty() {
+            return Err("Reflection body cannot be empty".to_owned());
+        }
+        if body.chars().count() > MAX_ANNOTATION_NOTE_CHARS {
+            return Err(format!(
+                "Reflection body exceeds the {MAX_ANNOTATION_NOTE_CHARS}-character limit"
+            ));
+        }
+        reflections.push(Reflection {
+            body: body.to_owned(),
+            ..reflection
+        });
+    }
+    let mut enrollments = Vec::with_capacity(extras.review_enrollments.len());
+    for enrollment in extras.review_enrollments {
+        validate_annotation_id(&enrollment.excerpt_id)?;
+        if !(0..=REVIEW_MAX_BOX).contains(&enrollment.box_level) {
+            return Err(format!(
+                "Review box must be between 0 and {REVIEW_MAX_BOX}"
+            ));
+        }
+        enrollments.push(ReviewEnrollment {
+            due_at: clamp_import_due_at(enrollment.due_at, now),
+            ..enrollment
+        });
+    }
 
     let transaction = connection
         .transaction()
@@ -3005,6 +3057,23 @@ fn import_annotation_rows(
                 params![root, relative_path, content_hash, now as i64],
             )
             .map_err(|error| format!("Cannot record an imported fingerprint: {error}"))?;
+    }
+    if v6_ledger_ready(&transaction, root)? {
+        for annotation in &sanitized {
+            mirror_legacy_annotation_into_v6_core(&transaction, root, annotation)?;
+        }
+        for reflection in &reflections {
+            if reflection.deleted_at.is_some() {
+                continue;
+            }
+            upsert_reflection_row(&transaction, root, reflection)?;
+            sync_reflection_to_entry_and_legacy(&transaction, root, reflection)?;
+        }
+        for enrollment in &enrollments {
+            upsert_review_enrollment_row(&transaction, root, enrollment)?;
+            sync_enrollment_to_legacy_review(&transaction, root, enrollment)?;
+        }
+        refresh_v6_migration_ledger(&transaction, root, now)?;
     }
     transaction
         .commit()
@@ -3700,6 +3769,18 @@ fn mirror_legacy_annotation_into_v6(
     root: &str,
     annotation: &Annotation,
 ) -> CommandResult<()> {
+    mirror_legacy_annotation_into_v6_core(connection, root, annotation)?;
+    if v6_ledger_ready(connection, root)? {
+        refresh_v6_migration_ledger(connection, root, annotation.updated_at)?;
+    }
+    Ok(())
+}
+
+fn mirror_legacy_annotation_into_v6_core(
+    connection: &Connection,
+    root: &str,
+    annotation: &Annotation,
+) -> CommandResult<()> {
     if !v6_ledger_ready(connection, root)? {
         return Ok(());
     }
@@ -3783,7 +3864,7 @@ fn mirror_legacy_annotation_into_v6(
             }
         }
     }
-    refresh_v6_migration_ledger(connection, root, annotation.updated_at)
+    Ok(())
 }
 
 fn source_revision_for_path(
@@ -8347,6 +8428,7 @@ mod tests {
                 fingerprint_entry("moved/away.md", VALID_NTXT),
                 fingerprint_entry("already-known.md", VALID_NTXT),
             ],
+            AnnotationImportExtras::default(),
             &present,
             7_000,
         )
@@ -8401,6 +8483,7 @@ mod tests {
                 sample_annotation("bad id!", "a.md"),
             ],
             &[],
+            AnnotationImportExtras::default(),
             &present,
             7_000,
         )
@@ -8422,6 +8505,7 @@ mod tests {
                 ROOT,
                 vec![sample_annotation("imp-ok", "a.md")],
                 &[entry],
+                AnnotationImportExtras::default(),
                 &present,
                 7_000,
             )
@@ -8441,6 +8525,7 @@ mod tests {
             ROOT,
             vec![zero_tombstone],
             &[],
+            AnnotationImportExtras::default(),
             &present,
             7_000,
         )
@@ -8455,7 +8540,7 @@ mod tests {
         let oversized: Vec<Annotation> = (0..=MAX_IMPORT_ANNOTATIONS)
             .map(|index| sample_annotation(&format!("imp-{index}"), "a.md"))
             .collect();
-        let error = import_annotation_rows(&mut connection, ROOT, oversized, &[], &present, 7_000)
+        let error = import_annotation_rows(&mut connection, ROOT, oversized, &[], AnnotationImportExtras::default(), &present, 7_000)
             .expect_err("must reject oversized batch");
         assert!(error.contains("limit"), "unexpected error: {error}");
         assert_eq!(
@@ -8471,6 +8556,7 @@ mod tests {
             ROOT,
             Vec::new(),
             &oversized_fingerprints,
+            AnnotationImportExtras::default(),
             &present,
             7_000,
         )
@@ -8510,6 +8596,7 @@ mod tests {
             ROOT,
             vec![newer],
             &[],
+            AnnotationImportExtras::default(),
             &HashSet::new(),
             9_500,
         )

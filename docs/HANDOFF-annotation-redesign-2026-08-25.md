@@ -1,8 +1,8 @@
 # Handoff：Reade 标注系统重设计
 
-- 日期：2026-08-25（晚间；D-012 真机确认）
+- 日期：2026-08-25（晚间；D-007/D-008 收口）
 - 分支：`main`
-- 状态：**D-012 已推送；用户确认 PDF 划选「标记」不抢目录 tab。Markdown/PDF/EPUB 文字摘录均走 createExcerpt；侧栏统一 DocumentAnnotationsView**
+- 状态：**D-007/D-008 已落地并推送；停双写按 D-013 仍禁止。D-012 真机已确认 PDF 划选不抢目录 tab**
 - 规格真源：`docs/plan-annotation-system-redesign.md`
 - 实施账本：`docs/annotation-redesign-implementation-notes.md`
 - 视觉证据：`output/playwright/annotation-redesign-2026-08-25/`（含 `VISUAL-REPORT.md`）
@@ -15,7 +15,7 @@
    - vertical writing 下 `margin-inline: 0`；
    - 对应 “centers a measured article” 测试。
 3. 不提交、不发布，除非用户另行授权。
-4. D-012 已收口。后续延期项见账本暂停点（D-007 / D-008 / 停双写）；未授权前不要扩大范围。
+4. D-007/D-008 已收口。**停双写 / 删旧表仍须 parity 证据 + 单独授权（D-013）**。
 5. `.cursor/`、`skills/`、`skills-lock.json` 是用户已有未跟踪内容，不纳入本任务。
 
 ## 2. 已确认的产品方向

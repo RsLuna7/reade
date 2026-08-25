@@ -57,13 +57,29 @@ export interface AnnotationFilterOptions {
   /** When true, keep only ids in `enrolledIds` (unsuspended spaced-review). */
   enrolled?: boolean;
   enrolledIds?: ReadonlySet<string>;
+  /**
+   * Session-only anchor honesty filter. Empty/absent means no status filter.
+   * Unknown / not-yet-painted ids are `unchecked` — never promoted to detached.
+   */
+  anchorStatuses?: readonly LibraryAnchorStatus[];
+  anchorStatusById?: ReadonlyMap<string, LibraryAnchorStatus>;
 }
+
+/** Session-derived library filter statuses (never persisted). */
+export type LibraryAnchorStatus =
+  | "exact"
+  | "approximate"
+  | "geometricFallback"
+  | "detached"
+  | "sourceMissing"
+  | "unchecked";
 
 /**
  * Client-side filter used by the hub UI (and as the web search backend's
- * core): query × kinds × colours × optional reflection/enrollment intersect;
- * tombstones never surface, mirroring the desktop `deleted_at IS NULL`
- * scope. Input order is kept — grouping/sorting is `annotationHub.ts`'s job.
+ * core): query × kinds × colours × optional reflection/enrollment/status
+ * intersect; tombstones never surface, mirroring the desktop
+ * `deleted_at IS NULL` scope. Input order is kept — grouping/sorting is
+ * `annotationHub.ts`'s job.
  */
 export function filterAnnotations(
   items: readonly Annotation[],
@@ -72,13 +88,63 @@ export function filterAnnotations(
   const normalized = normalizeAnnotationQuery(options.query ?? "");
   const kinds = options.kinds && options.kinds.length > 0 ? new Set(options.kinds) : null;
   const colors = options.colors && options.colors.length > 0 ? new Set(options.colors) : null;
+  const statusFilter =
+    options.anchorStatuses && options.anchorStatuses.length > 0
+      ? new Set(options.anchorStatuses)
+      : null;
   return items.filter((annotation) => {
     if (annotation.deletedAt != null) return false;
     if (kinds && !kinds.has(annotation.kind)) return false;
     if (colors && (annotation.color == null || !colors.has(annotation.color))) return false;
     if (options.hasReflection && !annotation.note?.trim()) return false;
     if (options.enrolled && !options.enrolledIds?.has(annotation.id)) return false;
+    if (statusFilter) {
+      const status = options.anchorStatusById?.get(annotation.id) ?? "unchecked";
+      if (!statusFilter.has(status)) return false;
+    }
     if (normalized && !annotationMatchesQuery(annotation, normalized)) return false;
     return true;
   });
+}
+
+/**
+ * Build a session map for full-library honesty chips.
+ * - missing path → sourceMissing
+ * - live paint sets → detached / approximate / geometricFallback / exact
+ * - everything else → unchecked (including unread PDF pages)
+ */
+export function buildLibraryAnchorStatusMap(input: {
+  annotations: readonly Annotation[];
+  presentPaths: ReadonlySet<string>;
+  detachedIds?: ReadonlySet<string>;
+  approximateIds?: ReadonlySet<string>;
+  geometricFallbackIds?: ReadonlySet<string>;
+  exactIds?: ReadonlySet<string>;
+}): Map<string, LibraryAnchorStatus> {
+  const map = new Map<string, LibraryAnchorStatus>();
+  for (const annotation of input.annotations) {
+    if (annotation.deletedAt != null) continue;
+    if (!input.presentPaths.has(annotation.relativePath)) {
+      map.set(annotation.id, "sourceMissing");
+      continue;
+    }
+    if (input.detachedIds?.has(annotation.id)) {
+      map.set(annotation.id, "detached");
+      continue;
+    }
+    if (input.geometricFallbackIds?.has(annotation.id)) {
+      map.set(annotation.id, "geometricFallback");
+      continue;
+    }
+    if (input.approximateIds?.has(annotation.id)) {
+      map.set(annotation.id, "approximate");
+      continue;
+    }
+    if (input.exactIds?.has(annotation.id)) {
+      map.set(annotation.id, "exact");
+      continue;
+    }
+    map.set(annotation.id, "unchecked");
+  }
+  return map;
 }

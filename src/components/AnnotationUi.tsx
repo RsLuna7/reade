@@ -23,6 +23,7 @@ import {
 } from "../lib/annotationModel";
 import { previewGroupAnnotations } from "../lib/annotationHub";
 import { isRelocatableAnnotation } from "../lib/annotationRelocate";
+import type { LibraryAnchorStatus } from "../lib/annotationSearch";
 import type { RebindDryRunReport } from "../lib/rebindDryRun";
 import { useReaderStore } from "../store/useReaderStore";
 
@@ -591,12 +592,22 @@ export interface AnnotationLibraryFilters {
   colors: AnnotationColor[];
   hasReflection?: boolean;
   enrolled?: boolean;
+  /** Session-only honesty chips; empty means no status filter. */
+  anchorStatuses?: LibraryAnchorStatus[];
 }
 
 const ANNOTATION_KIND_CHIPS: ReadonlyArray<[AnnotationKind, string]> = [
   ["highlight", "高亮"],
   ["underline", "下划线"],
   ["bookmark", "书签"],
+];
+
+const ANCHOR_STATUS_CHIPS: ReadonlyArray<[LibraryAnchorStatus, string]> = [
+  ["detached", "失效"],
+  ["geometricFallback", "旧版面"],
+  ["approximate", "非精确"],
+  ["sourceMissing", "文档缺失"],
+  ["unchecked", "未检查"],
 ];
 
 function toggleFilterValue<T>(values: readonly T[], value: T): T[] {
@@ -681,6 +692,32 @@ export function AnnotationFilterControls({
         >
           已加入间隔回顾
         </button>
+      </div>
+      <div className="annotation-filter-row" role="group" aria-label="筛选定位状态">
+        {ANCHOR_STATUS_CHIPS.map(([status, label]) => {
+          const selected = filters.anchorStatuses?.includes(status) ?? false;
+          return (
+            <button
+              key={status}
+              type="button"
+              className={`annotation-filter-chip${selected ? " active" : ""}`}
+              aria-pressed={selected}
+              title={
+                status === "unchecked"
+                  ? "尚未在打开文档中核验，或不含文本层的页"
+                  : undefined
+              }
+              onClick={() =>
+                onChange({
+                  ...filters,
+                  anchorStatuses: toggleFilterValue(filters.anchorStatuses ?? [], status),
+                })
+              }
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
     </div>
   );
