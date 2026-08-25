@@ -142,7 +142,6 @@ import {
   SPLIT_MEDIA_QUERY,
   SPLIT_POS_DEFAULT,
 } from "./lib/splitView";
-import { LinksPanel, type LinksPanelState } from "./components/LinksPanel";
 import {
   CollectionMembershipPopover,
   CollectionsSection,
@@ -1369,7 +1368,7 @@ export function TocNavigation({
   );
 }
 
-type SidePanelTab = "toc" | "annotations" | "library" | "links";
+type SidePanelTab = "toc" | "annotations" | "library";
 
 function SidePanel({
   tab,
@@ -1398,10 +1397,6 @@ function SidePanel({
   onCompileAnnotationsDigest,
   onClearAnnotations,
   annotationsPanel,
-  linksState,
-  onSelectLinkDocument,
-  onPreviewLinkTarget,
-  onPreviewLinkCancel,
   libraryStatus,
   libraryGroups,
   libraryError,
@@ -1450,16 +1445,6 @@ function SidePanel({
   onClearAnnotations: () => void;
   /** Chapter/page-band outline for Markdown/PDF/EPUB; honesty fallback stays AnnotationList. */
   annotationsPanel?: React.ReactNode;
-  /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
-  linksState: LinksPanelState;
-  onSelectLinkDocument: (relativePath: string) => void;
-  /** 链接行悬停预览(plan-hover-preview HP-D5),可选。 */
-  onPreviewLinkTarget?: (
-    relativePath: string,
-    anchor: HTMLElement,
-    trigger: "hover" | "focus",
-  ) => void;
-  onPreviewLinkCancel?: () => void;
   libraryStatus: AnnotationLibraryStatus;
   libraryGroups: AnnotationLibraryGroup[];
   libraryError: string | null;
@@ -1505,20 +1490,6 @@ function SidePanel({
         <button
           type="button"
           role="tab"
-          aria-selected={tab === "links"}
-          className={tab === "links" ? "active" : ""}
-          onClick={() => onTabChange("links")}
-        >
-          链接
-          {linksState.status === "ready" && linksState.data.backlinks.length > 0 ? (
-            <span className="side-panel-count">
-              {linksState.data.backlinks.reduce((sum, entry) => sum + entry.count, 0)}
-            </span>
-          ) : null}
-        </button>
-        <button
-          type="button"
-          role="tab"
           aria-selected={tab === "library"}
           className={tab === "library" ? "active" : ""}
           onClick={() => onTabChange("library")}
@@ -1557,13 +1528,6 @@ function SidePanel({
           onClearAll={onClearAnnotations}
         />
         )
-      ) : tab === "links" ? (
-        <LinksPanel
-          state={linksState}
-          onSelectDocument={onSelectLinkDocument}
-          onPreviewTarget={onPreviewLinkTarget}
-          onPreviewCancel={onPreviewLinkCancel}
-        />
       ) : (
         <AnnotationLibraryPanel
           status={libraryStatus}
@@ -2411,14 +2375,7 @@ function App() {
     documents,
     articleRef,
   });
-  const { previewTarget: hoverPreviewTarget, cancelPreview: hoverPreviewCancel } = hoverPreview;
-  /** 侧栏链接行的悬停入口:目标已解析,fragment 数据未存,取文档开头。 */
-  const handlePreviewPanelTarget = useCallback(
-    (relativePath: string, anchor: HTMLElement, trigger: "hover" | "focus") => {
-      hoverPreviewTarget(relativePath, null, anchor, trigger);
-    },
-    [hoverPreviewTarget],
-  );
+  const { cancelPreview: hoverPreviewCancel } = hoverPreview;
 
   // ---- 富滚动条刻度层(plan-rich-scrollbar) ----
   const [scrollMapMarks, setScrollMapMarks] = useState<ScrollMapMark[]>([]);
@@ -3734,49 +3691,6 @@ function App() {
       void loadLibraryAnnotations();
     }
   }, [activeView, libraryAnnotations.status, loadLibraryAnnotations, sidePanelTab]);
-
-  // 「链接」tab(plan-backlinks §3.4):首次切到 tab 时拉取;文档或库快照
-  // 变化时置 idle,下次进 tab 重拉(照抄全库 tab 的 idle 模式)。
-  const [documentLinksState, setDocumentLinksState] = useState<LinksPanelState>({
-    status: "idle",
-  });
-  const documentLinksRequest = useRef(0);
-
-  useEffect(() => {
-    documentLinksRequest.current += 1;
-    setDocumentLinksState({ status: "idle" });
-  }, [currentPath, documents]);
-
-  useEffect(() => {
-    if (sidePanelTab !== "links" || documentLinksState.status !== "idle") return;
-    if (!currentPath) return;
-    const request = ++documentLinksRequest.current;
-    setDocumentLinksState({ status: "loading" });
-    listDocumentLinks(currentPath).then(
-      (data) => {
-        if (documentLinksRequest.current === request) {
-          setDocumentLinksState({ status: "ready", data });
-        }
-      },
-      (cause: unknown) => {
-        if (documentLinksRequest.current === request) {
-          setDocumentLinksState({
-            status: "error",
-            message: cause instanceof Error ? cause.message : "链接数据读取失败",
-          });
-        }
-      },
-    );
-  }, [currentPath, documentLinksState.status, sidePanelTab]);
-
-  const handleSelectLinkDocument = useCallback(
-    (relativePath: string) => {
-      setCompactTocOpen(false);
-      recordNavDeparture();
-      void selectDocument(relativePath);
-    },
-    [recordNavDeparture, selectDocument],
-  );
 
   // 方案四 A1:全库检索与筛选。检索输入 240ms 防抖(沿库搜索的既有模式),
   // 桌面走 search_annotations(FTS5 trigram),Web 由 wrapper 走同构内存过滤;
@@ -6348,10 +6262,6 @@ function App() {
                 onCompileAnnotationsDigest={handleOpenBookDigest}
                 onClearAnnotations={() => void handleClearAnnotations()}
                 annotationsPanel={documentAnnotationsPanel}
-                linksState={documentLinksState}
-                onSelectLinkDocument={handleSelectLinkDocument}
-                onPreviewLinkTarget={handlePreviewPanelTarget}
-                onPreviewLinkCancel={hoverPreviewCancel}
                 libraryStatus={libraryAnnotations.status}
                 libraryGroups={libraryGroups}
                 libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
@@ -6521,10 +6431,6 @@ function App() {
             onCompileAnnotationsDigest={handleOpenBookDigest}
             onClearAnnotations={() => void handleClearAnnotations()}
             annotationsPanel={documentAnnotationsPanel}
-            linksState={documentLinksState}
-            onSelectLinkDocument={handleSelectLinkDocument}
-            onPreviewLinkTarget={handlePreviewPanelTarget}
-            onPreviewLinkCancel={hoverPreviewCancel}
             libraryStatus={libraryAnnotations.status}
             libraryGroups={libraryGroups}
             libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}

@@ -782,62 +782,6 @@ describe("selection capture upgrade (B2/B3)", () => {
   });
 });
 
-describe("links tab (BL-D3)", () => {
-  it("loads the links lazily, shows the backlink badge and jumps to a source", async () => {
-    vi.mocked(listDocumentLinks).mockResolvedValue({
-      backlinks: [
-        { sourcePath: "other.md", sourceTitle: "Other", linkText: "参考指南", count: 2 },
-      ],
-      outgoing: [],
-      brokenCount: 0,
-    });
-    vi.mocked(readDocument).mockImplementation(async (relativePath: string) => ({
-      kind: "markdown" as const,
-      relativePath,
-      markdown: "# Other\n\nSecond body",
-    }));
-    useReaderStore.setState({
-      documents: [markdownDocument("guide.md", "Guide"), markdownDocument("other.md", "Other")],
-      currentPath: "guide.md",
-      currentContent: {
-        kind: "markdown",
-        relativePath: "guide.md",
-        markdown: "## Target section\n\nBody",
-      },
-      motionLevel: "off",
-    });
-
-    render(<App />);
-    // tab 未打开前不发请求(idle 惰性加载)。
-    expect(listDocumentLinks).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getAllByRole("tab", { name: /链接/ })[0]);
-    await waitFor(() => {
-      expect(listDocumentLinks).toHaveBeenCalledWith("guide.md");
-    });
-    const region = await screen.findByRole("region", { name: "反向链接" });
-    expect(within(region).getByText("Other")).toBeInTheDocument();
-    // tab 徽标 = 反链总次数。
-    expect(screen.getAllByRole("tab", { name: /链接\s*2/ }).length).toBeGreaterThan(0);
-
-    fireEvent.click(within(region).getByText("Other"));
-    await waitFor(() => {
-      expect(useReaderStore.getState().currentPath).toBe("other.md");
-    });
-  });
-
-  it("presents the web degradation message as panel text", async () => {
-    vi.mocked(listDocumentLinks).mockRejectedValue(new Error("库过大，链接视图未启用"));
-    setMarkdownState();
-
-    render(<App />);
-    fireEvent.click(screen.getAllByRole("tab", { name: /链接/ })[0]);
-    expect(
-      (await screen.findAllByText("库过大，链接视图未启用")).length,
-    ).toBeGreaterThan(0);
-  });
-});
-
 describe("related passages entry (RP)", () => {
   it("queries with the current document excluded and jumps through the hit", async () => {
     vi.mocked(findRelatedPassages).mockResolvedValue([
