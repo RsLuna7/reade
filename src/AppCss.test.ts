@@ -133,9 +133,12 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(
       /\.annotation-list-title\s*\{[^}]*overflow-wrap:\s*anywhere/s,
     );
+    // 裁切要用换行/overflow 修，不要把主页面右侧栏加宽或改成 0.32fr。
     expect(css).toMatch(
-      /\.content-grid\s*\{[^}]*minmax\(var\(--toc-width\),\s*0\.32fr\)/s,
+      /\.content-grid\s*\{[^}]*grid-template-columns:\s*minmax\(0,\s*1fr\)\s+var\(--toc-width\)/s,
     );
+    expect(css).toMatch(/--toc-width:\s*200px/);
+    expect(css).not.toMatch(/minmax\(var\(--toc-width\),\s*0\.32fr\)/);
   });
 
   it("uses dark Shiki token colors for always-dark code blocks", () => {

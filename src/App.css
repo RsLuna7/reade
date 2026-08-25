@@ -7,10 +7,9 @@
   font-synthesis: none;
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
-  /* ~18.5% : 65% : 16.5% at 1440px (264 / 936 / 240).
-     右侧栏要装全库筛选 + 摘录卡，200px 过窄易横向撑破后被裁切。 */
+  /* ~18.5% : 67.5% : 14% at 1440px (264 / 976 / 200). */
   --sidebar-width: 264px;
-  --toc-width: 240px;
+  --toc-width: 200px;
   --reader-font-size: 17px;
   --reader-line-height: 1.86;
   /* Fallback; runtime may set a px cap or `none` for fluid measure. */
@@ -1443,14 +1442,13 @@ a:focus-visible {
   min-width: 0;
   min-height: 0;
   flex: 1;
-  /* 右侧栏用 minmax 保底，避免被正文列挤没；上限随窗口略增。 */
-  grid-template-columns: minmax(0, 1fr) minmax(var(--toc-width), 0.32fr);
+  grid-template-columns: minmax(0, 1fr) var(--toc-width);
 }
 
 /* 分栏对照(plan-split-view §3.1):主栏轨道 30–70%,--split-pos 由分割条写入;
    --reader-measure 继续管每栏内正文上限,两者正交(SP-D5)。 */
 .content-grid[data-split="true"] {
-  grid-template-columns: clamp(30%, var(--split-pos, 50%), 70%) 6px minmax(0, 1fr) minmax(var(--toc-width), 0.32fr);
+  grid-template-columns: clamp(30%, var(--split-pos, 50%), 70%) 6px minmax(0, 1fr) var(--toc-width);
 }
 
 .split-divider {
@@ -5771,7 +5769,7 @@ button.links-panel-entry:focus-visible {
 @media (max-width: 1180px) {
   :root {
     --sidebar-width: 200px;
-    --toc-width: 180px;
+    --toc-width: 156px;
     --reader-gutter-inline: 28px;
     --reader-gutter-toc: 16px;
   }
