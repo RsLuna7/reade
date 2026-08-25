@@ -2,7 +2,7 @@
 
 - 开始日期：2026-08-25
 - 规格：`docs/plan-annotation-system-redesign.md`
-- 状态：**阶段 0–6 + D-011（可选连续落笔）已收口；用户确认真机验收可结束。下一轮入口：PDF/EPUB `createExcerpt` 新捕获。当前新捕获仍走旧 `upsertAnnotation`**
+- 状态：**下一轮进行中（D-012）：PDF/EPUB 文字选区 `createExcerpt` + 侧栏 DocumentAnnotationsView（页段/章节）。阶段 0–6 + D-011 已收口**
 
 ## 冻结基线
 
@@ -35,20 +35,17 @@
 - [x] 阶段 1：模型、校验、分组、三色色板
 - [x] 阶段 2：SQLite/IndexedDB v6 与双写（含 `search_annotation_entries` / `record_excerpt_review_outcome`）
 - [x] 阶段 3：Markdown 最小垂直切片（静默标记 + 按章节/感悟；PDF/EPUB 仍用旧捕获）
-- [x] 阶段 4：PDF/EPUB 锚点诚实度（新捕获仍走 `upsertAnnotation`；真实 PDF GeometricFallback 截图仍缺）
+- [x] 阶段 4：PDF/EPUB 锚点诚实度 + 文字选区 `createExcerpt`（书签仍 upsert；无文本层不可摘录）
 - [x] 阶段 5：间隔回顾改为 enrollment-only；主页去掉今日回顾卡；命令面板 / 全库摘录入口；ArchiveV2 导出与 v1 导入兼容
 - [x] 阶段 6：README / USER_GUIDE / 旧计划文档取代声明（Web + Tauri Markdown 明暗抽检已做；完整 §12 矩阵与 PDF/EPUB 真机仍未做）
 
-## 暂停点（2026-08-25 晚，本轮收口；下一轮 PDF/EPUB 新捕获）
+## 暂停点（2026-08-25 晚；下一轮 PDF/EPUB 新捕获进行中）
 
-阶段 0–6 产品代码 + D-011 可选连续落笔已接线。用户确认 **真机验收可结束**（残余桌面证据不再阻塞）。
-
-- 队列：Desktop `INNER JOIN annotation_reviews`（`suspended=0`）；Web 缺少 review 行则跳过。旧已持久化 review 仍在池中。
-- 入口：命令面板「打开间隔回顾 / 打开全库摘录」；本文标注展开后可加入/移出间隔回顾。
-- 阅读主路径：默认划选 →「标记 / 更多」；顶栏可开高亮/下划线连续落笔（三色；`Esc`/浏览退出；不持久化）。
-- Web / Desktop Markdown 抽检证据仍在 `output/playwright/annotation-redesign-2026-08-25/`（参考用，非阻塞）。
+- 阅读主路径：默认划选 →「标记 / 更多」；顶栏可开连续落笔（三色）。
+- **D-012**：Markdown/PDF/EPUB 文字选区统一 `createExcerpt`；书签仍 upsert；无文本层不可摘录。
+- **侧栏**：三格式均用 `DocumentAnnotationsView`（Markdown 标题 / PDF Outline 或 20 页段 / EPUB 章节）；失效与「旧版面位置」仍由下方 `AnnotationList` 诚实展示。
 - HomeView/StatsView 跨午夜测试仍是基线失败，不要改。
-- **下一轮（需再次开工时执行）**：PDF / EPUB 划选改为 `createExcerpt`；Exact / Approximate / GeometricFallback / Detached / 无文本层不可摘录；Web 不新增 PDF/EPUB。未授权前不要开始。
+- Web 不新增 PDF/EPUB 阅读能力。
 
 ## 偏差记录
 
@@ -112,10 +109,10 @@
 - 保守取舍：删除顶栏入口与连续落笔路径；改色/筛选/设置只暴露 sand/sage/slate；砂色筛选含 legacy pink；`--annot-*` 别名到 `--excerpt-*`。PDF/EPUB 侧栏仍用 `AnnotationList`（已三色），新捕获仍不改 `createExcerpt`。`annotationTool` / `highlightColor` 等 store 字段保留兼容，UI 不再驱动。
 - 影响：阅读主路径只剩划选 →「标记 / 更多」；旧粉数据在筛选暖砂时仍可见。
 
-### D-011：恢复可选连续落笔
+### D-012：PDF/EPUB 文字选区改走 createExcerpt
 
-- 发现：去掉顶栏标注工具后，每次划选都要再点一次「标记」。用户明确要求保留「开启之后可以划」以减少一次摩擦。
-- 保守取舍：恢复顶栏 `AnnotationToolsPanel` 与高亮/下划线连续落笔；默认仍是浏览 + 静默「标记 / 更多」。色板只暴露 sand/sage/slate，不带回四色荧光。`Esc` 或切回浏览退出落笔；`annotationTool` 仍不持久化。
-- 影响：连续落笔是可选加速，不改变静默标记、不抢目录 tab、不自动催促感悟。
+- 发现：阶段 3–4 故意让 PDF/EPUB 新捕获继续 `upsertAnnotation`；v6 模型、`buildExcerptDraftFromPending` 与捕获器早已支持 pdfText/epub。
+- 保守取舍：`handleSaveMark` 在 content.kind 与 locator.kind 同为 markdown/pdf/epub 时统一 `createExcerpt`；书签与其它非选区路径仍 upsert。扫描 PDF 无文本层时 `captureReaderSelection` 仍返回 null，不伪造文字摘录。侧栏三格式共用 `DocumentAnnotationsView`；broken / approximate / geometricFallback 仍叠 `AnnotationList`。
+- 影响：Desktop PDF/EPUB 静默标记进入 v6 Excerpt + 三色 appearance + 按页段/章节回看；不改变锚点诚实度回报与 Web 格式边界。
 
 任何后续偏离规格的保守取舍都必须先写在此处，再继续实现。

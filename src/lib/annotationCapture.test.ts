@@ -198,6 +198,115 @@ describe("markdown selection to excerpt draft", () => {
     expect(draft.anchor.format).toBe("markdown");
   });
 
+  it("builds a pdfText excerpt draft from an original-view selection", () => {
+    const { root, textLayer } = buildPdfPage();
+    const range = document.createRange();
+    range.setStart(textLayer.children[0].firstChild as Text, 4);
+    range.setEnd(textLayer.children[1].firstChild as Text, 5);
+    range.getClientRects = () => [rect(80, 100, 400, 20)] as unknown as DOMRectList;
+    range.getBoundingClientRect = () => rect(80, 100, 400, 20);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const pending = captureReaderSelection({ root, kind: "pdf", pdfMode: "original" });
+    expect(pending).not.toBeNull();
+    const draft = buildExcerptDraftFromPending("papers/a.pdf", pending!, {
+      style: "highlight",
+      tone: "sage",
+    });
+    expect(draft.relativePath).toBe("papers/a.pdf");
+    expect(draft.sourceText).toBe("quick brown fox jumps");
+    expect(draft.appearance).toEqual({ style: "highlight", tone: "sage" });
+    expect(draft.anchor).toMatchObject({
+      format: "pdfText",
+      page: 3,
+      view: "original",
+      quote: { exact: "quick brown fox jumps" },
+    });
+  });
+
+  it("builds a pdfText excerpt draft from a reading-view selection without rects", () => {
+    document.body.innerHTML = "";
+    const root = document.createElement("div");
+    const page = document.createElement("section");
+    page.className = "pdf-reading-page";
+    page.dataset.pageNumber = "2";
+    const body = document.createElement("div");
+    body.className = "markdown-body";
+    const paragraph = document.createElement("p");
+    paragraph.textContent = "The quick brown fox jumps";
+    body.append(paragraph);
+    page.append(body);
+    root.append(page);
+    document.body.append(root);
+    const textNode = paragraph.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(textNode, 4);
+    range.setEnd(textNode, 15);
+    range.getBoundingClientRect = () => rect(10, 20, 120, 16);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const pending = captureReaderSelection({ root, kind: "pdf", pdfMode: "reading" });
+    expect(pending).not.toBeNull();
+    expect(pending!.locator).toMatchObject({
+      kind: "pdf",
+      page: 2,
+      view: "reading",
+      quote: "quick brown",
+      rects: [],
+    });
+    const draft = buildExcerptDraftFromPending("papers/a.pdf", pending!, {
+      style: "underline",
+      tone: "sand",
+    });
+    expect(draft.anchor).toMatchObject({
+      format: "pdfText",
+      page: 2,
+      view: "reading",
+      quote: { exact: "quick brown" },
+      rects: [],
+    });
+  });
+
+  it("builds an epub excerpt draft from a chapter/block selection", () => {
+    document.body.innerHTML = "";
+    const root = document.createElement("div");
+    const chapter = document.createElement("section");
+    chapter.className = "epub-chapter";
+    chapter.dataset.chapterId = "ch1";
+    const block = document.createElement("div");
+    block.className = "epub-block";
+    block.dataset.blockIndex = "0";
+    block.textContent = "The quick brown fox jumps";
+    chapter.append(block);
+    root.append(chapter);
+    document.body.append(root);
+    const textNode = block.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(textNode, 4);
+    range.setEnd(textNode, 15);
+    range.getBoundingClientRect = () => rect(10, 20, 100, 16);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+    const pending = captureReaderSelection({ root, kind: "epub" });
+    expect(pending).not.toBeNull();
+    const draft = buildExcerptDraftFromPending("book.epub", pending!, {
+      style: "underline",
+      tone: "slate",
+    });
+    expect(draft.relativePath).toBe("book.epub");
+    expect(draft.sourceText).toBe("quick brown");
+    expect(draft.appearance).toEqual({ style: "underline", tone: "slate" });
+    expect(draft.anchor).toMatchObject({
+      format: "epub",
+      chapterId: "ch1",
+      blockIndex: 0,
+      quote: { exact: "quick brown" },
+    });
+  });
+
   it("rejects an overlong selection instead of truncating it", () => {
     const text = `start ${"汉".repeat(MAX_EXCERPT_CHARS)} end`;
     const root = buildMarkdownRoot(text);

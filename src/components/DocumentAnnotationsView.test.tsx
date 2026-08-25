@@ -97,4 +97,57 @@ describe("DocumentAnnotationsView", () => {
     expect(screen.getByText("Why documents need a map")).toBeInTheDocument();
     expect(screen.queryByText("Four colors were a mistake")).not.toBeInTheDocument();
   });
+
+  it("groups PDF excerpts into page bands when outline TOC is empty", () => {
+    const pdfBundle: DocumentAnnotationBundle = {
+      excerpts: [
+        excerpt({
+          id: "pdf-1",
+          relativePath: "paper.pdf",
+          sourceText: "Page three quote",
+          anchor: {
+            format: "pdfText",
+            page: 3,
+            view: "original",
+            quote: { exact: "Page three quote", prefix: "", suffix: "" },
+            rects: [{ x: 0.1, y: 0.1, w: 0.4, h: 0.02 }],
+          },
+          sortIndex: "P|00003|00000000",
+        }),
+        excerpt({
+          id: "pdf-2",
+          relativePath: "paper.pdf",
+          sourceText: "Page forty-one quote",
+          anchor: {
+            format: "pdfText",
+            page: 41,
+            view: "original",
+            quote: { exact: "Page forty-one quote", prefix: "", suffix: "" },
+            rects: [{ x: 0.2, y: 0.2, w: 0.3, h: 0.02 }],
+          },
+          sortIndex: "P|00041|00000000",
+        }),
+      ],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    };
+    render(
+      <DocumentAnnotationsView
+        format="pdf"
+        toc={[]}
+        currentHeadingId="pdf-page-41"
+        currentPage={41}
+        bundle={pdfBundle}
+        loading={false}
+        onJump={vi.fn()}
+        onSaveReflection={vi.fn(async () => undefined)}
+      />,
+    );
+    expect(screen.getByText(/2 条重点 · 2 个分组/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /第 1–20 页/ })).toBeInTheDocument();
+    const currentBand = screen.getByRole("button", { name: /第 41–60 页/ });
+    expect(currentBand).toHaveAttribute("aria-expanded", "true");
+    expect(screen.getByText("Page forty-one quote")).toBeInTheDocument();
+  });
 });

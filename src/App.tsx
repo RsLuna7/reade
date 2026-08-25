@@ -1450,7 +1450,7 @@ function SidePanel({
   /** 全书回顾编纂(plan-book-digest):标注 tab 工具条入口。 */
   onCompileAnnotationsDigest?: () => void;
   onClearAnnotations: () => void;
-  /** Markdown MVS: chaptered excerpt list. PDF/EPUB keep AnnotationList. */
+  /** Chapter/page-band outline for Markdown/PDF/EPUB; honesty fallback stays AnnotationList. */
   annotationsPanel?: React.ReactNode;
   /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
   linksState: LinksPanelState;
@@ -3038,11 +3038,13 @@ function App() {
       options?: { undoable?: boolean; tone?: typeof excerptTone },
     ) => {
       if (!currentPath) return;
-      const markdownExcerpt =
-        (currentContent?.kind === "markdown") &&
-        pending.locator.kind === "markdown";
+      // Markdown / PDF / EPUB 文字摘录一律 createExcerpt；书签等仍走 upsert。
+      const excerptCapture =
+        (currentContent?.kind === "markdown" && pending.locator.kind === "markdown") ||
+        (currentContent?.kind === "pdf" && pending.locator.kind === "pdf") ||
+        (currentContent?.kind === "epub" && pending.locator.kind === "epub");
       try {
-        if (markdownExcerpt) {
+        if (excerptCapture) {
           const tone = options?.tone ?? excerptTone;
           const draft = buildExcerptDraftFromPending(currentPath, pending, {
             style: kind,
@@ -3641,18 +3643,31 @@ function App() {
   const markdownFallbackAnnotations = useMemo(
     () =>
       sortedAnnotations.filter(
-        (item) => brokenAnnotationIds.has(item.id) || approximateAnnotationIds.has(item.id),
+        (item) =>
+          brokenAnnotationIds.has(item.id) ||
+          approximateAnnotationIds.has(item.id) ||
+          geometricFallbackIds.has(item.id),
       ),
-    [approximateAnnotationIds, brokenAnnotationIds, sortedAnnotations],
+    [approximateAnnotationIds, brokenAnnotationIds, geometricFallbackIds, sortedAnnotations],
   );
 
-  const markdownAnnotationsPanel =
-    currentContent?.kind === "markdown" ? (
+  const pdfCurrentPage = useMemo(() => {
+    if (currentContent?.kind !== "pdf" || !activeHeading) return null;
+    const match = /^pdf-page-(\d+)$/.exec(activeHeading);
+    if (!match) return null;
+    const page = Number(match[1]);
+    return Number.isFinite(page) && page > 0 ? page : null;
+  }, [activeHeading, currentContent?.kind]);
+
+  const documentAnnotationsPanel =
+    currentContent ? (
       <>
         <DocumentAnnotationsView
           format={currentContent.kind}
           toc={toc}
           currentHeadingId={activeHeading}
+          currentPage={pdfCurrentPage}
+          epubChapterTocIds={epubChapterTocIds}
           bundle={annotationBundle}
           loading={annotationBundleLoading}
           onJump={jumpToAnnotation}
@@ -6296,7 +6311,7 @@ function App() {
                 onGenerateAnnotationCard={handleGenerateCardFromAnnotation}
                 onCompileAnnotationsDigest={handleOpenBookDigest}
                 onClearAnnotations={() => void handleClearAnnotations()}
-                annotationsPanel={markdownAnnotationsPanel}
+                annotationsPanel={documentAnnotationsPanel}
                 linksState={documentLinksState}
                 onSelectLinkDocument={handleSelectLinkDocument}
                 onPreviewLinkTarget={handlePreviewPanelTarget}
@@ -6469,7 +6484,7 @@ function App() {
             }}
             onCompileAnnotationsDigest={handleOpenBookDigest}
             onClearAnnotations={() => void handleClearAnnotations()}
-            annotationsPanel={markdownAnnotationsPanel}
+            annotationsPanel={documentAnnotationsPanel}
             linksState={documentLinksState}
             onSelectLinkDocument={handleSelectLinkDocument}
             onPreviewLinkTarget={handlePreviewPanelTarget}

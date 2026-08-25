@@ -697,6 +697,89 @@ describe("selection capture upgrade (B2/B3)", () => {
     expect(screen.queryByRole("toolbar", { name: "标注工具条" })).not.toBeInTheDocument();
     expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
   });
+
+  it("saves EPUB selections through createExcerpt instead of legacy upsert", async () => {
+    useReaderStore.setState({
+      documents: [{
+        relativePath: "book.epub",
+        title: "Book",
+        size: 1024,
+        modified: 1,
+        format: "epub",
+        indexStatus: "ready",
+        indexError: null,
+      }],
+      currentPath: "book.epub",
+      currentContent: {
+        kind: "epub",
+        relativePath: "book.epub",
+        document: {
+          title: "Book",
+          assets: [],
+          notes: [],
+          chapters: [{
+            id: "one",
+            title: "第一章",
+            level: 1,
+            blocks: [{
+              kind: "paragraph",
+              content: [{
+                kind: "text",
+                text: "Body of the chapter",
+                bold: false,
+                italic: false,
+                strike: false,
+                code: false,
+              }],
+            }],
+          }],
+        },
+      },
+      activeView: "reader",
+      annotationTool: "view",
+      excerptTone: "sand",
+      loading: false,
+      error: null,
+    });
+
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".epub-block")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    const paragraph = view.container.querySelector<HTMLElement>(".epub-block p")!;
+    const textNode = paragraph.firstChild!;
+    const range = document.createRange();
+    range.setStart(textNode, 0);
+    range.setEnd(textNode, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.pointerDown(reader);
+    fireEvent.pointerUp(document);
+
+    const toolbar = await screen.findByRole("toolbar", { name: "标注工具条" });
+    expect(toolbar).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "标记" }));
+
+    await waitFor(() => {
+      expect(createExcerpt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          relativePath: "book.epub",
+          sourceText: "Body",
+          appearance: expect.objectContaining({ style: "highlight", tone: "sand" }),
+          anchor: expect.objectContaining({
+            format: "epub",
+            chapterId: "one",
+          }),
+        }),
+      );
+    });
+    expect(upsertAnnotation).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
+  });
 });
 
 describe("links tab (BL-D3)", () => {

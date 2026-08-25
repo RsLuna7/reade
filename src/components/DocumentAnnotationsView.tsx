@@ -26,6 +26,8 @@ export function DocumentAnnotationsView({
   format,
   toc,
   currentHeadingId,
+  currentPage = null,
+  epubChapterTocIds,
   bundle,
   loading,
   onJump,
@@ -35,6 +37,8 @@ export function DocumentAnnotationsView({
   format: DocumentFormat;
   toc: TocItem[];
   currentHeadingId: string | null;
+  currentPage?: number | null;
+  epubChapterTocIds?: Map<string, string>;
   bundle: DocumentAnnotationBundle;
   loading: boolean;
   onJump: (annotation: Annotation) => void;
@@ -76,9 +80,21 @@ export function DocumentAnnotationsView({
         places: bundle.places,
         reflectionsByEntryId,
         currentTocId: currentHeadingId,
+        currentPage,
+        epubChapterTocIds,
         view,
       }),
-    [bundle.excerpts, bundle.places, currentHeadingId, format, reflectionsByEntryId, toc, view],
+    [
+      bundle.excerpts,
+      bundle.places,
+      currentHeadingId,
+      currentPage,
+      epubChapterTocIds,
+      format,
+      reflectionsByEntryId,
+      toc,
+      view,
+    ],
   );
 
   const normalizedQuery = query.trim().toLowerCase();
@@ -118,7 +134,7 @@ export function DocumentAnnotationsView({
     <div className="document-annotations">
       <header className="document-annotations-header">
         <p className="document-annotations-meta">
-          {outline.excerptCount} 条重点 · {outline.sections.length} 个章节 · {outline.reflectionCount}{" "}
+          {outline.excerptCount} 条重点 · {outline.sections.length} 个分组 · {outline.reflectionCount}{" "}
           条感悟
         </p>
         <div className="document-annotations-views" role="tablist" aria-label="本文标注视图">
