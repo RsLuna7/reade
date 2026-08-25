@@ -4,7 +4,7 @@
  * 的纯函数里；本组件只管 combobox/listbox 键盘交互与渲染。
  *
  * Esc 在此处 stopPropagation 后关闭——不触发 App 全局 Esc 链的其余职责
- * （停朗读、关抽屉等）。条目执行交给 onExecute（App 分发），面板自身
+ * （关抽屉等）。条目执行交给 onExecute（App 分发），面板自身
  * 不持有任何动作逻辑。
  */
 

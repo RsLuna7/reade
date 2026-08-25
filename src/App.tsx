@@ -16,7 +16,6 @@ import {
   AlertCircle,
   ArrowLeft,
   ArrowRight,
-  AudioLines,
   BarChart3,
   BookOpen,
   Clock3,
@@ -128,7 +127,6 @@ import {
   buildScrollMapMarks,
   collectAnnotationScrollPoints,
   collectSearchScrollPoints,
-  ttsRatioFromRect,
   type ScrollMapMark,
 } from "./lib/scrollMap";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
@@ -224,13 +222,11 @@ import {
   legacyColorToTone,
   toneToLegacyColor,
 } from "./lib/annotationModel";
-import { useReadAloud } from "./lib/useReadAloud";
 // 聚焦模式(plan-focus-mode):spotlight/打字机共享驱动在 lib,
 // 标尺是纯视觉组件;PDF 原版式无段落 DOM,三者一律不接线。
 import { useFocusMode, type FocusContentKind } from "./lib/useFocusMode";
 import { useAutoPace } from "./lib/useAutoPace";
 import { ReadingRuler } from "./components/ReadingRuler";
-import { ReadAloudBar } from "./components/ReadAloudBar";
 import { AutoPaceBar } from "./components/AutoPaceBar";
 import {
   AnnotationEditBubble,
@@ -273,7 +269,7 @@ import {
 } from "./lib/readingPositions";
 import { deletePdfPageOffset, readPdfPageOffset } from "./lib/pdfPageOffset";
 // 读完接着读(plan-read-next):三级回落纯逻辑在 lib,App 只负责哨兵
-// 触发、会话级 dismiss 与朗读互斥。
+// 触发、会话级 dismiss 与自动推进条互斥。
 import {
   READ_NEXT_DWELL_MS,
   resolveReadNextSuggestion,
@@ -322,8 +318,6 @@ const IS_WEB_RUNTIME = APP_RUNTIME === "web";
 type AppPaletteEntry = PaletteEntry & { run: () => void };
 /** data-annotation-id of the temporary relocate preview mark (§5.6 B). */
 const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
-/** PDF 阅读模式的大小上限,与 PdfReader 工具栏的禁用判定保持一致(RA-D5)。 */
-const PDF_READING_MODE_MAX_BYTES = 128 * 1024 * 1024;
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
 /** 深链高亮的 CSS Custom Highlight 注册名(与 TTS 同 API 不同名,DL-D3)。 */
 const DEEPLINK_HIGHLIGHT_NAME = "reade-deeplink";
@@ -1026,7 +1020,7 @@ export function ReadingSettingsPanel({
           ))}
         </div>
         <p className="setting-hint">
-          正文右缘的刻度层：标出标注四色、书签、搜索命中与朗读位置，点击可跳转。
+          正文右缘的刻度层：标出标注三色、书签与搜索命中，点击可跳转。
         </p>
       </fieldset>
 
@@ -1575,10 +1569,6 @@ function App() {
   const retryCurrentDocumentIndex = useReaderStore((state) => state.retryCurrentDocumentIndex);
   const activeView = useReaderStore((state) => state.activeView);
   const setActiveView = useReaderStore((state) => state.setActiveView);
-  const ttsRate = useReaderStore((state) => state.ttsRate);
-  const ttsVoiceName = useReaderStore((state) => state.ttsVoiceName);
-  const setTtsRate = useReaderStore((state) => state.setTtsRate);
-  const setTtsVoiceName = useReaderStore((state) => state.setTtsVoiceName);
   const navHistory = useReaderStore((state) => state.navHistory);
   const recordNavLocation = useReaderStore((state) => state.recordNavLocation);
 
@@ -2210,61 +2200,6 @@ function App() {
     if (location) recordNavLocation(location);
   }, [captureCurrentNavLocation, recordNavLocation]);
 
-  // 本地朗读(plan-read-aloud):hook 负责切句/队列/句级 mark 跟随,
-  // App 只负责入口、控制条与 PDF 原版式引导(RA-D5)。
-  const readAloud = useReadAloud({
-    articleRef,
-    readerRef,
-    contentKind: currentContent?.kind ?? null,
-    contentKey: currentPath,
-    active: activeView === "reader",
-    motionLevel,
-    rate: ttsRate,
-    voiceName: ttsVoiceName,
-    languageHint: typeof navigator !== "undefined" ? navigator.language : null,
-    onSentenceEnd: IS_WEB_RUNTIME
-      ? undefined
-      : () => trackerRef.current?.recordActivity(),
-    onNotice: showNotice,
-    // 竖排(§8):朗读继续,自动跟随滚动暂停(定稿矩阵)。
-    followSuspended: verticalActive,
-  });
-
-  // Esc 分支与控制条的稳定引用(hook 返回的回调都是 identity-stable)。
-  const { barOpen: readAloudBarOpen, stop: stopReadAloud } = readAloud;
-
-  /** 朗读入口的禁用原因;null 即可用(RA-D1/RA-D5)。 */
-  const readAloudDisabledReason = !readAloud.supported
-    ? "此环境不支持语音合成"
-    : !readAloud.voicesReady
-      ? "正在加载本地语音…"
-      : readAloud.voices.length === 0
-        ? "未检测到本地语音，可在系统设置安装语音后重试"
-        : currentContent?.kind === "pdf" &&
-            (currentContent.indexStatus === "unsupported" ||
-              currentContent.size > PDF_READING_MODE_MAX_BYTES)
-          ? "此 PDF 不支持阅读模式，无法朗读"
-          : null;
-
-  const handleReadAloudButton = useCallback(() => {
-    if (readAloud.barOpen) {
-      readAloud.stop();
-      return;
-    }
-    // PDF 原版式文本层按需加载,不直接朗读;引导一键切阅读模式(RA-D5)。
-    if (
-      currentContent?.kind === "pdf" &&
-      pdfReaderHandleRef.current?.getMode() === "original"
-    ) {
-      showNotice("PDF 原版式暂不支持朗读，请切换到阅读模式后再开始。", {
-        actionLabel: "切换阅读模式",
-        onAction: () => pdfReaderHandleRef.current?.setMode("reading"),
-      });
-      return;
-    }
-    readAloud.start();
-  }, [currentContent?.kind, readAloud, showNotice]);
-
   // 金句卡片入口 1(M1):实时选区 → 关工具条 → 打开预览浮层。
   const handleMakeCardFromSelection = useCallback(() => {
     if (!pendingSelection) return;
@@ -2353,7 +2288,6 @@ function App() {
 
   // ---- 富滚动条刻度层(plan-rich-scrollbar) ----
   const [scrollMapMarks, setScrollMapMarks] = useState<ScrollMapMark[]>([]);
-  const [ttsMapRatio, setTtsMapRatio] = useState<number | null>(null);
 
   // ---- 聚焦模式(plan-focus-mode) ----
   // PDF 视图模式经 onModeChange 外报:原版式没有段落 DOM,三开关置灰
@@ -2619,16 +2553,6 @@ function App() {
             run: handleToggleSplit,
           }
         : null,
-      currentContent && !readAloudDisabledReason
-        ? {
-            kind: "command" as const,
-            id: "cmd:read-aloud",
-            title: readAloud.barOpen ? "停止朗读" : "开始朗读",
-            keywords: "tts speech read aloud 朗读 语音",
-            badge: "命令",
-            run: handleReadAloudButton,
-          }
-        : null,
       {
         kind: "command" as const,
         id: "cmd:reading-settings",
@@ -2758,7 +2682,6 @@ function App() {
     documents,
     handleOpenSecondary,
     handlePinToSecondary,
-    handleReadAloudButton,
     handleResetPdfFrontier,
     handleToggleSplit,
     homeOpen,
@@ -2766,8 +2689,6 @@ function App() {
     reviewOpen,
     paletteCollections,
     pdfViewMode,
-    readAloud.barOpen,
-    readAloudDisabledReason,
     readingHighWater,
     recordNavDeparture,
     refreshLibrary,
@@ -3293,22 +3214,6 @@ function App() {
     verticalActive,
   ]);
 
-  // 朗读刻度:sentenceIndex 变化只更新这一枚(RS-D8),不重测全量。
-  const {
-    sentenceIndex: ttsSentenceIndex,
-    barOpen: ttsBarOpen,
-    getActiveSentenceRect,
-  } = readAloud;
-  useEffect(() => {
-    if (!showScrollMap || !ttsBarOpen || ttsSentenceIndex === null) {
-      setTtsMapRatio(null);
-      return;
-    }
-    const reader = readerRef.current;
-    if (!reader) return;
-    setTtsMapRatio(ttsRatioFromRect(reader, getActiveSentenceRect()));
-  }, [getActiveSentenceRect, showScrollMap, ttsBarOpen, ttsSentenceIndex]);
-
   /** 刻度点击(RS-D7):标注/书签走既有跳转链,其余按比例滚动。 */
   const handleScrollMapSelect = useCallback(
     (mark: ScrollMapMark) => {
@@ -3327,18 +3232,6 @@ function App() {
       );
     },
     [annotations, jumpToAnnotation, motionLevel, recordNavDeparture],
-  );
-
-  const handleScrollMapSelectTts = useCallback(
-    (ratio: number) => {
-      recordNavDeparture();
-      scrollContainerByRatio(
-        readerRef.current,
-        ratio,
-        motionLevel === "off" ? "auto" : "smooth",
-      );
-    },
-    [motionLevel, recordNavDeparture],
   );
 
   const handleDeleteAnnotation = useCallback(
@@ -4690,7 +4583,7 @@ function App() {
     enabledKind: activeView === "reader" && !verticalActive ? focusContentKind : null,
     contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
     enabled: autoPaceEnabled && focusUnavailableReason === null,
-    suspended: readAloudBarOpen,
+    suspended: false,
     charsPerMinute: readingSpeed.charsPerMinute,
     bias: autoPaceBias,
     motionLevel,
@@ -4705,8 +4598,7 @@ function App() {
     contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
     spotlight: focusSpotlight,
     typewriter: typewriterScroll,
-    // TTS 或自动推进播放时打字机让位。
-    typewriterSuspended: readAloudBarOpen || autoPace.playing,
+    typewriterSuspended: autoPace.playing,
     motionLevel,
   });
 
@@ -4745,7 +4637,7 @@ function App() {
     const article = articleRef.current;
     if (!reader || !article) return;
     if (!readNextEnabled || !currentPath || !currentContent) return;
-    if (activeView !== "reader" || readAloudBarOpen) return;
+    if (activeView !== "reader") return;
     if (verticalActive) {
       // 竖排(plan-vertical-writing §8):读完接着读不触发(定稿矩阵 ⛔)。
       // 横排下 scrollHeight 采样天然失效,这里显式挡住并收起已浮出的卡。
@@ -4836,7 +4728,6 @@ function App() {
     currentPath,
     documentExtents,
     documents,
-    readAloudBarOpen,
     readNextEnabled,
     readingScrollRatio,
   ]);
@@ -5108,11 +4999,6 @@ function App() {
       }
       if (!(event.ctrlKey || event.metaKey)) {
         if (event.key === "Escape") {
-          // RA-D6:朗读激活时 Esc 只负责停止朗读,优先级高于其余关闭职责。
-          if (readAloudBarOpen) {
-            stopReadAloud();
-            return;
-          }
           if (autoPace.barOpen) {
             autoPace.stop();
             return;
@@ -5185,12 +5071,10 @@ function App() {
     handleNavForward,
     handleUndoAnnotation,
     closeRelatedPassages,
-    readAloudBarOpen,
     autoPace.barOpen,
     autoPace.stop,
     annotationTool,
     setAnnotationTool,
-    stopReadAloud,
   ]);
 
   useEffect(() => {
@@ -5989,19 +5873,6 @@ function App() {
                 )}
               </>
             )}
-            {currentContent && !overlayViewOpen && (
-              <button
-                className={`icon-button${readAloud.barOpen ? " is-armed" : ""}`}
-                type="button"
-                aria-label={readAloud.barOpen ? "停止朗读" : "朗读正文"}
-                title={readAloudDisabledReason ?? (readAloud.barOpen ? "停止朗读" : "朗读正文（仅本地语音）")}
-                aria-pressed={readAloud.barOpen}
-                disabled={Boolean(readAloudDisabledReason)}
-                onClick={handleReadAloudButton}
-              >
-                <AudioLines size={16} aria-hidden="true" />
-              </button>
-            )}
             <button
               className="icon-button"
               type="button"
@@ -6170,9 +6041,8 @@ function App() {
             {showScrollMap && !verticalActive && (
               <ScrollMap
                 marks={scrollMapMarks}
-                ttsRatio={ttsMapRatio}
+                ttsRatio={null}
                 onSelect={handleScrollMapSelect}
-                onSelectTts={handleScrollMapSelectTts}
               />
             )}
             {readingRuler && hoverCapable && focusContentKind && !verticalActive && (
@@ -6525,8 +6395,8 @@ function App() {
         />
 
 
-        {/* 读完接着读:与朗读条/自动推进条同区位,互斥渲染。 */}
-        {readNextTarget && !readAloud.barOpen && !autoPace.barOpen && !overlayViewOpen && (
+        {/* 读完接着读:与自动推进条同区位,互斥渲染。 */}
+        {readNextTarget && !autoPace.barOpen && !overlayViewOpen && (
           <Suspense fallback={null}>
             <ReadNextCard
               title={readNextTarget.title}
@@ -6540,7 +6410,7 @@ function App() {
           </Suspense>
         )}
 
-        {autoPace.barOpen && !readAloud.barOpen && !overlayViewOpen && (
+        {autoPace.barOpen && !overlayViewOpen && (
           <AutoPaceBar
             status={autoPace.status}
             paceHint={autoPace.paceHint}
@@ -6548,24 +6418,6 @@ function App() {
             onToggle={autoPace.toggle}
             onBiasChange={setAutoPaceBias}
             onStop={autoPace.stop}
-          />
-        )}
-
-        {readAloud.barOpen && !overlayViewOpen && (
-          <ReadAloudBar
-            status={readAloud.status}
-            sentenceIndex={readAloud.sentenceIndex}
-            sentenceCount={readAloud.sentenceCount}
-            rate={ttsRate}
-            voices={readAloud.voices}
-            voiceName={readAloud.voice?.name ?? ""}
-            onToggle={readAloud.toggle}
-            onPrevious={readAloud.previous}
-            onNext={readAloud.next}
-            onRestart={readAloud.startFromTop}
-            onRateChange={setTtsRate}
-            onVoiceChange={setTtsVoiceName}
-            onStop={readAloud.stop}
           />
         )}
 

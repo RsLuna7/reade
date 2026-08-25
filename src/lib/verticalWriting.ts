@@ -19,7 +19,7 @@ export const VERTICAL_WRITING_LIBRARY_LIMIT = 200;
 
 /** 竖排激活时显式禁用的功能清单（定稿矩阵 ⛔ 行，进设置提示与 USER_GUIDE）。 */
 export const VERTICAL_DISABLED_FEATURES =
-  "聚焦模式、文档地图、朗读自动跟随、目录跟随高亮、阅读位置记忆、读完接着读";
+  "聚焦模式、文档地图、目录跟随高亮、阅读位置记忆、读完接着读";
 
 type LibraryEntries = Record<string, { updatedAt: number }>;
 

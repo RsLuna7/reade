@@ -2197,6 +2197,17 @@ describe("command palette (CP)", () => {
     expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
     expect(screen.queryByRole("dialog", { name: "命令面板" })).not.toBeInTheDocument();
   });
+
+  it("does not expose read-aloud in the top bar or command palette", async () => {
+    setPaletteState();
+    render(<App />);
+    expect(screen.queryByRole("button", { name: /朗读/ })).not.toBeInTheDocument();
+
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    fireEvent.change(input, { target: { value: "朗读" } });
+    expect(screen.queryByRole("option", { name: /朗读/ })).not.toBeInTheDocument();
+  });
 });
 
 describe("reading time estimate (plan-reading-time-estimate)", () => {

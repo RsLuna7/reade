@@ -6,7 +6,7 @@ import { Library, ListTree, Moon, MoreHorizontal, Search, Sun } from "lucide-rea
  * 仅 Web 运行时由 App 渲染（编译时守卫）；显隐再由 CSS 的
  * `(max-width: 640px) and (pointer: coarse)` 媒体查询 + `data-runtime`
  * 控制，桌面与宽窗零变化。「更多」直达命令面板——主题风格、阅读设置、
- * 朗读、分栏等其余动作全部收纳在那里。
+ * 分栏等其余动作全部收纳在那里。
  */
 interface MobileToolbarProps {
   /** 向下滚动时半隐（滚动方向感知由 App 计算，MG-D3）。 */
