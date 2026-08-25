@@ -8,9 +8,12 @@ import {
   getOrCreateDeviceId,
   MAX_TRANSFER_ANNOTATIONS,
   parseAnnotationEnvelope,
+  parseUserDataArchive,
   planAnnotationImport,
   READWISE_CSV_HEADER,
   serializeAnnotationEnvelope,
+  serializeReadeUserDataArchive,
+  buildReadeUserDataArchiveV2,
   summarizeImportPlan,
   TRANSFER_FORMAT_VERSION,
   TRANSFER_TYPE,
@@ -669,5 +672,61 @@ describe("getOrCreateDeviceId", () => {
 
   it("degrades to an ephemeral id when storage is unavailable", () => {
     expect(getOrCreateDeviceId(null)).toMatch(/^[0-9a-f-]{36}$/i);
+  });
+});
+
+describe("ReadeUserDataArchiveV2", () => {
+  it("round-trips v5 documents plus v6 extras and keeps v1 import working", () => {
+    const envelope = buildEnvelope([
+      makeAnnotation("ann-1", "notes/a.md", { note: "后来补的感悟" }),
+    ]);
+    const archive = buildReadeUserDataArchiveV2({
+      envelope,
+      reflections: [
+        {
+          entryId: "ann-1",
+          entryKind: "excerpt",
+          body: "后来补的感悟",
+          createdAt: 100,
+          updatedAt: 100,
+          deletedAt: null,
+        },
+      ],
+      reviewEnrollments: [
+        {
+          excerptId: "ann-1",
+          enrolledAt: 100,
+          box: 1,
+          dueAt: 200,
+          lastReviewedAt: 100,
+          totalReviews: 2,
+          suspended: false,
+          updatedAt: 100,
+          deletedAt: null,
+        },
+      ],
+      collections: [
+        {
+          id: "col-1",
+          name: "考研数学",
+          createdAt: 1,
+          updatedAt: 1,
+          items: [{ relativePath: "notes/a.md", position: 0, addedAt: 1 }],
+        },
+      ],
+      preferences: { excerptTone: "sage" },
+    });
+    const parsed = parseUserDataArchive(serializeReadeUserDataArchive(archive));
+    expect(parsed.archive).not.toBeNull();
+    expect(parsed.envelope.documents[0]?.annotations[0]?.id).toBe("ann-1");
+    expect(parsed.archive?.reflections[0]?.body).toBe("后来补的感悟");
+    expect(parsed.archive?.reviewEnrollments[0]?.excerptId).toBe("ann-1");
+    expect(parsed.archive?.collections[0]?.name).toBe("考研数学");
+    expect(parsed.archive?.preferences.excerptTone).toBe("sage");
+    expect(parsed.archive?.checksums.documents).toBe(archive.checksums.documents);
+
+    const v1 = parseUserDataArchive(serializeAnnotationEnvelope(envelope));
+    expect(v1.archive).toBeNull();
+    expect(v1.envelope.documents[0]?.annotations[0]?.id).toBe("ann-1");
   });
 });

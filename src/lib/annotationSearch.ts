@@ -52,13 +52,18 @@ export interface AnnotationFilterOptions {
   kinds?: readonly AnnotationKind[];
   /** Colour chips; empty/absent means "all colours". Bookmarks have no colour and never pass a colour filter. */
   colors?: readonly AnnotationColor[];
+  /** When true, keep only annotations with a non-empty note/reflection. */
+  hasReflection?: boolean;
+  /** When true, keep only ids in `enrolledIds` (unsuspended spaced-review). */
+  enrolled?: boolean;
+  enrolledIds?: ReadonlySet<string>;
 }
 
 /**
  * Client-side filter used by the hub UI (and as the web search backend's
- * core): query × kinds × colours intersect; tombstones never surface,
- * mirroring the desktop `deleted_at IS NULL` scope. Input order is kept —
- * grouping/sorting is `annotationHub.ts`'s job.
+ * core): query × kinds × colours × optional reflection/enrollment intersect;
+ * tombstones never surface, mirroring the desktop `deleted_at IS NULL`
+ * scope. Input order is kept — grouping/sorting is `annotationHub.ts`'s job.
  */
 export function filterAnnotations(
   items: readonly Annotation[],
@@ -71,6 +76,8 @@ export function filterAnnotations(
     if (annotation.deletedAt != null) return false;
     if (kinds && !kinds.has(annotation.kind)) return false;
     if (colors && (annotation.color == null || !colors.has(annotation.color))) return false;
+    if (options.hasReflection && !annotation.note?.trim()) return false;
+    if (options.enrolled && !options.enrolledIds?.has(annotation.id)) return false;
     if (normalized && !annotationMatchesQuery(annotation, normalized)) return false;
     return true;
   });

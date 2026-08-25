@@ -200,13 +200,20 @@ export interface Annotation {
   deletedAt?: number | null;
 }
 
-/** One review card: the annotation plus its (possibly implicit) state. */
+/** One review card: the annotation plus its stored enrollment state. */
 export interface ReviewQueueItem {
   annotation: Annotation;
   review: ReviewState;
 }
 
-/** Data for the "今日回顾" card on the home view. */
+/** Search hit with reflection/enrollment flags for the library hub. */
+export interface AnnotationSearchHit {
+  annotation: Annotation;
+  hasReflection: boolean;
+  enrolled: boolean;
+}
+
+/** Due/reviewed counts for enrolled excerpts (no longer shown on Home). */
 export interface ReviewSummary {
   dueCount: number;
   reviewedToday: number;
@@ -520,6 +527,91 @@ export async function clearDocumentAnnotations(relativePath: string): Promise<vo
   return (await getTauriBackend()).clearDocumentAnnotations(relativePath);
 }
 
+export async function listDocumentAnnotations(relativePath: string) {
+  if (APP_RUNTIME === "web") {
+    const { listDocumentAnnotations: listWeb } = await import("./webAnnotationRepository");
+    return listWeb(relativePath);
+  }
+  return (await getTauriBackend()).listDocumentAnnotations(relativePath);
+}
+
+export async function createExcerpt(draft: import("./annotationModel").ExcerptDraft) {
+  if (APP_RUNTIME === "web") {
+    const { createExcerpt: createWeb } = await import("./webAnnotationRepository");
+    return createWeb(draft);
+  }
+  return (await getTauriBackend()).createExcerpt(draft);
+}
+
+export async function updateExcerptAppearance(
+  id: string,
+  appearance: import("./annotationModel").ExcerptAppearance,
+) {
+  if (APP_RUNTIME === "web") {
+    const { updateExcerptAppearance: updateWeb } = await import("./webAnnotationRepository");
+    return updateWeb(id, appearance);
+  }
+  return (await getTauriBackend()).updateExcerptAppearance(id, appearance);
+}
+
+export async function createReadingPlace(draft: import("./annotationModel").ReadingPlaceDraft) {
+  if (APP_RUNTIME === "web") {
+    const { createReadingPlace: createWeb } = await import("./webAnnotationRepository");
+    return createWeb(draft);
+  }
+  return (await getTauriBackend()).createReadingPlace(draft);
+}
+
+export async function upsertReflection(
+  entryId: string,
+  entryKind: import("./annotationModel").AnnotationEntryKind,
+  body: string,
+) {
+  if (APP_RUNTIME === "web") {
+    const { upsertReflection: upsertWeb } = await import("./webAnnotationRepository");
+    return upsertWeb(entryId, entryKind, body);
+  }
+  return (await getTauriBackend()).upsertReflection(entryId, entryKind, body);
+}
+
+export async function deleteReflection(entryId: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { deleteReflection: deleteWeb } = await import("./webAnnotationRepository");
+    return deleteWeb(entryId);
+  }
+  return (await getTauriBackend()).deleteReflection(entryId);
+}
+
+export async function deleteAnnotationEntry(
+  id: string,
+  entryKind: import("./annotationModel").AnnotationEntryKind,
+): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { deleteAnnotationEntry: deleteWeb } = await import("./webAnnotationRepository");
+    return deleteWeb(id, entryKind);
+  }
+  return (await getTauriBackend()).deleteAnnotationEntry(id, entryKind);
+}
+
+export async function restoreAnnotationEntry(
+  id: string,
+  entryKind: import("./annotationModel").AnnotationEntryKind,
+): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { restoreAnnotationEntry: restoreWeb } = await import("./webAnnotationRepository");
+    return restoreWeb(id, entryKind);
+  }
+  return (await getTauriBackend()).restoreAnnotationEntry(id, entryKind);
+}
+
+export async function setReviewEnrollment(excerptId: string, enabled: boolean) {
+  if (APP_RUNTIME === "web") {
+    const { setReviewEnrollment: setWeb } = await import("./webAnnotationRepository");
+    return setWeb(excerptId, enabled);
+  }
+  return (await getTauriBackend()).setReviewEnrollment(excerptId, enabled);
+}
+
 /**
  * Fingerprint rebind chain (§5.5): after a library open/refresh, lists the
  * annotated documents whose path vanished while their content fingerprint
@@ -581,6 +673,17 @@ export async function recordReviewOutcome(
   return (await getTauriBackend()).recordReviewOutcome(annotationId, state);
 }
 
+export async function recordExcerptReviewOutcome(
+  annotationId: string,
+  state: ReviewState,
+): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    const { recordWebReviewOutcome } = await import("./webAnnotations");
+    return recordWebReviewOutcome(annotationId, state);
+  }
+  return (await getTauriBackend()).recordExcerptReviewOutcome(annotationId, state);
+}
+
 /**
  * Review card numbers for the home view; the local-timezone day boundary is
  * computed by the caller (e.g. from `localDayKey`), never by the backend.
@@ -604,6 +707,17 @@ export async function searchAnnotations(query: string, limit = 200): Promise<Ann
     return searchWebAnnotations(query, limit);
   }
   return (await getTauriBackend()).searchAnnotations(query, limit);
+}
+
+export async function searchAnnotationEntries(
+  query: string,
+  limit = 200,
+): Promise<AnnotationSearchHit[]> {
+  if (APP_RUNTIME === "web") {
+    const { searchWebAnnotationEntries } = await import("./webAnnotations");
+    return searchWebAnnotationEntries(query, limit);
+  }
+  return (await getTauriBackend()).searchAnnotationEntries(query, limit);
 }
 
 // ---- Collections (plan-collections §3.2) ----

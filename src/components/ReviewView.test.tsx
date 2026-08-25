@@ -430,7 +430,7 @@ describe("ReviewView queue states", () => {
     vi.mocked(listReviewQueue).mockResolvedValue([]);
     render(<Harness />);
     expect(
-      await screen.findByText("在正文中划几条高亮或下划线，明天就会出现在这里。"),
+      await screen.findByText("从本文标注或全库摘录里，把想复习的摘录加入间隔回顾。"),
     ).toBeInTheDocument();
   });
 

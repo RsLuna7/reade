@@ -227,6 +227,21 @@ describe("filterAnnotations", () => {
     ).toEqual([]);
   });
 
+  it("filters by reflection notes and enrollment ids", () => {
+    const withNote = items.map((item) =>
+      item.id === "ann-cn" ? { ...item, note: "后来补的感悟" } : item,
+    );
+    expect(filterAnnotations(withNote, { hasReflection: true }).map((item) => item.id)).toEqual([
+      "ann-cn",
+    ]);
+    expect(
+      filterAnnotations(withNote, { enrolled: true, enrolledIds: new Set(["ann-en"]) }).map(
+        (item) => item.id,
+      ),
+    ).toEqual(["ann-en"]);
+    expect(filterAnnotations(withNote, { enrolled: true }).map((item) => item.id)).toEqual([]);
+  });
+
   it("keeps input order and treats empty chip arrays as no filter", () => {
     expect(filterAnnotations(items, { kinds: [], colors: [] }).map((item) => item.id)).toEqual([
       "ann-cn",

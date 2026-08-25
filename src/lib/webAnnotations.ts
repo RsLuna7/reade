@@ -1,18 +1,22 @@
-import type { Annotation, ReviewQueueItem, ReviewSummary } from "./backend";
+import type { Annotation, AnnotationSearchHit, ReviewQueueItem, ReviewSummary } from "./backend";
+import type { Excerpt, ReviewEnrollment } from "./annotationModel";
 import { annotationMatchesQuery, normalizeAnnotationQuery } from "./annotationSearch";
 import { deriveAnnotationSortIndex, isValidSortIndex } from "./annotations";
 import {
   detectMovedDocumentCandidates,
   type MovedDocumentCandidate,
 } from "./documentMoves";
-import {
-  initialReviewState,
-  isReviewableAnnotation,
-  REVIEW_MAX_BOX,
-  type ReviewState,
-} from "./reviewScheduler";
+import { isReviewableAnnotation, REVIEW_MAX_BOX, type ReviewState } from "./reviewScheduler";
 import type { WebCollectionItemRecord } from "./webCollections";
 import { validateLibraryRelativePath } from "./webLibrary";
+import {
+  createAnnotationV6Stores,
+  ensureAnnotationV6Migrated,
+  projectAnnotationIntoV6,
+  rebindV6Paths,
+  removeV6EntriesForPath,
+  V6_WRITE_STORES,
+} from "./webAnnotationV6";
 
 const DB_NAME = "reade-annotations";
 const STORE_NAME = "annotations";
@@ -43,7 +47,7 @@ export const COLLECTION_ITEMS_STORE = "collectionItems";
  * `${collectionId}\u001f${relativePath}` string key). The upgrade steps
  * run sequentially like the desktop migration chain.
  */
-const DB_VERSION = 5;
+const DB_VERSION = 6;
 /** Tombstoned annotations are physically purged 90 days after deletion. */
 const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -123,6 +127,11 @@ function openDatabase(): Promise<IDBDatabase> {
         });
         items.createIndex("collectionId", "collectionId", { unique: false });
       }
+      // Step 6: v6 excerpt / reading-place / reflection stores plus a
+      // migration ledger. Legacy stores stay; dual-write keeps them current.
+      if (event.oldVersion < 6) {
+        createAnnotationV6Stores(db);
+      }
     };
     request.onsuccess = () => resolve(request.result);
     request.onerror = () => reject(request.error ?? new Error("Cannot open annotation store"));
@@ -175,6 +184,7 @@ function openDb(): Promise<IDBDatabase> {
     try {
       const db = await openDatabase();
       await purgeExpiredTombstones(db, Date.now());
+      await ensureAnnotationV6Migrated(db);
       return db;
     } catch (error) {
       dbPromise = null;
@@ -197,6 +207,25 @@ export function resetWebAnnotationStoreForTests(): void {
  */
 export function openWebUserDatabase(): Promise<IDBDatabase> {
   return openDb();
+}
+
+function v6WriteStores(db: IDBDatabase): string[] {
+  const names = new Set<string>([STORE_NAME, DOCUMENTS_STORE]);
+  for (const name of V6_WRITE_STORES) {
+    if (db.objectStoreNames.contains(name)) names.add(name);
+  }
+  return [...names];
+}
+
+async function projectLegacyIntoV6(tx: IDBTransaction, record: Annotation): Promise<void> {
+  if (!tx.objectStoreNames.contains("excerpts")) return;
+  const fingerprint = (await requestToPromise(
+    tx.objectStore(DOCUMENTS_STORE).get(record.relativePath),
+  )) as WebDocumentFingerprint | undefined;
+  const existingExcerpt = (await requestToPromise(
+    tx.objectStore("excerpts").get(record.id),
+  )) as Excerpt | undefined;
+  projectAnnotationIntoV6(tx, record, fingerprint, "capture", existingExcerpt);
 }
 
 export async function listWebAnnotations(relativePath: string | null): Promise<Annotation[]> {
@@ -225,8 +254,10 @@ export async function upsertWebAnnotation(annotation: Annotation): Promise<Annot
     throw new Error("Annotation sort index is invalid");
   }
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readwrite");
+  const tx = db.transaction(v6WriteStores(db), "readwrite");
   await requestToPromise(tx.objectStore(STORE_NAME).put(record));
+  await projectLegacyIntoV6(tx, record);
+  await transactionDone(tx);
   return record;
 }
 
@@ -237,24 +268,31 @@ export async function upsertWebAnnotation(annotation: Annotation): Promise<Annot
  */
 export async function deleteWebAnnotation(id: string): Promise<void> {
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readwrite");
+  const tx = db.transaction(v6WriteStores(db), "readwrite");
   const store = tx.objectStore(STORE_NAME);
   const existing = (await requestToPromise(store.get(id))) as Annotation | undefined;
   if (!existing || existing.deletedAt != null) {
     throw new Error("Annotation was not found");
   }
   const now = Date.now();
-  await requestToPromise(store.put({ ...existing, deletedAt: now, updatedAt: now }));
+  const tombstone: Annotation = { ...existing, deletedAt: now, updatedAt: now };
+  await requestToPromise(store.put(tombstone));
+  await projectLegacyIntoV6(tx, tombstone);
+  await transactionDone(tx);
 }
 
 /** Explicitly clearing a document purges its rows physically, tombstones included. */
 export async function clearWebDocumentAnnotations(relativePath: string): Promise<void> {
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readwrite");
+  const tx = db.transaction(v6WriteStores(db), "readwrite");
   const store = tx.objectStore(STORE_NAME);
   const index = store.index("relativePath");
   const matches = await requestToPromise(index.getAllKeys(relativePath) as IDBRequest<IDBValidKey[]>);
   await Promise.all(matches.map((key) => requestToPromise(store.delete(key))));
+  if (tx.objectStoreNames.contains("excerpts")) {
+    removeV6EntriesForPath(tx, relativePath);
+  }
+  await transactionDone(tx);
 }
 
 // ---- Annotation transfer (export/import, §5.7) ----
@@ -334,7 +372,7 @@ export async function importWebAnnotations(
     validateLibraryRelativePath(entry.relativePath);
   }
   const db = await openDb();
-  const tx = db.transaction([STORE_NAME, DOCUMENTS_STORE], "readwrite");
+  const tx = db.transaction(v6WriteStores(db), "readwrite");
   const store = tx.objectStore(STORE_NAME);
   for (const record of prepared) {
     store.put(record);
@@ -353,6 +391,9 @@ export async function importWebAnnotations(
       lastSeenAt: now,
     };
     documents.put(row);
+  }
+  for (const record of prepared) {
+    await projectLegacyIntoV6(tx, record);
   }
   await transactionDone(tx);
   return prepared.length;
@@ -465,7 +506,7 @@ export async function rebindWebDocumentAnnotations(
   }
   const db = await openDb();
   const tx = db.transaction(
-    [STORE_NAME, DOCUMENTS_STORE, COLLECTION_ITEMS_STORE],
+    [...v6WriteStores(db), COLLECTION_ITEMS_STORE],
     "readwrite",
   );
   const store = tx.objectStore(STORE_NAME);
@@ -474,6 +515,9 @@ export async function rebindWebDocumentAnnotations(
   );
   for (const record of matches) {
     store.put({ ...record, relativePath: newPath });
+  }
+  if (tx.objectStoreNames.contains("excerpts")) {
+    rebindV6Paths(tx, oldPath, newPath);
   }
   const items = tx.objectStore(COLLECTION_ITEMS_STORE);
   const itemRows = await requestToPromise(
@@ -527,9 +571,8 @@ async function readAnnotationsAndReviews(db: IDBDatabase): Promise<{
 }
 
 /**
- * Pool candidates with their (possibly implicit) review state — the web
- * counterpart of the desktop LEFT JOIN + COALESCE: live mark annotations
- * with a non-blank excerpt; missing rows fall back to `initialReviewState`.
+ * Enrollment-only pool: live mark annotations with a non-blank excerpt and
+ * a stored, unsuspended review row. Missing rows stay out of the queue.
  */
 function reviewCandidates(
   annotations: Annotation[],
@@ -540,16 +583,17 @@ function reviewCandidates(
     if (annotation.deletedAt != null) continue;
     if (!isReviewableAnnotation(annotation)) continue;
     const record = reviews.get(annotation.id);
-    const review: ReviewState = record
-      ? {
-          box: record.box,
-          dueAt: record.dueAt,
-          lastReviewedAt: record.lastReviewedAt,
-          totalReviews: record.totalReviews,
-          suspended: record.suspended,
-        }
-      : initialReviewState(annotation.createdAt);
-    items.push({ annotation, review });
+    if (!record || record.suspended) continue;
+    items.push({
+      annotation,
+      review: {
+        box: record.box,
+        dueAt: record.dueAt,
+        lastReviewedAt: record.lastReviewedAt,
+        totalReviews: record.totalReviews,
+        suspended: record.suspended,
+      },
+    });
   }
   return items;
 }
@@ -600,7 +644,10 @@ export async function recordWebReviewOutcome(
     throw new Error("Review timestamp is in the future");
   }
   const db = await openDb();
-  const tx = db.transaction([STORE_NAME, REVIEWS_STORE], "readwrite");
+  const storeNames = db.objectStoreNames.contains("reviewEnrollments")
+    ? [STORE_NAME, REVIEWS_STORE, "reviewEnrollments"]
+    : [STORE_NAME, REVIEWS_STORE];
+  const tx = db.transaction(storeNames, "readwrite");
   const annotation = (await requestToPromise(tx.objectStore(STORE_NAME).get(annotationId))) as
     | Annotation
     | undefined;
@@ -621,6 +668,25 @@ export async function recordWebReviewOutcome(
     updatedAt: now,
   };
   await requestToPromise(store.put(record));
+  if (db.objectStoreNames.contains("reviewEnrollments")) {
+    const enrollmentStore = tx.objectStore("reviewEnrollments");
+    const enrollment = (await requestToPromise(enrollmentStore.get(annotationId))) as
+      | ReviewEnrollment
+      | undefined;
+    if (enrollment && enrollment.deletedAt == null) {
+      await requestToPromise(
+        enrollmentStore.put({
+          ...enrollment,
+          box: record.box,
+          dueAt: record.dueAt,
+          lastReviewedAt: record.lastReviewedAt,
+          totalReviews: record.totalReviews,
+          suspended: record.suspended,
+          updatedAt: now,
+        }),
+      );
+    }
+  }
 }
 
 /**
@@ -680,4 +746,18 @@ export async function searchWebAnnotations(
         compareStrings(a.id, b.id),
     )
     .slice(0, capped);
+}
+
+export async function searchWebAnnotationEntries(
+  query: string,
+  limit: number,
+): Promise<AnnotationSearchHit[]> {
+  const annotations = await searchWebAnnotations(query, limit);
+  const db = await openDb();
+  const { reviews } = await readAnnotationsAndReviews(db);
+  return annotations.map((annotation) => ({
+    annotation,
+    hasReflection: Boolean(annotation.note?.trim()),
+    enrolled: reviews.get(annotation.id)?.suspended === false,
+  }));
 }

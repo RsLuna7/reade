@@ -21,6 +21,12 @@ import {
   normalizeAnnotationColorName,
   normalizeAnnotationColorNames,
 } from "../lib/annotations";
+import {
+  isAnnotationTone,
+  legacyColorToTone,
+  toneToLegacyColor,
+  type AnnotationTone,
+} from "../lib/annotationModel";
 import { normalizeReviewCardMode, type ReviewCardMode } from "../lib/clozeCard";
 import type { ReaderMotionLevel } from "../lib/motion";
 import {
@@ -120,6 +126,10 @@ const READER_VIEWS = new Set<ReaderView>([
 
 const ANNOTATION_TOOLS = new Set<AnnotationToolPreference>(["view", "highlight", "underline"]);
 const ANNOTATION_COLORS = new Set<AnnotationColorPreference>(["yellow", "green", "blue", "pink"]);
+
+function isStoredAnnotationColor(value: unknown): value is AnnotationColorPreference {
+  return typeof value === "string" && ANNOTATION_COLORS.has(value as AnnotationColorPreference);
+}
 
 export function normalizeAnnotationTool(
   value: unknown,
@@ -230,6 +240,7 @@ type PersistedReaderPreferences = Partial<
     | "motionLevel"
     | "highlightColor"
     | "underlineColor"
+    | "excerptTone"
     | "annotationColorNames"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
@@ -277,6 +288,11 @@ export function migrateReaderPreferences(
     ...(ANNOTATION_COLORS.has(state.underlineColor as AnnotationColorPreference)
       ? { underlineColor: state.underlineColor }
       : {}),
+    ...(isAnnotationTone(state.excerptTone)
+      ? { excerptTone: state.excerptTone }
+      : isStoredAnnotationColor(state.highlightColor)
+        ? { excerptTone: legacyColorToTone(state.highlightColor) }
+        : {}),
     // 颜色语义命名(plan-annotation-color-names):缺键/坏值逐色回落默认。
     ...(state.annotationColorNames && typeof state.annotationColorNames === "object"
       ? { annotationColorNames: normalizeAnnotationColorNames(state.annotationColorNames) }
@@ -338,6 +354,7 @@ interface ReaderState {
   annotationTool: AnnotationToolPreference;
   highlightColor: AnnotationColorPreference;
   underlineColor: AnnotationColorPreference;
+  excerptTone: AnnotationTone;
   /**
    * 四色语义命名(plan-annotation-color-names):纯展示偏好,持久化、
    * 双端同构;不写入任何标注数据或导出格式。
@@ -420,6 +437,7 @@ interface ReaderState {
   setAnnotationTool: (tool: AnnotationToolPreference) => void;
   setHighlightColor: (color: AnnotationColorPreference) => void;
   setUnderlineColor: (color: AnnotationColorPreference) => void;
+  setExcerptTone: (tone: AnnotationTone) => void;
   /** trim + ≤6 字符;空值回落该色默认名。 */
   setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
   resetAnnotationColorNames: () => void;
@@ -531,6 +549,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationTool: "view",
         highlightColor: "yellow",
         underlineColor: "blue",
+        excerptTone: "sand",
         annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
         fuzzyAnnotationAnchoring: false,
         showScrollMap: true,
@@ -744,11 +763,17 @@ export const useReaderStore = create<ReaderState>()(
         },
 
         setHighlightColor: (color) => {
-          set({ highlightColor: normalizeAnnotationColor(color) });
+          const highlightColor = normalizeAnnotationColor(color);
+          set({ highlightColor, excerptTone: legacyColorToTone(highlightColor) });
         },
 
         setUnderlineColor: (color) => {
           set({ underlineColor: normalizeAnnotationColor(color, "blue") });
+        },
+
+        setExcerptTone: (tone) => {
+          const excerptTone = isAnnotationTone(tone) ? tone : "sand";
+          set({ excerptTone, highlightColor: toneToLegacyColor(excerptTone) });
         },
 
         setAnnotationColorName: (color, name) => {
@@ -851,6 +876,7 @@ export const useReaderStore = create<ReaderState>()(
             annotationTool: "view",
             highlightColor: "yellow",
             underlineColor: "blue",
+            excerptTone: "sand",
             annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
             fuzzyAnnotationAnchoring: false,
             showScrollMap: true,
@@ -909,6 +935,7 @@ export const useReaderStore = create<ReaderState>()(
         expandedPaths: state.expandedPaths,
         highlightColor: state.highlightColor,
         underlineColor: state.underlineColor,
+        excerptTone: state.excerptTone,
         annotationColorNames: state.annotationColorNames,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
@@ -951,6 +978,14 @@ export const useReaderStore = create<ReaderState>()(
             preferences.underlineColor,
             current.underlineColor,
           ),
+          excerptTone: isAnnotationTone(preferences.excerptTone)
+            ? preferences.excerptTone
+            : legacyColorToTone(
+                normalizeAnnotationColor(
+                  preferences.highlightColor,
+                  current.highlightColor,
+                ),
+              ),
           // 旧持久化数据没有该键时,归一函数补齐全部默认名。
           annotationColorNames: normalizeAnnotationColorNames(
             preferences.annotationColorNames,

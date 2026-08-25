@@ -4,6 +4,7 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import type {
   Annotation,
+  AnnotationSearchHit,
   AssetPayload,
   Collection,
   CollectionItem,
@@ -26,6 +27,17 @@ import type {
   ReviewSummary,
   SearchResult,
 } from "./backend";
+import type {
+  AnnotationEntryKind,
+  DocumentAnnotationBundle,
+  Excerpt,
+  ExcerptAppearance,
+  ExcerptDraft,
+  ReadingPlace,
+  ReadingPlaceDraft,
+  Reflection,
+  ReviewEnrollment,
+} from "./annotationModel";
 
 function asBytes(value: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   if (value instanceof Uint8Array) return value;
@@ -98,6 +110,43 @@ export function deleteAnnotation(id: string): Promise<void> {
 export function clearDocumentAnnotations(relativePath: string): Promise<void> {
   return invoke("clear_document_annotations", { relativePath });
 }
+export function listDocumentAnnotations(relativePath: string): Promise<DocumentAnnotationBundle> {
+  return invoke("list_document_annotations", { relativePath });
+}
+export function createExcerpt(draft: ExcerptDraft): Promise<Excerpt> {
+  return invoke("create_excerpt", { draft });
+}
+export function updateExcerptAppearance(
+  id: string,
+  appearance: ExcerptAppearance,
+): Promise<Excerpt> {
+  return invoke("update_excerpt_appearance", { id, appearance });
+}
+export function createReadingPlace(draft: ReadingPlaceDraft): Promise<ReadingPlace> {
+  return invoke("create_reading_place", { draft });
+}
+export function upsertReflection(
+  entryId: string,
+  entryKind: AnnotationEntryKind,
+  body: string,
+): Promise<Reflection> {
+  return invoke("upsert_reflection", { entryId, entryKind, body });
+}
+export function deleteReflection(entryId: string): Promise<void> {
+  return invoke("delete_reflection", { entryId });
+}
+export function deleteAnnotationEntry(id: string, entryKind: AnnotationEntryKind): Promise<void> {
+  return invoke("delete_annotation_entry", { id, entryKind });
+}
+export function restoreAnnotationEntry(id: string, entryKind: AnnotationEntryKind): Promise<void> {
+  return invoke("restore_annotation_entry", { id, entryKind });
+}
+export function setReviewEnrollment(
+  excerptId: string,
+  enabled: boolean,
+): Promise<ReviewEnrollment | null> {
+  return invoke("set_review_enrollment", { excerptId, enabled });
+}
 export function detectMovedDocuments(): Promise<MovedDocumentCandidate[]> {
   return invoke("detect_moved_documents");
 }
@@ -118,11 +167,29 @@ export function recordReviewOutcome(annotationId: string, state: ReviewState): P
     suspended: state.suspended,
   });
 }
+export function recordExcerptReviewOutcome(
+  annotationId: string,
+  state: ReviewState,
+): Promise<void> {
+  return invoke("record_excerpt_review_outcome", {
+    annotationId,
+    boxLevel: state.box,
+    dueAt: state.dueAt,
+    lastReviewedAt: state.lastReviewedAt,
+    suspended: state.suspended,
+  });
+}
 export function reviewSummary(dayStartMs: number, nowMs: number): Promise<ReviewSummary> {
   return invoke("review_summary", { dayStartMs, nowMs });
 }
 export function searchAnnotations(query: string, limit: number): Promise<Annotation[]> {
   return invoke("search_annotations", { query, limit });
+}
+export function searchAnnotationEntries(
+  query: string,
+  limit: number,
+): Promise<AnnotationSearchHit[]> {
+  return invoke("search_annotation_entries", { query, limit });
 }
 export function listCollections(): Promise<CollectionSummary[]> {
   return invoke("list_collections");

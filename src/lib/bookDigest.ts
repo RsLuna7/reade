@@ -112,7 +112,7 @@ export interface BuildDigestMarkdownOptions {
 
 /** 编纂统计行文案（视图与导出共用同一措辞）。 */
 export function digestStatsLine(digest: BookDigest): string {
-  const parts = [`${digest.excerptCount} 条摘录`, `${digest.noteCount} 条笔记`];
+  const parts = [`${digest.excerptCount} 条摘录`, `${digest.noteCount} 条感悟`];
   if (digest.skippedBookmarks > 0) parts.push(`已略过 ${digest.skippedBookmarks} 条书签`);
   return parts.join(" · ");
 }
@@ -142,7 +142,7 @@ export function buildDigestMarkdown(
       }
       lines.push("");
       const note = annotation.note?.trim() ?? "";
-      if (note) lines.push(`笔记：${note}`, "");
+      if (note) lines.push(`感悟：${note}`, "");
       const meta = [annotationKindLabel(annotation.kind)];
       const position = annotationPositionLabel(annotation);
       if (position) meta.push(position);

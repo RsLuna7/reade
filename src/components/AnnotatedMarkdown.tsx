@@ -1,5 +1,6 @@
 import { memo, useLayoutEffect, useRef } from "react";
 import type { Annotation } from "../lib/backend";
+import type { AnchorResolution } from "../lib/annotationModel";
 import {
   buildTextIndex,
   clearAnnotationMarks,
@@ -8,6 +9,7 @@ import {
   isAnnotationMarkKind,
   paintTextQuoteMarks,
   type TextQuoteMarkInput,
+  type TextQuoteResolutionMethod,
 } from "../lib/annotations";
 import { MarkdownRenderer, type MarkdownRendererProps } from "./MarkdownRenderer";
 
@@ -19,10 +21,34 @@ function sameIdList(a: string[], b: string[]): boolean {
   return true;
 }
 
+function sameResolutions(
+  left: Array<{ id: string; resolution: AnchorResolution }>,
+  right: Array<{ id: string; resolution: AnchorResolution }>,
+): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index].id !== right[index].id) return false;
+    if (JSON.stringify(left[index].resolution) !== JSON.stringify(right[index].resolution)) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function markdownQuoteResolution(
+  method: TextQuoteResolutionMethod,
+): Extract<AnchorResolution, { status: "exact" } | { status: "approximate" }> {
+  if (method === "normalized" || method === "fuzzy") {
+    return { status: "approximate", method };
+  }
+  return { status: "exact", method };
+}
+
 export interface MarkdownPaintResult {
   broken: string[];
   /** Ids anchored through a non-exact step (normalized/fuzzy weak hint). */
   approximate: string[];
+  resolutions: Array<{ id: string; resolution: AnchorResolution }>;
 }
 
 export function paintMarkdownAnnotations(
@@ -46,10 +72,12 @@ export function paintMarkdownAnnotations(
     return offset ?? undefined;
   };
   const marks: TextQuoteMarkInput[] = [];
+  const markAnnotations: Annotation[] = [];
   for (const annotation of annotations) {
     if (!isAnnotationMarkKind(annotation.kind) || annotation.locator.kind !== "markdown" || !annotation.color) {
       continue;
     }
+    markAnnotations.push(annotation);
     marks.push({
       id: annotation.id,
       color: annotation.color,
@@ -65,6 +93,27 @@ export function paintMarkdownAnnotations(
   }
   const painted = paintTextQuoteMarks(markdownRoot, marks, index, { fuzzy: options?.fuzzy });
   const broken = [...painted.broken];
+  const brokenSet = new Set(painted.broken);
+  const resolutions: Array<{ id: string; resolution: AnchorResolution }> = [];
+  for (const annotation of markAnnotations) {
+    if (annotation.locator.kind !== "markdown") continue;
+    if (brokenSet.has(annotation.id)) {
+      const headingId = annotation.locator.headingId;
+      const headingExists = Boolean(
+        headingId && markdownRoot.querySelector(`#${CSS.escape(headingId)}`),
+      );
+      resolutions.push({
+        id: annotation.id,
+        resolution: { status: "detached", fallback: headingExists ? "heading" : null },
+      });
+      continue;
+    }
+    const approx = painted.approximate.get(annotation.id);
+    resolutions.push({
+      id: annotation.id,
+      resolution: approx ? markdownQuoteResolution(approx) : { status: "exact", method: "exact" },
+    });
+  }
   for (const annotation of annotations) {
     if (annotation.kind === "bookmark" && annotation.locator.kind === "bookmark") {
       const headingId =
@@ -79,6 +128,7 @@ export function paintMarkdownAnnotations(
   return {
     broken: Array.from(new Set(broken)),
     approximate: Array.from(painted.approximate.keys()),
+    resolutions,
   };
 }
 
@@ -91,6 +141,7 @@ interface AnnotatedMarkdownProps extends Pick<
   fuzzyAnchoring?: boolean;
   onBrokenIdsChange?: (ids: string[]) => void;
   onApproximateIdsChange?: (ids: string[]) => void;
+  onResolutionsChange?: (resolutions: Array<{ id: string; resolution: AnchorResolution }>) => void;
 }
 
 export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
@@ -103,10 +154,12 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
   onLinkPreviewCancel,
   onBrokenIdsChange,
   onApproximateIdsChange,
+  onResolutionsChange,
 }: AnnotatedMarkdownProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const lastBrokenRef = useRef<string[]>([]);
   const lastApproximateRef = useRef<string[]>([]);
+  const lastResolutionsRef = useRef<Array<{ id: string; resolution: AnchorResolution }>>([]);
   const lastPaintRef = useRef<{
     annotations: Annotation[];
     content: string;
@@ -146,6 +199,10 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
     if (!sameIdList(lastApproximateRef.current, painted.approximate)) {
       lastApproximateRef.current = painted.approximate;
       onApproximateIdsChange?.(painted.approximate);
+    }
+    if (!sameResolutions(lastResolutionsRef.current, painted.resolutions)) {
+      lastResolutionsRef.current = painted.resolutions;
+      onResolutionsChange?.(painted.resolutions);
     }
   });
 

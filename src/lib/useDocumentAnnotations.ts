@@ -1,12 +1,14 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearDocumentAnnotations,
+  createExcerpt,
   deleteAnnotation,
   listAnnotations,
   upsertAnnotation,
   type Annotation,
   type AnnotationColor,
 } from "./backend";
+import { excerptToLegacyAnnotation, type ExcerptDraft } from "./annotationModel";
 
 const MAX_UNDO = 20;
 
@@ -110,6 +112,19 @@ export function useDocumentAnnotations(relativePath: string | null) {
     [pushUndo, updateAnnotations],
   );
 
+  const saveExcerpt = useCallback(
+    async (draft: ExcerptDraft) => {
+      const excerpt = await createExcerpt(draft);
+      const annotation = excerptToLegacyAnnotation(excerpt);
+      updateAnnotations((current) =>
+        sortedAnnotations([annotation, ...current.filter((item) => item.id !== annotation.id)]),
+      );
+      pushUndo({ type: "create", id: excerpt.id });
+      return excerpt;
+    },
+    [pushUndo, updateAnnotations],
+  );
+
   const remove = useCallback(
     async (id: string, options?: { recordUndo?: boolean }) => {
       const existing = annotationsRef.current.find((item) => item.id === id);
@@ -194,6 +209,7 @@ export function useDocumentAnnotations(relativePath: string | null) {
     canUndo,
     reload,
     save,
+    saveExcerpt,
     remove,
     clearAll,
     undo,

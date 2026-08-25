@@ -191,7 +191,7 @@ describe("buildBookDigest grouping", () => {
     expect(digest.excerptCount).toBe(1);
     expect(digest.noteCount).toBe(1);
     expect(digest.skippedBookmarks).toBe(1);
-    expect(digestStatsLine(digest)).toBe("1 条摘录 · 1 条笔记 · 已略过 1 条书签");
+    expect(digestStatsLine(digest)).toBe("1 条摘录 · 1 条感悟 · 已略过 1 条书签");
   });
 });
 
@@ -212,13 +212,13 @@ describe("buildDigestMarkdown", () => {
       [
         "# 长文指南 · 读书报告",
         "",
-        "2 条摘录 · 1 条笔记",
+        "2 条摘录 · 1 条感悟",
         "",
         "## 《intro》",
         "",
         "> 第一段摘录",
         "",
-        "笔记：很关键",
+        "感悟：很关键",
         "",
         "— 高亮 · 标题 intro · 2026-08-13",
         "",

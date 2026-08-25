@@ -63,7 +63,7 @@ describe("reading settings", () => {
       annotationTool: "view",
       highlightColor: "yellow",
       underlineColor: "blue",
-      annotationColorNames: { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" },
+      annotationColorNames: { yellow: "暖砂", green: "青灰", blue: "墨蓝", pink: "旧粉" },
       fuzzyAnnotationAnchoring: false,
       expandedPaths: [],
       treeLayout: {},
@@ -124,6 +124,7 @@ describe("reading settings", () => {
       motionLevel: "full",
       highlightColor: "green",
       underlineColor: "pink",
+      excerptTone: "sage",
       expandedPaths: ["正文"],
     });
     // The armed annotation tool is session-only: persisting it would turn the
@@ -624,10 +625,10 @@ describe("reading settings", () => {
 
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
-      yellow: "金句",
-      green: "疑问",
-      blue: "行动",
-      pink: "术语",
+      yellow: "暖砂",
+      green: "青灰",
+      blue: "墨蓝",
+      pink: "旧粉",
     });
 
     useReaderStore.getState().setAnnotationColorName("yellow", "  重点摘录截断  ");
@@ -635,7 +636,7 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().annotationColorNames.yellow).toBe("重点摘录截断");
     // 空值回落该色默认名。
     useReaderStore.getState().setAnnotationColorName("green", "   ");
-    expect(useReaderStore.getState().annotationColorNames.green).toBe("疑问");
+    expect(useReaderStore.getState().annotationColorNames.green).toBe("青灰");
 
     const stored = JSON.parse(
       localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
@@ -654,9 +655,9 @@ describe("reading settings", () => {
     await useReaderStore.persist.rehydrate();
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "灵感",
-      green: "疑问",
-      blue: "行动",
-      pink: "术语",
+      green: "青灰",
+      blue: "墨蓝",
+      pink: "旧粉",
     });
 
     // 旧持久化数据完全没有该键 → 全默认。
@@ -665,17 +666,17 @@ describe("reading settings", () => {
       JSON.stringify({ version: READER_PREFERENCES_VERSION, state: {} }),
     );
     await useReaderStore.persist.rehydrate();
-    expect(useReaderStore.getState().annotationColorNames.pink).toBe("术语");
+    expect(useReaderStore.getState().annotationColorNames.pink).toBe("旧粉");
   });
 
   it("resets color names alone and with the other reader preferences", () => {
     useReaderStore.getState().setAnnotationColorName("pink", "生词");
     useReaderStore.getState().resetAnnotationColorNames();
-    expect(useReaderStore.getState().annotationColorNames.pink).toBe("术语");
+    expect(useReaderStore.getState().annotationColorNames.pink).toBe("旧粉");
 
     useReaderStore.getState().setAnnotationColorName("yellow", "灵感");
     useReaderStore.getState().resetReaderPreferences();
-    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("暖砂");
   });
 
   it("persists and clamps the daily reading goal", () => {

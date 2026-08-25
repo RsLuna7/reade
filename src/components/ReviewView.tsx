@@ -207,7 +207,7 @@ export function ReviewView({
 
   const suspendCurrent = useCallback(() => {
     if (!currentItem) return;
-    const confirmed = window.confirm("不再回顾这条标注？它将不再出现在每日回顾中。");
+    const confirmed = window.confirm("不再把这条放进间隔回顾？之后可以从本文标注重新加入。");
     if (!confirmed) return;
     void grade("suspend");
   }, [currentItem, grade]);
@@ -404,7 +404,7 @@ export function ReviewView({
         <p className="review-complete-hint">
           {nextDueAt !== null
             ? `下次最早到期：${formatDueDate(nextDueAt)}`
-            : "在正文中划几条高亮或下划线，明天就会出现在这里。"}
+            : "从本文标注或全库摘录里，把想复习的摘录加入间隔回顾。"}
         </p>
         <div className="review-complete-actions">
           <button type="button" onClick={onExit}>
@@ -416,19 +416,19 @@ export function ReviewView({
   }
 
   return (
-    <div className="review-view" aria-label="每日回顾">
+    <div className="review-view" aria-label="间隔回顾">
       <header className="review-header">
         <button
           className="icon-button"
           type="button"
-          aria-label="退出回顾"
-          title="退出回顾（Esc）"
+          aria-label="退出间隔回顾"
+          title="退出间隔回顾（Esc）"
           onClick={onExit}
         >
           <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <div className="review-heading">
-          <h1>每日回顾</h1>
+          <h1>间隔回顾</h1>
           <span>
             {currentItem && session
               ? `回味你划下的段落 · ${session.cursor + 1} / ${queueLength}`

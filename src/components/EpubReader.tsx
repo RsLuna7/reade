@@ -3,6 +3,7 @@ import { ImageOff, ShieldAlert } from "lucide-react";
 import { openExternalLink, readEpubAsset, type Annotation, type EpubBlock, type EpubDocument, type EpubInline, type EpubTableSlot, type SearchLocator } from "../lib/backend";
 import {
   clearAnnotationMarks,
+  decorateApproximateAnnotationMarks,
   isAnnotationMarkKind,
   paintTextQuoteMarks,
   type TextQuoteMarkInput,
@@ -346,9 +347,9 @@ export function EpubReader({
     clearAnnotationMarks(root);
     const broken: string[] = [];
     const approximate: string[] = [];
-    // Group marks by anchor element so each subtree is walked once per paint;
-    // each group builds its index lazily, after earlier groups already wrapped.
     const groups = new Map<HTMLElement, TextQuoteMarkInput[]>();
+    const retryByChapter = new Map<HTMLElement, TextQuoteMarkInput[]>();
+    const chapterOnlyIds = new Set<string>();
     for (const annotation of annotations) {
       if (!isAnnotationMarkKind(annotation.kind) || annotation.locator.kind !== "epub" || !annotation.color) continue;
       const chapter = root.querySelector<HTMLElement>(
@@ -361,30 +362,60 @@ export function EpubReader({
       const block = chapter.querySelector<HTMLElement>(
         `.epub-block[data-block-index="${annotation.locator.blockIndex}"]`,
       );
-      const target = block ?? chapter;
-      const marks = groups.get(target) ?? [];
-      if (!marks.length) groups.set(target, marks);
-      marks.push({
+      const mark: TextQuoteMarkInput = {
         id: annotation.id,
         color: annotation.color,
         markKind: annotation.kind,
         quote: annotation.locator.quote,
         prefix: annotation.locator.prefix,
         suffix: annotation.locator.suffix,
-        // The captured offset disambiguates quotes repeated inside the block.
         hintStart: annotation.locator.startOffset,
-      });
+      };
+      if (block) {
+        const marks = groups.get(block) ?? [];
+        if (!marks.length) groups.set(block, marks);
+        marks.push(mark);
+        const retries = retryByChapter.get(chapter) ?? [];
+        if (!retries.length) retryByChapter.set(chapter, retries);
+        retries.push(mark);
+      } else {
+        chapterOnlyIds.add(annotation.id);
+        const marks = groups.get(chapter) ?? [];
+        if (!marks.length) groups.set(chapter, marks);
+        marks.push(mark);
+      }
     }
+    const recovered = new Set<string>();
+    const chapterLevel = new Set<string>();
     for (const [target, marks] of groups) {
-      // EPUB text layers mostly diverge in whitespace; retry normalized
-      // before declaring a mark broken (fuzzy follows the global preference).
       const painted = paintTextQuoteMarks(target, marks, undefined, {
         normalizeWhitespace: true,
         fuzzy: fuzzyAnchoring,
       });
       broken.push(...painted.broken);
       approximate.push(...painted.approximate.keys());
+      for (const mark of marks) {
+        if (!painted.broken.includes(mark.id) && chapterOnlyIds.has(mark.id)) {
+          chapterLevel.add(mark.id);
+          approximate.push(mark.id);
+        }
+      }
     }
+    for (const [chapter, marks] of retryByChapter) {
+      const missed = marks.filter((mark) => broken.includes(mark.id));
+      if (!missed.length) continue;
+      const painted = paintTextQuoteMarks(chapter, missed, undefined, {
+        normalizeWhitespace: true,
+        fuzzy: fuzzyAnchoring,
+      });
+      for (const mark of missed) {
+        if (painted.broken.includes(mark.id)) continue;
+        recovered.add(mark.id);
+        chapterLevel.add(mark.id);
+        approximate.push(mark.id);
+      }
+    }
+    decorateApproximateAnnotationMarks(root, chapterLevel);
     for (const annotation of annotations) {
       if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
       if (annotation.locator.target.format !== "epub") continue;
@@ -400,7 +431,7 @@ export function EpubReader({
         broken.push(annotation.id);
       }
     }
-    onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
+    onBrokenAnnotationsChange?.(Array.from(new Set(broken.filter((id) => !recovered.has(id)))));
     onApproximateAnnotationsChange?.(Array.from(new Set(approximate)));
   }, [annotations, document, fuzzyAnchoring, onApproximateAnnotationsChange, onBrokenAnnotationsChange]);
 

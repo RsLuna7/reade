@@ -99,13 +99,18 @@ describe("v4 → v5 upgrade", () => {
 
     resetWebAnnotationStoreForTests();
     const db = await openRaw();
-    expect(db.version).toBe(5);
+    expect(db.version).toBe(6);
     expect(Array.from(db.objectStoreNames).sort()).toEqual([
       "annotationReviews",
+      "annotationV6Meta",
       "annotations",
       "collectionItems",
       "collections",
       "documents",
+      "excerpts",
+      "readingPlaces",
+      "reflections",
+      "reviewEnrollments",
     ]);
     db.close();
   });

@@ -69,6 +69,13 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.document-tree__node--pin-end\s*\{[^}]*border-bottom/s);
   });
 
+  it("centers a measured article so leftover pane space is not a right-side void", () => {
+    expect(css).toMatch(/\.article-shell\s*\{[^}]*margin-inline:\s*auto/s);
+    expect(css).toMatch(
+      /\.reading-scroll\[data-writing="vertical"\] \.article-shell\s*\{[^}]*margin-inline:\s*0/s,
+    );
+  });
+
   it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
     // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
     // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。
@@ -224,10 +231,10 @@ describe("annotation color tokens", () => {
 
   it("routes marks, list chips, dots, swatches and ticks through the tokens", () => {
     expect(css).toMatch(
-      /\.annotation-mark--highlight\.annotation-mark--yellow\s*\{\s*background:\s*var\(--annot-yellow-fill\)/,
+      /\.annotation-mark--highlight\.annotation-mark--yellow,\s*\.annotation-mark--highlight\.annotation-mark--pink\s*\{\s*background:\s*var\(--excerpt-sand-fill\)/,
     );
     expect(css).toMatch(
-      /\.annotation-mark--underline\.annotation-mark--pink\s*\{\s*border-bottom-color:\s*var\(--annot-pink-line\)/,
+      /\.annotation-mark--underline\.annotation-mark--yellow,\s*\.annotation-mark--underline\.annotation-mark--pink\s*\{\s*border-bottom-color:\s*var\(--excerpt-sand-line\)/,
     );
     expect(css).toMatch(
       /\.annotation-list-kind--green\s*\{\s*background:\s*var\(--annot-green-fill\)/,
@@ -248,6 +255,36 @@ describe("annotation color tokens", () => {
     expect(pdfRules.length).toBeGreaterThan(0);
     for (const body of pdfRules) {
       expect(body).not.toContain("var(--annot-");
+      expect(body).not.toContain("var(--excerpt-");
     }
+    expect(css).toMatch(/\.pdf-user-highlight--geometric\s*\{[^}]*outline:/s);
+    expect(css).toMatch(/\.annotation-method-dot--geometric\s*\{/);
+  });
+
+  it("defines exactly three low-chroma excerpt tones for both theme modes", () => {
+    for (const tone of ["sand", "sage", "slate"]) {
+      expect(css).toMatch(new RegExp(`:root\\s*\\{[^}]*--excerpt-${tone}:`, "s"));
+      expect(css).toMatch(
+        new RegExp(`:root\\[data-theme\\$="-dark"\\]\\s*\\{[^}]*--excerpt-${tone}:`, "s"),
+      );
+    }
+    expect(css).not.toMatch(/--excerpt-(?:pink|yellow|green|blue):/);
+    const fillAlphas = [...css.matchAll(/--excerpt-(?:sand|sage|slate)-fill:\s*rgb\([^/]+\/\s*(\d+)%\)/g)]
+      .map((match) => Number(match[1]));
+    expect(fillAlphas).toHaveLength(6);
+    expect(fillAlphas.every((alpha) => alpha <= 30)).toBe(true);
+  });
+
+  it("styles the silent markdown panel and parks the toolbar as a 44px sheet on narrow viewports", () => {
+    expect(css).toContain(".document-annotations");
+    expect(css).toContain(".document-annotations-section-toggle");
+    expect(css).toContain(".annotation-tone-swatch--sand");
+    expect(css).toMatch(/\.annotation-tone-swatch--sand\s*\{\s*background:\s*var\(--excerpt-sand\)/);
+    expect(css).toMatch(
+      /@media \(max-width: 640px\)\s*\{\s*\.annotation-toolbar\s*\{[^}]*bottom:/s,
+    );
+    expect(css).toMatch(
+      /@media \(max-width: 640px\)[\s\S]*\.annotation-toolbar button:not\(\.annotation-color-swatch\)[\s\S]*min-height:\s*44px/,
+    );
   });
 });

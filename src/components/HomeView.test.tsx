@@ -257,33 +257,14 @@ describe("HomeView (desktop)", () => {
     });
   });
 
-  it("keeps the review card out of the tree until the probe provides data", async () => {
+  it("never shows a due-review card on the home view", async () => {
     setHomeState([doc("guide.md")]);
 
-    const view = render(<HomeView />);
+    render(<HomeView />);
     await screen.findByRole("region", { name: "继续阅读" });
     expect(screen.queryByRole("region", { name: "今日回顾" })).not.toBeInTheDocument();
     expect(screen.queryByText("开始回顾")).not.toBeInTheDocument();
-
-    const onStart = vi.fn();
-    view.rerender(<HomeView reviewSummary={{ pendingCount: 3, onStart }} />);
-    expect(await screen.findByRole("region", { name: "今日回顾" })).toHaveTextContent(
-      "待回顾 3 条标注",
-    );
-    fireEvent.click(screen.getByRole("button", { name: "开始回顾" }));
-    expect(onStart).toHaveBeenCalledTimes(1);
-  });
-
-  it("shows the completed review state when nothing is due", async () => {
-    setHomeState([doc("guide.md")]);
-
-    render(
-      <HomeView reviewSummary={{ pendingCount: 0, reviewedToday: 5, onStart: vi.fn() }} />,
-    );
-
-    const card = await screen.findByRole("region", { name: "今日回顾" });
-    expect(card).toHaveTextContent("今天的回顾已完成，共回顾 5 条。");
-    expect(screen.queryByRole("button", { name: "开始回顾" })).not.toBeInTheDocument();
+    expect(screen.queryByText(/待回顾/)).not.toBeInTheDocument();
   });
 
   it("degrades to the empty state when the session store fails", async () => {

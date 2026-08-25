@@ -7,6 +7,7 @@ import type {
   AnnotationRect,
   BookmarkTarget,
 } from "./backend";
+import type { AnchorResolution } from "./annotationModel";
 
 export const ANNOTATION_COLORS: AnnotationColor[] = ["yellow", "green", "blue", "pink"];
 export const MAX_SELECTION_CHARS = 2000;
@@ -23,12 +24,12 @@ export const ANNOTATION_COLOR_WORDS: Record<AnnotationColor, string> = {
   pink: "粉",
 };
 
-/** 默认语义名（CN-D1）：与"金句卡片"等产品词汇呼应的阅读四分法。 */
+/** 默认外观名：三色非语义；粉色仅用于辨认旧数据。 */
 export const DEFAULT_ANNOTATION_COLOR_NAMES: Record<AnnotationColor, string> = {
-  yellow: "金句",
-  green: "疑问",
-  blue: "行动",
-  pink: "术语",
+  yellow: "暖砂",
+  green: "青灰",
+  blue: "墨蓝",
+  pink: "旧粉",
 };
 
 /** 名字长度上限（CN-D4）：chip/tooltip 排版可控。 */
@@ -54,7 +55,7 @@ export function normalizeAnnotationColorNames(
   return names;
 }
 
-/** 展示名："金句"；未提供命名表时用默认表。 */
+/** 展示名："暖砂"；未提供命名表时用默认表。 */
 export function colorDisplayName(
   color: AnnotationColor,
   names?: Partial<Record<AnnotationColor, string>>,
@@ -62,7 +63,7 @@ export function colorDisplayName(
   return normalizeAnnotationColorName(color, names?.[color]);
 }
 
-/** 无障碍/tooltip 标签："金句（黄色）"——保留颜色词，改名不丢底色信息。 */
+/** 无障碍/tooltip 标签："暖砂（黄色）"——保留颜色词，改名不丢底色信息。 */
 export function colorAccessibleLabel(
   color: AnnotationColor,
   names?: Partial<Record<AnnotationColor, string>>,
@@ -94,8 +95,12 @@ export function createAnnotationId(): string {
   return `ann-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+export function normalizeSelectionText(text: string): string {
+  return text.replace(/\s+/g, " ").trim();
+}
+
 export function clampSelectionText(text: string): string {
-  const normalized = text.replace(/\s+/g, " ").trim();
+  const normalized = normalizeSelectionText(text);
   if (normalized.length <= MAX_SELECTION_CHARS) return normalized;
   return normalized.slice(0, MAX_SELECTION_CHARS);
 }
@@ -563,6 +568,8 @@ export interface PaintTextQuoteResult {
 
 /** Hover/badge copy for non-exact anchor hits (list dot + in-document mark). */
 export const APPROXIMATE_ANCHOR_LABEL = "非精确定位";
+/** PDF stored-rect fallback: the quote no longer matches the live text layer. */
+export const GEOMETRIC_FALLBACK_LABEL = "旧版面位置";
 
 function markMarkAsApproximate(elements: HTMLElement[]): void {
   for (const element of elements) {
@@ -572,6 +579,16 @@ function markMarkAsApproximate(elements: HTMLElement[]): void {
   // The trailing segment carries the visible dot so a mark split across
   // several text nodes shows a single badge.
   elements[elements.length - 1]?.classList.add("annotation-mark--approx-tail");
+}
+
+/** Marks already-wrapped nodes as approximate (chapter-level EPUB retry, etc.). */
+export function decorateApproximateAnnotationMarks(root: ParentNode, ids: Iterable<string>): void {
+  for (const id of ids) {
+    const elements = Array.from(
+      root.querySelectorAll<HTMLElement>(`[data-annotation-id="${CSS.escape(id)}"]`),
+    );
+    if (elements.length) markMarkAsApproximate(elements);
+  }
 }
 
 /**
@@ -850,10 +867,51 @@ export function normalizePdfRects(
 export interface ResolvedPdfHighlight {
   rects: AnnotationRect[];
   /**
-   * How the quote anchored in the live text layer; null when the stored
-   * rects served as the fallback (text layer missing or quote unmatched).
+   * How the quote anchored in the live text layer; null when the live quote
+   * did not produce paintable rects (unchecked / geometric / detached).
    */
   method: TextQuoteResolutionMethod | null;
+  /** Honest paint/list status. Stored-rect fallback is never `exact`. */
+  resolution: AnchorResolution;
+}
+
+function pdfQuoteResolution(
+  method: TextQuoteResolutionMethod,
+): Extract<AnchorResolution, { status: "exact" } | { status: "approximate" }> {
+  if (method === "normalized" || method === "fuzzy") {
+    return { status: "approximate", method };
+  }
+  return { status: "exact", method };
+}
+
+/**
+ * Whether a resolved PDF highlight should paint, and which honesty class/label
+ * it carries. Detached items must not draw a fake precise overlay.
+ */
+export function pdfHighlightPaintDecision(resolution: AnchorResolution): {
+  paint: boolean;
+  className: string | null;
+  title: string | null;
+} {
+  switch (resolution.status) {
+    case "detached":
+    case "sourceMissing":
+      return { paint: false, className: null, title: null };
+    case "geometricFallback":
+      return {
+        paint: true,
+        className: "pdf-user-highlight--geometric",
+        title: GEOMETRIC_FALLBACK_LABEL,
+      };
+    case "approximate":
+      return {
+        paint: true,
+        className: "pdf-user-highlight--approx",
+        title: APPROXIMATE_ANCHOR_LABEL,
+      };
+    default:
+      return { paint: true, className: null, title: null };
+  }
 }
 
 /**
@@ -863,9 +921,12 @@ export interface ResolvedPdfHighlight {
  * text layer and measured with `getClientRects`, so annotations created
  * against a differently laid-out text layer (or an older, buggy one) self-heal
  * to the current glyph positions. A whitespace-normalized retry absorbs the
- * layout differences between pdf.js text-layer versions. The stored rects
- * only serve as a fallback while the text layer is not rendered yet or the
- * quote no longer matches.
+ * layout differences between pdf.js text-layer versions.
+ *
+ * Stored rects are *not* an exact hit:
+ * - text layer missing → `unchecked` (not yet verified on this revision);
+ * - text layer present but quote missed → `geometricFallback` ("旧版面位置");
+ * - no stored rects either → `detached` (no overlay).
  */
 export function resolvePdfHighlightRects(input: {
   textLayer: HTMLElement | null;
@@ -876,8 +937,12 @@ export function resolvePdfHighlightRects(input: {
   index?: TextIndex;
   /** Enable the fuzzy last-resort step of the resolution chain (default off). */
   fuzzy?: boolean;
+  /** Physical page for geometric/detached reporting. */
+  page?: number;
 }): ResolvedPdfHighlight {
   const { textLayer, pageRect, locator } = input;
+  const page = input.page && input.page > 0 ? input.page : 1;
+  const stored = locator.rects;
   if (textLayer && pageRect) {
     const index = input.index ?? buildTextIndex(textLayer);
     const match = resolveTextQuote(index.text, locator.quote, locator.prefix, locator.suffix, {
@@ -889,11 +954,32 @@ export function resolvePdfHighlightRects(input: {
       if (range) {
         const measure = input.rectsForRange ?? ((target: Range) => target.getClientRects());
         const rects = normalizePdfRects(measure(range), pageRect);
-        if (rects.length) return { rects, method: match.method };
+        if (rects.length) {
+          return { rects, method: match.method, resolution: pdfQuoteResolution(match.method) };
+        }
       }
     }
+    if (stored.length) {
+      return {
+        rects: stored,
+        method: null,
+        resolution: { status: "geometricFallback", page },
+      };
+    }
+    return {
+      rects: [],
+      method: null,
+      resolution: { status: "detached", fallback: "page" },
+    };
   }
-  return { rects: locator.rects, method: null };
+  if (stored.length) {
+    return { rects: stored, method: null, resolution: { status: "unchecked" } };
+  }
+  return {
+    rects: [],
+    method: null,
+    resolution: { status: "detached", fallback: "page" },
+  };
 }
 
 export function resolveAnnotationAnchor(

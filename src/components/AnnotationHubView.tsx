@@ -120,7 +120,7 @@ export function AnnotationHubView({
   }
 
   return (
-    <div className="annotation-hub-view" aria-label="全库标注中枢">
+    <div className="annotation-hub-view" aria-label="全库摘录">
       <header className="review-header annotation-hub-header">
         <button
           className="icon-button"
@@ -132,7 +132,7 @@ export function AnnotationHubView({
           <ArrowLeft size={16} aria-hidden="true" />
         </button>
         <div className="review-heading">
-          <h1>全库标注</h1>
+          <h1>全库摘录</h1>
           <span>{summaryLine}</span>
         </div>
         <div className="annotation-hub-tools">
@@ -149,8 +149,8 @@ export function AnnotationHubView({
           <AnnotationFilterControls filters={filters} onChange={onFiltersChange} />
           {/* 颜色语义图例(plan-annotation-color-names §2.2):常显命名,
               名字互相易混时也有纠错线索;在阅读设置中可改名。 */}
-          <section className="annotation-hub-legend" aria-label="颜色语义图例">
-            <h3>颜色语义</h3>
+          <section className="annotation-hub-legend" aria-label="颜色外观">
+            <h3>颜色外观</h3>
             <ul>
               {ANNOTATION_COLORS.map((color) => (
                 <li key={color}>

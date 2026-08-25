@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
-import { BookOpen, CalendarClock, Clock3, FilePlus2, Flame, Sparkles } from "lucide-react";
+import { BookOpen, CalendarClock, Clock3, FilePlus2, Flame } from "lucide-react";
 import {
   APP_RUNTIME,
   listAnnotations,
@@ -35,19 +35,10 @@ const FORMAT_LABELS: Record<DocumentFormat, string> = {
 };
 
 /**
- * ④「今日回顾」的扩展点(home-view plan §3.3):数据接口由批注回顾方案
- * 提供;探测结果为 null / 未提供时整卡不渲染,不留死 UI。
+ * Interval review is opened from 全库摘录 or the command palette
+ * (annotation redesign §3.4); Home does not show a due card.
  */
-export interface HomeReviewSummary {
-  pendingCount: number;
-  /** 今日已完成的回顾数;pendingCount 为 0 时用于「已完成」态文案。 */
-  reviewedToday?: number;
-  onStart: () => void;
-}
-
 export interface HomeViewProps {
-  reviewSummary?: HomeReviewSummary | null;
-  /** Injectable session source for harnesses/tests; defaults to the backend. */
   loadSessions?: (fromMs: number, toMs: number) => Promise<ReadingSession[]>;
   /**
    * 阅读时间预估(plan-reading-time-estimate §3.3):继续阅读卡的
@@ -117,7 +108,6 @@ function GoalRing({ progress }: { progress: number }) {
 }
 
 export function HomeView({
-  reviewSummary = null,
   loadSessions = listReadingSessions,
   remainingEstimate,
   loadAnnotations = listAnnotations,
@@ -475,38 +465,6 @@ export function HomeView({
                 </div>
               ))}
             </div>
-          </section>
-        )}
-
-        {reviewSummary && (
-          <section
-            className="home-card stats-enter"
-            style={staggerStyle(cardIndex++)}
-            aria-label="今日回顾"
-          >
-            <div className="home-card-head">
-              <h2>
-                <Sparkles size={15} aria-hidden="true" />
-                今日回顾
-              </h2>
-            </div>
-            {reviewSummary.pendingCount > 0 ? (
-              <>
-                <p className="home-progress-hint">待回顾 {reviewSummary.pendingCount} 条标注</p>
-                <button
-                  type="button"
-                  className="home-review-start"
-                  onClick={reviewSummary.onStart}
-                >
-                  开始回顾
-                </button>
-              </>
-            ) : (
-              <p className="home-progress-hint">
-                今天的回顾已完成
-                {reviewSummary.reviewedToday ? `，共回顾 ${reviewSummary.reviewedToday} 条` : ""}。
-              </p>
-            )}
           </section>
         )}
       </div>

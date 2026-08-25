@@ -18,12 +18,15 @@ import {
   probeLibraryPath,
   readDocument,
   rebindDocumentAnnotations,
-  reviewSummary,
   searchAnnotations,
+  createExcerpt,
+  listDocumentAnnotations,
+  upsertReflection,
   upsertAnnotation,
   type Annotation,
   type ReadingSession,
 } from "./lib/backend";
+import { migrateLegacyAnnotation, type DocumentAnnotationBundle } from "./lib/annotationModel";
 import { buildAnnotationsMarkdown } from "./lib/annotationExport";
 import { readHomeBaseline } from "./lib/homeData";
 import { readReadingPosition, writeReadingPosition } from "./lib/readingPositions";
@@ -40,6 +43,32 @@ vi.mock("./lib/backend", async () => {
     ...actual,
     listAnnotations: vi.fn(async () => []),
     upsertAnnotation: vi.fn(async (annotation) => annotation),
+    createExcerpt: vi.fn(async (draft) => ({
+      ...draft,
+      sourceRevision: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deletedAt: null,
+      legacyKind: draft.appearance.style,
+      legacyColor: "yellow",
+      legacyTitle: null,
+      legacySelectedText: draft.sourceText,
+    })),
+    listDocumentAnnotations: vi.fn(async () => ({
+      excerpts: [],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    })),
+    upsertReflection: vi.fn(async (entryId, entryKind, body) => ({
+      entryId,
+      entryKind,
+      body,
+      createdAt: 1,
+      updatedAt: 1,
+      deletedAt: null,
+    })),
+    setReviewEnrollment: vi.fn(async () => null),
     deleteAnnotation: vi.fn(async () => undefined),
     clearDocumentAnnotations: vi.fn(async () => undefined),
     detectMovedDocuments: vi.fn(async () => []),
@@ -49,8 +78,6 @@ vi.mock("./lib/backend", async () => {
     listDocumentLinks: vi.fn(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 })),
     // 命令面板打开时拉合集;jsdom 无 Tauri 后端,默认空列表。
     listCollections: vi.fn(async () => []),
-    // 回顾探测与队列在 jsdom 中没有 Tauri 后端;默认零数据。
-    reviewSummary: vi.fn(async () => ({ dueCount: 0, reviewedToday: 0 })),
     listReviewQueue: vi.fn(async () => []),
     recordReviewOutcome: vi.fn(async () => undefined),
     readDocument: vi.fn(async () => {
@@ -94,6 +121,19 @@ if (typeof Range.prototype.getBoundingClientRect !== "function") {
   };
 }
 
+function documentBundleFromAnnotations(items: Annotation[]): DocumentAnnotationBundle {
+  const excerpts: DocumentAnnotationBundle["excerpts"] = [];
+  const places: DocumentAnnotationBundle["places"] = [];
+  const reflections: DocumentAnnotationBundle["reflections"] = [];
+  for (const item of items) {
+    const migrated = migrateLegacyAnnotation(item);
+    if (migrated.excerpt) excerpts.push(migrated.excerpt);
+    if (migrated.place) places.push(migrated.place);
+    if (migrated.reflection) reflections.push(migrated.reflection);
+  }
+  return { excerpts, places, reflections, reviewEnrollments: [] };
+}
+
 function mockMatchMedia(matches = false): void {
   Object.defineProperty(window, "matchMedia", {
     configurable: true,
@@ -120,6 +160,28 @@ beforeEach(() => {
   });
   vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(upsertAnnotation).mockReset().mockImplementation(async (annotation) => annotation);
+  vi.mocked(createExcerpt).mockReset().mockImplementation(async (draft) => ({
+    ...draft,
+    sourceRevision: null,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+    legacyKind: draft.appearance.style,
+    legacyColor: "yellow",
+    legacyTitle: null,
+    legacySelectedText: draft.sourceText,
+  }));
+  vi.mocked(listDocumentAnnotations).mockReset().mockImplementation(async (relativePath) =>
+    documentBundleFromAnnotations(await listAnnotations(relativePath)),
+  );
+  vi.mocked(upsertReflection).mockReset().mockImplementation(async (entryId, entryKind, body) => ({
+    entryId,
+    entryKind,
+    body,
+    createdAt: 1,
+    updatedAt: 1,
+    deletedAt: null,
+  }));
   vi.mocked(deleteAnnotation).mockReset().mockImplementation(async () => undefined);
   vi.mocked(detectMovedDocuments).mockReset().mockImplementation(async () => []);
   vi.mocked(rebindDocumentAnnotations).mockReset().mockImplementation(async () => 0);
@@ -129,9 +191,6 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 }));
   vi.mocked(listCollections).mockReset().mockImplementation(async () => []);
-  vi.mocked(reviewSummary)
-    .mockReset()
-    .mockImplementation(async () => ({ dueCount: 0, reviewedToday: 0 }));
   vi.mocked(listReviewQueue).mockReset().mockImplementation(async () => []);
   vi.mocked(readDocument).mockReset().mockImplementation(async () => {
     throw new Error("readDocument not mocked");
@@ -155,7 +214,7 @@ beforeEach(() => {
     theme: "paper-light",
     readingSettings: { ...DEFAULT_READING_SETTINGS },
     motionLevel: "subtle",
-    annotationColorNames: { yellow: "金句", green: "疑问", blue: "行动", pink: "术语" },
+    annotationColorNames: { yellow: "暖砂", green: "青灰", blue: "墨蓝", pink: "旧粉" },
     fuzzyAnnotationAnchoring: false,
     expandedPaths: [],
     activeView: "reader",
@@ -457,7 +516,7 @@ describe("annotation mark editing (B1)", () => {
     const bubble = await screen.findByRole("dialog", { name: "编辑标注" });
     expect(bubble).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为行动（蓝色）" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝（蓝色）" }));
     await waitFor(() => {
       expect(upsertAnnotation).toHaveBeenCalledWith(
         expect.objectContaining({ id: "ann-body", color: "blue" }),
@@ -522,16 +581,22 @@ describe("selection capture upgrade (B2/B3)", () => {
     const toolbar = await screen.findByRole("toolbar", { name: "标注工具条" });
     expect(toolbar).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "下划线" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "下划线" }));
     await waitFor(() => {
-      expect(upsertAnnotation).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "underline", selectedText: "Body" }),
+      expect(createExcerpt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          sourceText: "Body",
+          appearance: expect.objectContaining({ style: "underline" }),
+        }),
       );
     });
-    expect(await screen.findByText("已保存下划线")).toBeInTheDocument();
+    expect(upsertAnnotation).not.toHaveBeenCalled();
+    expect(await screen.findByText("已标记")).toBeInTheDocument();
+    expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
   });
 
-  it("applies a highlight in one step when a toolbar color swatch is clicked", async () => {
+  it("applies a sand-to-sage highlight from the more menu without switching the side panel", async () => {
     setMarkdownState();
     const view = render(<App />);
     await waitFor(() => {
@@ -551,13 +616,48 @@ describe("selection capture upgrade (B2/B3)", () => {
     fireEvent.pointerUp(document);
     await screen.findByRole("toolbar", { name: "标注工具条" });
 
-    fireEvent.click(screen.getByRole("button", { name: "以疑问（绿色）高亮" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "青灰" }));
     await waitFor(() => {
-      expect(upsertAnnotation).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "highlight", color: "green" }),
+      expect(createExcerpt).toHaveBeenCalledWith(
+        expect.objectContaining({
+          appearance: expect.objectContaining({ style: "highlight", tone: "sage" }),
+        }),
       );
     });
+    expect(upsertAnnotation).not.toHaveBeenCalled();
+    expect(useReaderStore.getState().excerptTone).toBe("sage");
     expect(useReaderStore.getState().highlightColor).toBe("green");
+    expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
+  });
+
+  it("keeps the pending selection when excerpt save fails", async () => {
+    vi.mocked(createExcerpt).mockRejectedValueOnce(new Error("保存失败"));
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild!, 0);
+    range.setEnd(paragraph.firstChild!, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.pointerDown(reader);
+    fireEvent.pointerUp(document);
+    await screen.findByRole("toolbar", { name: "标注工具条" });
+
+    fireEvent.click(screen.getByRole("button", { name: "标记" }));
+    expect(await screen.findByText("保存失败")).toBeInTheDocument();
+    expect(screen.getByRole("toolbar", { name: "标注工具条" })).toBeInTheDocument();
+    expect(screen.queryByText("已标记")).not.toBeInTheDocument();
+    expect(upsertAnnotation).not.toHaveBeenCalled();
+    expect(screen.getAllByRole("tab", { name: "目录" })[0]).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -664,7 +764,8 @@ describe("related passages entry (RP)", () => {
     fireEvent.pointerUp(document);
     await screen.findByRole("toolbar", { name: "标注工具条" });
 
-    fireEvent.click(screen.getByRole("button", { name: "相关" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "相关" }));
     const dialog = await screen.findByRole("dialog", { name: "相关段落" });
     // 工具条随选区释放而关闭;请求排除当前文档(RP-D3)。
     expect(findRelatedPassages).toHaveBeenCalledWith("这是一段足够长的正文内容", "guide.md");
@@ -695,7 +796,8 @@ describe("related passages entry (RP)", () => {
     fireEvent.pointerDown(reader);
     fireEvent.pointerUp(document);
     await screen.findByRole("toolbar", { name: "标注工具条" });
-    expect(screen.getByRole("button", { name: "相关" })).toBeDisabled();
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.getByRole("menuitem", { name: "相关" })).toBeDisabled();
     expect(findRelatedPassages).not.toHaveBeenCalled();
   });
 });
@@ -720,8 +822,8 @@ describe("notice with undo action (B5)", () => {
   });
 });
 
-describe("annotation list sorting (B6)", () => {
-  it("orders annotations by document position when toggled", async () => {
+describe("markdown annotation grouping (MVS)", () => {
+  it("groups excerpts by heading in the document panel", async () => {
     const bodyAnnotation = markdownAnnotation({
       id: "ann-late",
       createdAt: 2_000,
@@ -746,24 +848,50 @@ describe("annotation list sorting (B6)", () => {
     );
     setMarkdownState();
 
-    const view = render(<App />);
+    render(<App />);
     fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
-    await waitFor(() => {
-      expect(view.container.querySelectorAll(".annotation-list-title").length).toBeGreaterThan(0);
-    });
+    expect((await screen.findAllByText(/2 条重点/))[0]).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Target section/ })[0]).toBeInTheDocument();
+    expect(screen.getAllByText("Target section")[0]).toBeInTheDocument();
+    fireEvent.click(screen.getAllByRole("button", { name: /未归属/ })[0]);
+    expect(screen.getAllByText("Body")[0]).toBeInTheDocument();
+  });
 
-    const titlesBefore = Array.from(
-      view.container.querySelectorAll(".annotation-list-title"),
-    ).map((node) => node.textContent);
-    expect(titlesBefore[0]).toBe("Body");
+  it("saves a reflection from the chapter panel without leaving the annotations tab", async () => {
+    vi.mocked(listAnnotations).mockImplementation(async (relativePath?: string | null) =>
+      relativePath === "guide.md"
+        ? [
+            markdownAnnotation({
+              id: "ann-early",
+              selectedText: "Target section",
+              title: "Target section",
+              locator: {
+                kind: "markdown",
+                quote: "Target section",
+                prefix: "",
+                suffix: "",
+                headingId: "target-section",
+              },
+            }),
+          ]
+        : [],
+    );
+    setMarkdownState();
 
-    fireEvent.click(screen.getAllByRole("button", { name: "按位置" })[0]);
-    await waitFor(() => {
-      const titles = Array.from(
-        view.container.querySelectorAll(".annotation-list-title"),
-      ).map((node) => node.textContent);
-      expect(titles[0]).toBe("Target section");
+    render(<App />);
+    fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
+    expect((await screen.findAllByText(/1 条重点/))[0]).toBeInTheDocument();
+
+    fireEvent.click(screen.getAllByRole("button", { name: "写感悟" })[0]);
+    fireEvent.change(screen.getAllByRole("textbox", { name: "感悟" })[0], {
+      target: { value: "读完后的想法。" },
     });
+    fireEvent.click(screen.getAllByRole("button", { name: "保存感悟" })[0]);
+
+    await waitFor(() => {
+      expect(upsertReflection).toHaveBeenCalledWith("ann-early", "excerpt", "读完后的想法。");
+    });
+    expect(screen.getAllByRole("tab", { name: /标注/ })[0]).toHaveAttribute("aria-selected", "true");
   });
 });
 
@@ -939,7 +1067,7 @@ describe("annotation hub view (方案四 A2)", () => {
     await screen.findAllByRole("tab", { name: /标注\s*1/ });
     fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
 
-    fireEvent.click((await screen.findAllByRole("button", { name: "在中枢中打开" }))[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     expect(useReaderStore.getState().activeView).toBe("annotations");
 
     await waitFor(() => {
@@ -1120,30 +1248,30 @@ describe("annotation color naming (plan-annotation-color-names)", () => {
   it("commits a rename on blur, truncates it and resets from the panel", () => {
     render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
 
-    const input = screen.getByRole("textbox", { name: "黄色的语义名" });
+    const input = screen.getByRole("textbox", { name: "黄色的外观名" });
     fireEvent.change(input, { target: { value: "灵感摘录" } });
     // 输入过程不提交:store 仍是默认名。
-    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("暖砂");
     fireEvent.blur(input);
     expect(useReaderStore.getState().annotationColorNames.yellow).toBe("灵感摘录");
 
     // 清空后失焦回落默认名,输入框同步显示回落结果。
     fireEvent.change(input, { target: { value: "" } });
     fireEvent.blur(input);
-    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("金句");
-    expect(input).toHaveValue("金句");
+    expect(useReaderStore.getState().annotationColorNames.yellow).toBe("暖砂");
+    expect(input).toHaveValue("暖砂");
 
     fireEvent.change(input, { target: { value: "临时名" } });
     fireEvent.blur(input);
     fireEvent.click(screen.getByRole("button", { name: "恢复默认命名" }));
     expect(useReaderStore.getState().annotationColorNames).toMatchObject({
-      yellow: "金句",
-      green: "疑问",
+      yellow: "暖砂",
+      green: "青灰",
     });
     const stored = JSON.parse(
       localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
     ) as { state: { annotationColorNames?: Record<string, string> } };
-    expect(stored.state.annotationColorNames).toMatchObject({ yellow: "金句" });
+    expect(stored.state.annotationColorNames).toMatchObject({ yellow: "暖砂" });
   });
 });
 
@@ -1449,32 +1577,28 @@ describe("home view mounting (H1)", () => {
 });
 
 describe("review view mounting (方案二 R1)", () => {
-  it("enters review from the home card and hides the reading grid", async () => {
-    vi.mocked(reviewSummary).mockResolvedValue({ dueCount: 2, reviewedToday: 0 });
+  it("enters interval review from the command palette and hides the reading grid", async () => {
     vi.mocked(listReviewQueue).mockResolvedValue([]);
     setLibraryReadingState();
 
     const view = render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: "打开主页" }));
-
-    // ④卡由 reviewSummary 探测点亮(本地日界由前端计算)。
-    const start = await screen.findByRole("button", { name: "开始回顾" });
-    fireEvent.click(start);
+    expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
+    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    fireEvent.change(input, { target: { value: "间隔回顾" } });
+    fireEvent.click(screen.getByRole("option", { name: /打开间隔回顾/ }));
 
     expect(useReaderStore.getState().activeView).toBe("review");
     await waitFor(() => {
       expect(view.container.querySelector(".review-view")).not.toBeNull();
     });
-    // 阅读面保持挂载、仅隐藏(stats/home 的挂载模式)。
     expect(view.container.querySelector(".content-grid")).toHaveAttribute("hidden");
 
-    // 空队列态 + 退出回到主页。
     expect(await screen.findByText("今天没有待回顾的标注。")).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "退出回顾" }));
-    expect(useReaderStore.getState().activeView).toBe("home");
+    fireEvent.click(screen.getByRole("button", { name: "退出间隔回顾" }));
+    expect(useReaderStore.getState().activeView).toBe("reader");
   });
 
-  it("keeps the home review card hidden when the probe reports no data", async () => {
+  it("never shows a due-review card on the home view", async () => {
     setLibraryReadingState();
     render(<App />);
     fireEvent.click(screen.getByRole("button", { name: "打开主页" }));

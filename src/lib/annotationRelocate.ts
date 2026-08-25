@@ -95,6 +95,11 @@ export function captureRelocatedSelection(input: {
  * selection (a user-edited title is user data and stays). Pure — the caller
  * persists via upsert.
  */
+/**
+ * Rewrites the legacy locator after the user confirms the preview. v6
+ * `sourceRevision` lives on Excerpt/ReadingPlace and is refreshed by the
+ * storage dual-write on confirm, not by this helper.
+ */
 export function applyRelocatedAnnotation(
   annotation: Annotation,
   captured: PendingSelection,

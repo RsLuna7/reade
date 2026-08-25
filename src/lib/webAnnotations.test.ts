@@ -224,10 +224,21 @@ describe("v1 → v2 upgrade", () => {
     expect(byId.get("ann-markdown")?.locator).toEqual(legacy[0].locator);
 
     const db = await openRaw();
-    // The chain continues to the current version (v5 adds collections).
-    expect(db.version).toBe(5);
+    // The chain continues to the current version (v6 adds excerpt stores).
+    expect(db.version).toBe(6);
     expect([...db.objectStoreNames].sort()).toEqual(
-      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE, "collections", "collectionItems"].sort(),
+      [
+        STORE_NAME,
+        DOCUMENTS_STORE,
+        REVIEWS_STORE,
+        "collections",
+        "collectionItems",
+        "annotationV6Meta",
+        "excerpts",
+        "readingPlaces",
+        "reflections",
+        "reviewEnrollments",
+      ].sort(),
     );
     db.close();
   });
@@ -542,10 +553,21 @@ describe("v3 → v4 upgrade", () => {
     expect(listed.map((item) => item.id)).toEqual(["ann-v3"]);
 
     const db = await openRaw();
-    // The chain continues to the current version (v5 adds collections).
-    expect(db.version).toBe(5);
+    // The chain continues to the current version (v6 adds excerpt stores).
+    expect(db.version).toBe(6);
     expect([...db.objectStoreNames].sort()).toEqual(
-      [STORE_NAME, DOCUMENTS_STORE, REVIEWS_STORE, "collections", "collectionItems"].sort(),
+      [
+        STORE_NAME,
+        DOCUMENTS_STORE,
+        REVIEWS_STORE,
+        "collections",
+        "collectionItems",
+        "annotationV6Meta",
+        "excerpts",
+        "readingPlaces",
+        "reflections",
+        "reviewEnrollments",
+      ].sort(),
     );
     db.close();
     // No backfill: the reviews store starts empty (lazy initial state).
@@ -553,11 +575,69 @@ describe("v3 → v4 upgrade", () => {
   });
 });
 
+describe("v5 → v6 upgrade", () => {
+  it("projects live rows, marks the ledger ready, and keeps a readable v5 backup", async () => {
+    const seed = await openRaw(5, (db) => {
+      createStore(db);
+      db.createObjectStore(DOCUMENTS_STORE, { keyPath: "relativePath" });
+      db.createObjectStore(REVIEWS_STORE, { keyPath: "annotationId" });
+      db.createObjectStore("collections", { keyPath: "id" });
+      const items = db.createObjectStore("collectionItems", {
+        keyPath: ["collectionId", "relativePath"],
+      });
+      items.createIndex("collectionId", "collectionId", { unique: false });
+    });
+    await seedRecords(seed, [
+      makeAnnotation("ann-v5", "notes/a.md", { note: "keep me", color: "pink" }),
+    ]);
+    seed.close();
+
+    const listed = await listWebAnnotations("notes/a.md");
+    expect(listed).toEqual([
+      expect.objectContaining({ id: "ann-v5", color: "pink", note: "keep me" }),
+    ]);
+
+    const { listDocumentAnnotations } = await import("./webAnnotationRepository");
+    const { openWebUserDatabase } = await import("./webAnnotations");
+    const { readAnnotationV6Meta } = await import("./webAnnotationV6");
+    const bundle = await listDocumentAnnotations("notes/a.md");
+    expect(bundle.excerpts).toHaveLength(1);
+    expect(bundle.excerpts[0]?.appearance.tone).toBe("sand");
+    expect(bundle.excerpts[0]?.legacyColor).toBe("pink");
+    expect(bundle.reflections).toEqual([
+      expect.objectContaining({ entryId: "ann-v5", body: "keep me" }),
+    ]);
+
+    const db = await openWebUserDatabase();
+    const meta = await readAnnotationV6Meta(db);
+    expect(meta?.status).toBe("ready");
+    expect(meta?.excerptCount).toBe(1);
+    expect(meta?.reflectionCount).toBe(1);
+    expect(meta?.backupName).toMatch(/^reade-annotations-backup-v5-/);
+
+    const backupDb = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(meta!.backupName!);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("cannot open v5 backup"));
+    });
+    try {
+      const rows = await requestToPromise(
+        backupDb.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll() as IDBRequest<
+          Annotation[]
+        >,
+      );
+      expect(rows).toEqual([expect.objectContaining({ id: "ann-v5", color: "pink" })]);
+    } finally {
+      backupDb.close();
+    }
+  });
+});
+
 describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", () => {
   const created = 1_700_000_000_000;
 
-  it("coalesces the implicit state and filters the pool (Q1..Q6)", async () => {
-    // Q1: no review row → implicit box 0, due at createdAt + 1 day.
+  it("keeps unenrolled marks out of the queue and filters the pool (Q1..Q6)", async () => {
+    // Q1: no review row → not enrolled, never due.
     await upsertWebAnnotation(
       makeAnnotation("ann-implicit", "a.md", { createdAt: created, updatedAt: created }),
     );
@@ -583,18 +663,11 @@ describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", (
 
     const now = created + DAY_MS;
     const queue = await listWebReviewQueue(now, 10);
-    expect(queue.map((item) => item.annotation.id)).toEqual(["ann-early", "ann-implicit"]);
-    expect(queue[1].review).toEqual({
-      box: 0,
-      dueAt: created + DAY_MS,
-      lastReviewedAt: null,
-      totalReviews: 0,
-      suspended: false,
-    });
+    expect(queue.map((item) => item.annotation.id)).toEqual(["ann-early"]);
     expect(queue[0].review.box).toBe(1);
     expect(queue[0].review.dueAt).toBe(created + 1_000);
 
-    // Q1 boundary: one millisecond before createdAt + 1d nothing is due yet.
+    // Q1 boundary: one millisecond before createdAt + 1d the enrolled row is still due.
     const before = await listWebReviewQueue(now - 1, 10);
     expect(before.map((item) => item.annotation.id)).toEqual(["ann-early"]);
   });
@@ -605,6 +678,11 @@ describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", (
         makeAnnotation(`ann-${index}`, `doc-${index}.md`, { createdAt: created }),
       );
     }
+    await seedReviewRecords(
+      Array.from({ length: 7 }, (_, index) =>
+        reviewRecord(`ann-${index}`, { box: 0, dueAt: created, totalReviews: 0 }),
+      ),
+    );
     const now = created + 2 * DAY_MS;
     expect(await listWebReviewQueue(now, 2)).toHaveLength(6);
     expect(await listWebReviewQueue(now, 0)).toHaveLength(3);
@@ -688,7 +766,7 @@ describe("webReviewSummary", () => {
       reviewRecord("ann-c", { box: 2, dueAt: now + DAY_MS, lastReviewedAt: dayStart - 5_000 }),
     ]);
     await expect(webReviewSummary(dayStart, now)).resolves.toEqual({
-      dueCount: 2,
+      dueCount: 1,
       reviewedToday: 1,
     });
     await expect(webReviewSummary(now + 1, now)).rejects.toThrow("range");

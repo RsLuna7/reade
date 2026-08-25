@@ -4,15 +4,16 @@ import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, 
 import "pdfjs-dist/web/pdf_viewer.css";
 import { openExternalLink, readDocumentRange, readPdfReadingMode, type Annotation, type IndexStatus, type PdfReadingMode, type SearchLocator } from "../lib/backend";
 import {
-  APPROXIMATE_ANCHOR_LABEL,
   buildTextIndex,
   clearAnnotationMarks,
   isAnnotationMarkKind,
   paintTextQuoteMarks,
+  pdfHighlightPaintDecision,
   resolvePdfHighlightRects,
   type TextIndex,
   type TextQuoteMarkInput,
 } from "../lib/annotations";
+import type { AnchorResolution } from "../lib/annotationModel";
 import type { TocItem } from "../lib/markdown";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import {
@@ -300,6 +301,7 @@ interface PdfReaderProps {
   onPinToSecondary?: (physicalPage: number) => void;
   onBrokenAnnotationsChange?: (ids: string[]) => void;
   onApproximateAnnotationsChange?: (ids: string[]) => void;
+  onGeometricFallbackChange?: (ids: string[]) => void;
   onTocChange: (items: TocItem[]) => void;
   onActiveChange: (id: string | null) => void;
 }
@@ -342,6 +344,7 @@ interface PageProps {
   onJump: (page: number) => void;
   /** Corner badge / aria page number (printed when calibrated). */
   badgePage?: number;
+  onHighlightResolutions?: (pageNumber: number, items: Array<{ id: string; resolution: AnchorResolution }>) => void;
 }
 
 function sourceIdentity(relativePath: string, size: number, modified: number): string {
@@ -403,7 +406,7 @@ function restorePositionInstantly(
   return true;
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage, onHighlightResolutions }: PageProps) {
   const shownPage = badgePage ?? pageNumber;
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -563,28 +566,28 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     const pageRect = hostRef.current?.getBoundingClientRect() ?? null;
     // Highlights never mutate the text layer, so one index serves them all.
     let textIndex: TextIndex | null = null;
+    const reported: Array<{ id: string; resolution: AnchorResolution }> = [];
     for (const annotation of highlights) {
       if (annotation.locator.kind !== "pdf" || annotation.locator.page !== pageNumber) continue;
       if (annotation.locator.view !== "original") continue;
       const markKind = isAnnotationMarkKind(annotation.kind) ? annotation.kind : "highlight";
       if (textLayer && !textIndex) textIndex = buildTextIndex(textLayer);
-      // Quote-first: re-anchor against the live text layer so stored rects
-      // from older layouts self-heal; stored rects remain the fallback.
       const resolved = resolvePdfHighlightRects({
         textLayer,
         pageRect,
         locator: annotation.locator,
         index: textIndex ?? undefined,
         fuzzy: fuzzyAnchoring,
+        page: pageNumber,
       });
-      const approximate = resolved.method === "normalized" || resolved.method === "fuzzy";
+      reported.push({ id: annotation.id, resolution: resolved.resolution });
+      const paint = pdfHighlightPaintDecision(resolved.resolution);
+      if (!paint.paint) continue;
       for (const rect of resolved.rects) {
         const mark = globalThis.document.createElement("span");
         mark.className = `pdf-user-highlight pdf-user-highlight--${markKind} pdf-user-highlight--${annotation.color ?? "yellow"}`;
-        if (approximate) {
-          mark.classList.add("pdf-user-highlight--approx");
-          mark.title = APPROXIMATE_ANCHOR_LABEL;
-        }
+        if (paint.className) mark.classList.add(paint.className);
+        if (paint.title) mark.title = paint.title;
         mark.dataset.annotationId = annotation.id;
         mark.dataset.annotationKind = markKind;
         mark.style.left = `${rect.x * 100}%`;
@@ -594,7 +597,8 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
         host.append(mark);
       }
     }
-  }, [fuzzyAnchoring, highlights, pageNumber, renderNearby, textLayerRevision]);
+    onHighlightResolutions?.(pageNumber, reported);
+  }, [fuzzyAnchoring, highlights, onHighlightResolutions, pageNumber, renderNearby, textLayerRevision]);
 
   // ---- "截取引用"框选层(plan-pdf-region-card §3.1–§3.2) ----
   // 页内逻辑坐标 → 归一化矩形 → 位图整数裁剪;位图坐标一律按
@@ -779,6 +783,7 @@ export function PdfReader({
   onPinToSecondary,
   onBrokenAnnotationsChange,
   onApproximateAnnotationsChange,
+  onGeometricFallbackChange,
   onTocChange,
   onActiveChange,
 }: PdfReaderProps) {
@@ -1264,9 +1269,82 @@ export function PdfReader({
 
   const lastReadingBrokenRef = useRef<string[]>([]);
   const lastReadingApproximateRef = useRef<string[]>([]);
+  const originalPageReportsRef = useRef(
+    new Map<number, Array<{ id: string; resolution: AnchorResolution }>>(),
+  );
+  const lastOriginalBrokenRef = useRef<string[]>([]);
+  const lastOriginalApproximateRef = useRef<string[]>([]);
+  const lastOriginalGeometricRef = useRef<string[]>([]);
+
+  const emitOriginalHonesty = useCallback(
+    (pageCount: number) => {
+      const geometric: string[] = [];
+      const detached: string[] = [];
+      const approximate: string[] = [];
+      for (const items of originalPageReportsRef.current.values()) {
+        for (const item of items) {
+          if (item.resolution.status === "geometricFallback") geometric.push(item.id);
+          else if (item.resolution.status === "detached") detached.push(item.id);
+          else if (item.resolution.status === "approximate") approximate.push(item.id);
+        }
+      }
+      const broken: string[] = [...detached];
+      for (const annotation of annotations) {
+        if (!isAnnotationMarkKind(annotation.kind)) continue;
+        const locator = annotation.locator;
+        if (locator.kind !== "pdf" || locator.view !== "original") continue;
+        if (locator.page < 1 || (pageCount > 0 && locator.page > pageCount)) {
+          broken.push(annotation.id);
+        }
+      }
+      for (const annotation of annotations) {
+        if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
+        if (annotation.locator.target.format !== "pdf") continue;
+        const page = annotation.locator.target.page;
+        if (page < 1 || (pageCount > 0 && page > pageCount)) broken.push(annotation.id);
+      }
+      const nextBroken = Array.from(new Set(broken));
+      const nextApproximate = Array.from(new Set(approximate));
+      const nextGeometric = Array.from(new Set(geometric));
+      if (
+        nextBroken.length !== lastOriginalBrokenRef.current.length ||
+        nextBroken.some((id, index) => id !== lastOriginalBrokenRef.current[index])
+      ) {
+        lastOriginalBrokenRef.current = nextBroken;
+        onBrokenAnnotationsChange?.(nextBroken);
+      }
+      if (
+        nextApproximate.length !== lastOriginalApproximateRef.current.length ||
+        nextApproximate.some((id, index) => id !== lastOriginalApproximateRef.current[index])
+      ) {
+        lastOriginalApproximateRef.current = nextApproximate;
+        onApproximateAnnotationsChange?.(nextApproximate);
+      }
+      if (
+        nextGeometric.length !== lastOriginalGeometricRef.current.length ||
+        nextGeometric.some((id, index) => id !== lastOriginalGeometricRef.current[index])
+      ) {
+        lastOriginalGeometricRef.current = nextGeometric;
+        onGeometricFallbackChange?.(nextGeometric);
+      }
+    },
+    [annotations, onApproximateAnnotationsChange, onBrokenAnnotationsChange, onGeometricFallbackChange],
+  );
+
+  const handleHighlightResolutions = useCallback(
+    (pageNumber: number, items: Array<{ id: string; resolution: AnchorResolution }>) => {
+      originalPageReportsRef.current.set(pageNumber, items);
+      emitOriginalHonesty(session?.pdf.numPages ?? 0);
+    },
+    [emitOriginalHonesty, session?.pdf.numPages],
+  );
 
   useLayoutEffect(() => {
     if (mode !== "reading") return;
+    if (lastOriginalGeometricRef.current.length) {
+      lastOriginalGeometricRef.current = [];
+      onGeometricFallbackChange?.([]);
+    }
     const root = rootRef.current;
     if (!root) return;
     const pages = Array.from(root.querySelectorAll<HTMLElement>(".pdf-reading-page"));
@@ -1324,31 +1402,8 @@ export function PdfReader({
 
   useEffect(() => {
     if (mode !== "original") return;
-    const pageCount = session?.pdf.numPages ?? 0;
-    const broken: string[] = [];
-    for (const annotation of annotations) {
-      if (!isAnnotationMarkKind(annotation.kind)) continue;
-      const locator = annotation.locator;
-      if (locator.kind !== "pdf" || locator.view !== "original") continue;
-      if (locator.page < 1 || (pageCount > 0 && locator.page > pageCount)) {
-        broken.push(annotation.id);
-        continue;
-      }
-      if (!locator.rects.length) broken.push(annotation.id);
-    }
-    for (const annotation of annotations) {
-      if (annotation.kind !== "bookmark" || annotation.locator.kind !== "bookmark") continue;
-      if (annotation.locator.target.format !== "pdf") continue;
-      const page = annotation.locator.target.page;
-      if (page < 1 || (pageCount > 0 && page > pageCount)) broken.push(annotation.id);
-    }
-    onBrokenAnnotationsChange?.(Array.from(new Set(broken)));
-    // Original-view pages render lazily, so a page-derived list badge would
-    // flicker; the per-page overlay carries the weak hint instead and the
-    // list-level set is cleared here. Reading mode re-reports on re-entry.
-    lastReadingApproximateRef.current = [];
-    onApproximateAnnotationsChange?.([]);
-  }, [annotations, mode, onApproximateAnnotationsChange, onBrokenAnnotationsChange, session?.pdf.numPages]);
+    emitOriginalHonesty(session?.pdf.numPages ?? 0);
+  }, [annotations, emitOriginalHonesty, mode, session?.pdf.numPages]);
 
   const switchMode = useCallback((nextMode: "original" | "reading") => {
     if (nextMode === mode) return;
@@ -1651,6 +1706,7 @@ export function PdfReader({
               annotation.locator.view === "original" &&
               annotation.locator.page === page,
           )}
+          onHighlightResolutions={handleHighlightResolutions}
           onRatioChange={handlePageRatioChange}
           onJump={jump}
           badgePage={displayPageNumber(page, activeOffset)}

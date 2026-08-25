@@ -1,16 +1,24 @@
 import type { Annotation, AnnotationColor, AnnotationLocator } from "./backend";
 import {
-  clampSelectionText,
+  createAnnotationId,
   createBookmarkAnnotation,
   createMarkAnnotation,
+  deriveAnnotationSortIndex,
   isSelectionInsideForbidden,
   nearestHeadingId,
   normalizePdfRects,
+  normalizeSelectionText,
   rangeOffsetsWithinRoot,
   serializeTextQuote,
   collectElementText,
   type AnnotationMarkKind,
 } from "./annotations";
+import {
+  legacyLocatorToSourceAnchor,
+  type ExcerptAppearance,
+  type ExcerptDraft,
+} from "./annotationModel";
+import { validateExcerptDraft } from "./annotationValidation";
 
 export interface PendingSelection {
   text: string;
@@ -42,7 +50,7 @@ export function captureRangeLocator(input: {
   pdfMode?: "original" | "reading";
 }): PendingSelection | null {
   const { range } = input;
-  const text = clampSelectionText(range.toString());
+  const text = normalizeSelectionText(range.toString());
   if (!text) return null;
 
   if (input.kind === "markdown") {
@@ -145,6 +153,21 @@ export function captureRangeLocator(input: {
     },
     rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
   };
+}
+
+export function buildExcerptDraftFromPending(
+  relativePath: string,
+  pending: PendingSelection,
+  appearance: ExcerptAppearance,
+): ExcerptDraft {
+  return validateExcerptDraft({
+    id: createAnnotationId(),
+    relativePath,
+    sourceText: pending.text.trim() || pending.locator.quote,
+    anchor: legacyLocatorToSourceAnchor(pending.locator),
+    appearance: { ...appearance },
+    sortIndex: deriveAnnotationSortIndex(pending.locator),
+  });
 }
 
 export function buildMarkFromPending(

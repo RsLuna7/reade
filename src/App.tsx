@@ -72,11 +72,13 @@ import {
   listAnnotations,
   listCollectionItems,
   listCollections,
+  listDocumentAnnotations,
   listDocumentLinks,
   listAnnotationsForTransfer,
   listDocumentExtents,
   listDocumentFingerprints,
   listReadingSessions,
+  listReviewQueue,
   onDocumentIndexStatus,
   onLibraryChanged,
   onLibraryIndexProgress,
@@ -89,9 +91,11 @@ import {
   readSnapshotDiff,
   rebindDocumentAnnotations,
   recordReadingSession,
-  reviewSummary,
+  recordReviewOutcome,
   saveAnnotationExportFile,
   searchAnnotations,
+  setReviewEnrollment,
+  upsertReflection,
   type Annotation,
   type AnnotationColor,
   type CollectionSummary,
@@ -99,7 +103,6 @@ import {
   type LibrarySnapshot,
   type MovedDocumentCandidate,
   type ReadSnapshotDiff,
-  type ReviewSummary,
   type SearchResult,
 } from "./lib/backend";
 import { CommandPalette } from "./components/CommandPalette";
@@ -199,21 +202,28 @@ import {
 import {
   buildAnnotationEnvelope,
   buildReadwiseCsv,
+  buildReadeUserDataArchiveV2,
   getOrCreateDeviceId,
-  parseAnnotationEnvelope,
+  parseUserDataArchive,
   planAnnotationImport,
-  serializeAnnotationEnvelope,
+  serializeReadeUserDataArchive,
   type AnnotationImportPlan,
+  type ReadeUserDataArchiveV2,
 } from "./lib/annotationTransfer";
 import { groupAnnotationsByDocument } from "./lib/annotationHub";
 import { filterAnnotations, normalizeAnnotationQuery } from "./lib/annotationSearch";
+import { REVIEW_DUE_FUTURE_LIMIT_MS } from "./lib/reviewScheduler";
 import {
   buildBookmarkForContext,
+  buildExcerptDraftFromPending,
   buildMarkFromPending,
   captureReaderSelection,
   type PendingSelection,
 } from "./lib/annotationCapture";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
+import { useDocumentAnnotationBundle } from "./lib/useDocumentAnnotationBundle";
+import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
+import { toneToLegacyColor } from "./lib/annotationModel";
 import { useReadAloud } from "./lib/useReadAloud";
 // 聚焦模式(plan-focus-mode):spotlight/打字机共享驱动在 lib,
 // 标尺是纯视觉组件;PDF 原版式无段落 DOM,三者一律不接线。
@@ -303,7 +313,6 @@ import {
 } from "./store/useReaderStore";
 import { cancelMotion, runMotion } from "./lib/motion";
 import type { PdfPagePosition, PdfReaderHandle } from "./components/PdfReader";
-import type { HomeReviewSummary } from "./components/HomeView";
 import type { QuoteCardSource } from "./components/QuoteCardDialog";
 import type { ReviewSession } from "./components/ReviewView";
 
@@ -1084,7 +1093,7 @@ export function ReadingSettingsPanel({
       </fieldset>
 
       <fieldset className="setting-row color-names-setting">
-        <legend className="setting-label">标注颜色命名</legend>
+        <legend className="setting-label">颜色外观名</legend>
         <div className="color-name-grid">
           {ANNOTATION_COLORS.map((color) => (
             <label className="color-name-row" key={color}>
@@ -1097,7 +1106,7 @@ export function ReadingSettingsPanel({
                 className="color-name-input"
                 value={colorNameDrafts[color]}
                 maxLength={ANNOTATION_COLOR_NAME_MAX_CHARS}
-                aria-label={`${ANNOTATION_COLOR_WORDS[color]}色的语义名`}
+                aria-label={`${ANNOTATION_COLOR_WORDS[color]}色的外观名`}
                 onChange={(event) =>
                   setColorNameDrafts((drafts) => ({
                     ...drafts,
@@ -1371,6 +1380,7 @@ function SidePanel({
   annotations,
   brokenIds,
   approximateIds,
+  geometricFallbackIds,
   annotationsLoading,
   annotationSort,
   onAnnotationSortChange,
@@ -1383,6 +1393,7 @@ function SidePanel({
   onGenerateAnnotationCard,
   onCompileAnnotationsDigest,
   onClearAnnotations,
+  annotationsPanel,
   linksState,
   onSelectLinkDocument,
   onPreviewLinkTarget,
@@ -1419,6 +1430,7 @@ function SidePanel({
   annotations: Annotation[];
   brokenIds: Set<string>;
   approximateIds: Set<string>;
+  geometricFallbackIds: Set<string>;
   annotationsLoading: boolean;
   annotationSort: AnnotationListSort;
   onAnnotationSortChange: (sort: AnnotationListSort) => void;
@@ -1432,6 +1444,8 @@ function SidePanel({
   /** 全书回顾编纂(plan-book-digest):标注 tab 工具条入口。 */
   onCompileAnnotationsDigest?: () => void;
   onClearAnnotations: () => void;
+  /** Markdown MVS: chaptered excerpt list. PDF/EPUB keep AnnotationList. */
+  annotationsPanel?: React.ReactNode;
   /** 「链接」tab(BL-D3):只读双链数据与跳转。 */
   linksState: LinksPanelState;
   onSelectLinkDocument: (relativePath: string) => void;
@@ -1519,10 +1533,12 @@ function SidePanel({
           estimateLine={tocEstimateLine}
         />
       ) : tab === "annotations" ? (
+        annotationsPanel ?? (
         <AnnotationList
           annotations={annotations}
           brokenIds={brokenIds}
           approximateIds={approximateIds}
+          geometricFallbackIds={geometricFallbackIds}
           loading={annotationsLoading}
           sort={annotationSort}
           onSortChange={onAnnotationSortChange}
@@ -1536,6 +1552,7 @@ function SidePanel({
           onCompileDigest={onCompileAnnotationsDigest}
           onClearAll={onClearAnnotations}
         />
+        )
       ) : tab === "links" ? (
         <LinksPanel
           state={linksState}
@@ -1585,6 +1602,7 @@ function App() {
   const annotationTool = useReaderStore((state) => state.annotationTool);
   const highlightColor = useReaderStore((state) => state.highlightColor);
   const underlineColor = useReaderStore((state) => state.underlineColor);
+  const excerptTone = useReaderStore((state) => state.excerptTone);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
@@ -1598,6 +1616,7 @@ function App() {
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
+  const setExcerptTone = useReaderStore((state) => state.setExcerptTone);
   const loading = useReaderStore((state) => state.loading);
   const error = useReaderStore((state) => state.error);
   const chooseAndOpenLibrary = useReaderStore((state) => state.chooseAndOpenLibrary);
@@ -1712,6 +1731,11 @@ function App() {
     () => new Set([...markdownApproximateIds, ...readerApproximateIds]),
     [markdownApproximateIds, readerApproximateIds],
   );
+  const [readerGeometricFallbackIds, setReaderGeometricFallbackIds] = useState<string[]>([]);
+  const geometricFallbackIds = useMemo(
+    () => new Set(readerGeometricFallbackIds),
+    [readerGeometricFallbackIds],
+  );
   // §5.5 fingerprint move candidates, kept so declined/ambiguous pairings can
   // surface in the lost-documents rebind list (§5.6 C).
   const [moveCandidates, setMoveCandidates] = useState<MovedDocumentCandidate[]>([]);
@@ -1726,6 +1750,7 @@ function App() {
   const [importReview, setImportReview] = useState<{
     fileName: string | null;
     plan: AnnotationImportPlan;
+    archive: ReadeUserDataArchiveV2 | null;
   } | null>(null);
   const [importBusy, setImportBusy] = useState(false);
   const compactLibraryLayout = useMediaQuery("(max-width: 640px)");
@@ -1772,12 +1797,19 @@ function App() {
     canUndo,
     reload: reloadAnnotations,
     save: saveAnnotation,
+    saveExcerpt,
     remove: removeAnnotation,
     clearAll: clearAnnotations,
     undo: undoAnnotation,
     updateNote,
     updateColor,
   } = useDocumentAnnotations(currentPath);
+  const {
+    bundle: annotationBundle,
+    loading: annotationBundleLoading,
+    reload: reloadAnnotationBundle,
+    saveReflection,
+  } = useDocumentAnnotationBundle(currentPath);
   const activeMarkColor = annotationTool === "underline" ? underlineColor : highlightColor;
   const initialWebRoute = useRef(
     IS_WEB_RUNTIME ? parseWebRoute(window.location) : null,
@@ -1988,39 +2020,6 @@ function App() {
     }
     previousHomeOpen.current = homeOpen;
   }, [homeOpen]);
-
-  // 方案二 R1:主页④卡的数据探测。本地日界由前端计算后传给后端(后端不做
-  // 时区推断);探测失败 → null → 卡整体不渲染,不留死 UI。
-  const [homeReviewProbe, setHomeReviewProbe] = useState<ReviewSummary | null>(null);
-  useEffect(() => {
-    if (!homeOpen || !snapshot) return;
-    let cancelled = false;
-    const nowMs = Date.now();
-    const dayStart = new Date(nowMs);
-    dayStart.setHours(0, 0, 0, 0);
-    reviewSummary(dayStart.getTime(), nowMs).then(
-      (summary) => {
-        if (!cancelled) setHomeReviewProbe(summary);
-      },
-      () => {
-        if (!cancelled) setHomeReviewProbe(null);
-      },
-    );
-    return () => {
-      cancelled = true;
-    };
-  }, [homeOpen, snapshot]);
-
-  const homeReviewSummary = useMemo<HomeReviewSummary | null>(() => {
-    if (!homeReviewProbe) return null;
-    // 既无到期也无今日记录时不渲染卡片(从未使用回顾的用户不被打扰)。
-    if (homeReviewProbe.dueCount <= 0 && homeReviewProbe.reviewedToday <= 0) return null;
-    return {
-      pendingCount: homeReviewProbe.dueCount,
-      reviewedToday: homeReviewProbe.reviewedToday,
-      onStart: () => setActiveView("review"),
-    };
-  }, [homeReviewProbe, setActiveView]);
 
   const renderedMarkdown = useMemo(
     () => displayMarkdown(currentContent?.kind === "markdown" ? currentContent.markdown : ""),
@@ -2657,6 +2656,32 @@ function App() {
             },
           }
         : null,
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:library-excerpts",
+            title: annotationsOpen ? "关闭全库摘录" : "打开全库摘录",
+            keywords: "annotations excerpts hub 全库 摘录 标注 中枢",
+            badge: "命令",
+            run: () => {
+              setActiveView(annotationsOpen ? "reader" : "annotations");
+              setMobileLibraryOpen(false);
+            },
+          }
+        : null,
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:spaced-review",
+            title: reviewOpen ? "关闭间隔回顾" : "打开间隔回顾",
+            keywords: "review spaced 间隔 回顾 leitner",
+            badge: "命令",
+            run: () => {
+              setActiveView(reviewOpen ? "reader" : "review");
+              setMobileLibraryOpen(false);
+            },
+          }
+        : null,
       currentContent && (splitState || splitWide)
         ? {
             kind: "command" as const,
@@ -2811,6 +2836,8 @@ function App() {
     handleResetPdfFrontier,
     handleToggleSplit,
     homeOpen,
+    annotationsOpen,
+    reviewOpen,
     paletteCollections,
     pdfViewMode,
     readAloud.barOpen,
@@ -3002,29 +3029,41 @@ function App() {
       kind: "highlight" | "underline",
       color: AnnotationColor,
       note: string | null = null,
-      options?: { undoable?: boolean },
+      options?: { undoable?: boolean; tone?: typeof excerptTone },
     ) => {
       if (!currentPath) return;
-      const annotation = buildMarkFromPending(
-        currentPath,
-        pending,
-        color,
-        kind,
-        note?.trim() || null,
-      );
+      const markdownExcerpt =
+        (currentContent?.kind === "markdown") &&
+        pending.locator.kind === "markdown";
       try {
-        await saveAnnotation(annotation);
-        setSidePanelTab("annotations");
+        if (markdownExcerpt) {
+          const tone = options?.tone ?? excerptTone;
+          const draft = buildExcerptDraftFromPending(currentPath, pending, {
+            style: kind,
+            tone,
+          });
+          await saveExcerpt(draft);
+          void reloadAnnotationBundle();
+          if (note?.trim()) {
+            await saveReflection(draft.id, "excerpt", note.trim());
+            void reloadAnnotations();
+          }
+        } else {
+          const annotation = buildMarkFromPending(
+            currentPath,
+            pending,
+            color,
+            kind,
+            note?.trim() || null,
+          );
+          await saveAnnotation(annotation);
+        }
         const message = note?.trim()
-          ? kind === "underline"
-            ? "已保存下划线与笔记"
-            : "已保存高亮与笔记"
-          : kind === "underline"
-            ? "已保存下划线"
-            : "已保存高亮";
+          ? "已保存摘录与感悟"
+          : "已标记";
         showNotice(
           message,
-          options?.undoable
+          options?.undoable !== false
             ? { actionLabel: "撤销", onAction: () => void handleUndoAnnotation() }
             : undefined,
         );
@@ -3034,7 +3073,19 @@ function App() {
         showNotice(cause instanceof Error ? cause.message : String(cause));
       }
     },
-    [closeToolbar, currentPath, handleUndoAnnotation, saveAnnotation, showNotice],
+    [
+      closeToolbar,
+      currentContent?.kind,
+      currentPath,
+      excerptTone,
+      handleUndoAnnotation,
+      reloadAnnotationBundle,
+      reloadAnnotations,
+      saveAnnotation,
+      saveExcerpt,
+      saveReflection,
+      showNotice,
+    ],
   );
 
   const handleSaveHighlight = useCallback(
@@ -3061,13 +3112,16 @@ function App() {
     await handleSaveMark(pendingSelection, "underline", underlineColor, null);
   }, [handleSaveMark, pendingSelection, underlineColor]);
 
-  const handlePickColor = useCallback(
-    async (color: AnnotationColor) => {
-      setHighlightColor(color);
+  const handlePickTone = useCallback(
+    async (tone: typeof excerptTone) => {
+      setExcerptTone(tone);
       if (!pendingSelection) return;
-      await handleSaveMark(pendingSelection, "highlight", color, null);
+      await handleSaveMark(pendingSelection, "highlight", toneToLegacyColor(tone), null, {
+        undoable: true,
+        tone,
+      });
     },
-    [handleSaveMark, pendingSelection, setHighlightColor],
+    [handleSaveMark, pendingSelection, setExcerptTone],
   );
 
   const handleClearAnnotations = useCallback(async () => {
@@ -3457,7 +3511,8 @@ function App() {
   const confirmRelocateAnnotation = useCallback(async () => {
     if (!relocatePreview) return;
     // 用户确认是改写 locator 的唯一路径:全套 quote/prefix/suffix/hint 重新
-    // 采集,sortIndex 重算,经 upsert 持久化。
+    // 采集,sortIndex 重算,经 upsert 持久化。v6 sourceRevision 由存储层
+    // 双写在确认时刷新,不写进 legacy Annotation。
     const updated = applyRelocatedAnnotation(relocatePreview.annotation, relocatePreview.captured);
     try {
       await saveAnnotation(updated, { recordUndo: false });
@@ -3488,7 +3543,7 @@ function App() {
     try {
       await updateNote(annotation, noteDraft.text.trim() || null);
       setNoteDraft(null);
-      showNotice("笔记已更新");
+      showNotice("感悟已更新");
     } catch (cause) {
       showNotice(cause instanceof Error ? cause.message : String(cause));
     }
@@ -3577,6 +3632,53 @@ function App() {
     );
   }, [annotationSort, annotationSortKeys, annotations]);
 
+  const markdownFallbackAnnotations = useMemo(
+    () =>
+      sortedAnnotations.filter(
+        (item) => brokenAnnotationIds.has(item.id) || approximateAnnotationIds.has(item.id),
+      ),
+    [approximateAnnotationIds, brokenAnnotationIds, sortedAnnotations],
+  );
+
+  const markdownAnnotationsPanel =
+    currentContent?.kind === "markdown" ? (
+      <>
+        <DocumentAnnotationsView
+          format={currentContent.kind}
+          toc={toc}
+          currentHeadingId={activeHeading}
+          bundle={annotationBundle}
+          loading={annotationBundleLoading}
+          onJump={jumpToAnnotation}
+          onSaveReflection={async (entryId, entryKind, body) => {
+            await saveReflection(entryId, entryKind, body);
+            void reloadAnnotations();
+          }}
+          onSetEnrollment={async (excerptId, enabled) => {
+            await setReviewEnrollment(excerptId, enabled);
+            void reloadAnnotationBundle();
+          }}
+        />
+        {markdownFallbackAnnotations.length > 0 ? (
+          <AnnotationList
+            annotations={markdownFallbackAnnotations}
+            brokenIds={brokenAnnotationIds}
+            approximateIds={approximateAnnotationIds}
+            loading={annotationsLoading}
+            sort={annotationSort}
+            onSortChange={setAnnotationSort}
+            onSelect={jumpToAnnotation}
+            onDelete={(annotation) => void handleDeleteAnnotation(annotation)}
+            onEditNote={handleEditAnnotationNote}
+            onChangeColor={(annotation, color) =>
+              void handleChangeAnnotationColor(annotation, color)
+            }
+            onRelocate={handleRelocateAnnotation}
+          />
+        ) : null}
+      </>
+    ) : undefined;
+
   const markEditorAnnotation = useMemo(
     () =>
       markEditor
@@ -3663,10 +3765,13 @@ function App() {
     query: "",
     kinds: [],
     colors: [],
+    hasReflection: false,
+    enrolled: false,
   });
   const [librarySearch, setLibrarySearch] = useState<
     { query: string; items: Annotation[] } | null
   >(null);
+  const [enrolledIds, setEnrolledIds] = useState<ReadonlySet<string> | null>(null);
   const librarySearchRequest = useRef(0);
 
   useEffect(() => {
@@ -3692,6 +3797,25 @@ function App() {
     }, 240);
     return () => window.clearTimeout(timer);
   }, [libraryFilters.query]);
+
+  useEffect(() => {
+    if (!libraryFilters.enrolled || !snapshot) {
+      setEnrolledIds(null);
+      return;
+    }
+    let cancelled = false;
+    listReviewQueue(Date.now() + REVIEW_DUE_FUTURE_LIMIT_MS, 500).then(
+      (items) => {
+        if (!cancelled) setEnrolledIds(new Set(items.map((item) => item.annotation.id)));
+      },
+      () => {
+        if (!cancelled) setEnrolledIds(new Set());
+      },
+    );
+    return () => {
+      cancelled = true;
+    };
+  }, [annotationBundle.reviewEnrollments, libraryFilters.enrolled, snapshot]);
 
   const documentTitles = useMemo(
     () => new Map(documents.map((document) => [document.relativePath, document.title])),
@@ -3728,7 +3852,9 @@ function App() {
   const libraryFilterActive =
     librarySearch !== null ||
     libraryFilters.kinds.length > 0 ||
-    libraryFilters.colors.length > 0;
+    libraryFilters.colors.length > 0 ||
+    Boolean(libraryFilters.hasReflection) ||
+    Boolean(libraryFilters.enrolled);
 
   const libraryHubItems = useMemo(() => {
     const base = librarySearch
@@ -3736,12 +3862,30 @@ function App() {
       : libraryAnnotations.status === "ready"
         ? libraryAnnotations.items
         : [];
-    if (!libraryFilters.kinds.length && !libraryFilters.colors.length) return base;
+    if (
+      !libraryFilters.kinds.length &&
+      !libraryFilters.colors.length &&
+      !libraryFilters.hasReflection &&
+      !libraryFilters.enrolled
+    ) {
+      return base;
+    }
     return filterAnnotations(base, {
       kinds: libraryFilters.kinds,
       colors: libraryFilters.colors,
+      hasReflection: libraryFilters.hasReflection,
+      enrolled: libraryFilters.enrolled,
+      enrolledIds: enrolledIds ?? undefined,
     });
-  }, [libraryAnnotations, libraryFilters.colors, libraryFilters.kinds, librarySearch]);
+  }, [
+    enrolledIds,
+    libraryAnnotations,
+    libraryFilters.colors,
+    libraryFilters.enrolled,
+    libraryFilters.hasReflection,
+    libraryFilters.kinds,
+    librarySearch,
+  ]);
 
   // 分组走 annotationHub 纯函数:普通组按路径排序,失联组(路径不在当前
   // 扫描中)置尾灰显;组内按 sortIndex 位置排序(决策 A-D2)。
@@ -3899,9 +4043,57 @@ function App() {
           fingerprints.map((entry) => [entry.relativePath, entry.contentHash]),
         ),
       });
+      const excerpts = [];
+      const places = [];
+      const reflections = [];
+      const reviewEnrollments = [];
+      for (const document of envelope.documents) {
+        try {
+          const bundle = await listDocumentAnnotations(document.relativePath);
+          excerpts.push(...bundle.excerpts);
+          places.push(...bundle.places);
+          reflections.push(...bundle.reflections);
+          reviewEnrollments.push(...bundle.reviewEnrollments);
+        } catch {
+          // Legacy-fallback roots stay on the v5 documents section.
+        }
+      }
+      const collections = [];
+      try {
+        const summaries = await listCollections();
+        for (const summary of summaries) {
+          const items = await listCollectionItems(summary.id);
+          collections.push({
+            id: summary.id,
+            name: summary.name,
+            createdAt: summary.createdAt,
+            updatedAt: summary.updatedAt,
+            items: items.map((item) => ({
+              relativePath: item.relativePath,
+              position: item.position,
+              addedAt: item.addedAt,
+            })),
+          });
+        }
+      } catch {
+        // Collections are optional in the archive.
+      }
+      const prefs = useReaderStore.getState();
+      const archive = buildReadeUserDataArchiveV2({
+        envelope,
+        excerpts,
+        places,
+        reflections,
+        reviewEnrollments,
+        collections,
+        preferences: {
+          excerptTone: prefs.excerptTone,
+          annotationColorNames: prefs.annotationColorNames,
+        },
+      });
       const saved = await saveAnnotationExportFile(
         `reade-annotations-${transferDateStamp()}.json`,
-        serializeAnnotationEnvelope(envelope),
+        serializeReadeUserDataArchive(archive),
         "application/json",
       );
       if (saved) showNotice(`已导出 ${records.length} 条标注记录（含删除记录）`);
@@ -3941,13 +4133,13 @@ function App() {
     if (!picked) return;
     try {
       // 不可信输入:严格 schema 校验失败即整体拒绝,不部分导入。
-      const envelope = parseAnnotationEnvelope(picked.contents);
+      const parsed = parseUserDataArchive(picked.contents);
       const [existing, fingerprints] = await Promise.all([
         listAnnotationsForTransfer(),
         listDocumentFingerprints(),
       ]);
       const presentPaths = new Set(documents.map((document) => document.relativePath));
-      const plan = planAnnotationImport(envelope, {
+      const plan = planAnnotationImport(parsed.envelope, {
         existing,
         presentPaths,
         presentHashes: new Map(
@@ -3956,7 +4148,7 @@ function App() {
             .map((entry) => [entry.relativePath, entry.contentHash]),
         ),
       });
-      setImportReview({ fileName: picked.fileName, plan });
+      setImportReview({ fileName: picked.fileName, plan, archive: parsed.archive });
     } catch (cause) {
       showNotice(cause instanceof Error ? `导入失败：${cause.message}` : "导入失败");
     }
@@ -3964,10 +4156,37 @@ function App() {
 
   const confirmImportAnnotations = useCallback(async () => {
     if (!importReview) return;
-    const { plan } = importReview;
+    const { plan, archive } = importReview;
     setImportBusy(true);
     try {
       const written = await importAnnotations(plan.toUpsert, plan.fingerprintRows);
+      if (archive) {
+        for (const reflection of archive.reflections) {
+          if (reflection.deletedAt != null || !reflection.body.trim()) continue;
+          try {
+            await upsertReflection(reflection.entryId, reflection.entryKind, reflection.body);
+          } catch {
+            // Extra sections are best-effort after the v5 annotation import.
+          }
+        }
+        for (const enrollment of archive.reviewEnrollments) {
+          if (enrollment.deletedAt != null) continue;
+          try {
+            await setReviewEnrollment(enrollment.excerptId, !enrollment.suspended);
+            if (!enrollment.suspended) {
+              await recordReviewOutcome(enrollment.excerptId, {
+                box: enrollment.box,
+                dueAt: enrollment.dueAt,
+                lastReviewedAt: enrollment.lastReviewedAt,
+                totalReviews: enrollment.totalReviews,
+                suspended: enrollment.suspended,
+              });
+            }
+          } catch {
+            // Due-window or ledger mismatch must not undo imported annotations.
+          }
+        }
+      }
       setImportReview(null);
       // 当前文档与全库列表都可能包含刚导入的记录。
       await reloadAnnotations();
@@ -3987,7 +4206,7 @@ function App() {
     } finally {
       setImportBusy(false);
     }
-  }, [importReview, reloadAnnotations, showNotice]);
+  }, [importReview, recordReviewOutcome, reloadAnnotations, setReviewEnrollment, showNotice, upsertReflection]);
 
   useEffect(() => {
     setPendingSelection(null);
@@ -4003,6 +4222,7 @@ function App() {
     setReaderBrokenIds([]);
     setMarkdownApproximateIds([]);
     setReaderApproximateIds([]);
+    setReaderGeometricFallbackIds([]);
     // PdfReader 换文档会自回原版式;这里同步归位,避免聚焦模式在
     // 新 PDF 上短暂沿用上一篇的"阅读模式可用"判定。
     setPdfViewMode("original");
@@ -4025,6 +4245,7 @@ function App() {
     if (currentContent?.kind === "markdown") {
       setReaderBrokenIds([]);
       setReaderApproximateIds([]);
+      setReaderGeometricFallbackIds([]);
       return;
     }
     setMarkdownBrokenIds([]);
@@ -5952,6 +6173,7 @@ function App() {
                   onModeChange={setPdfViewMode}
                   onBrokenAnnotationsChange={setReaderBrokenIds}
                   onApproximateAnnotationsChange={setReaderApproximateIds}
+                  onGeometricFallbackChange={setReaderGeometricFallbackIds}
                   onTocChange={handleTocChange}
                   onActiveChange={handleActiveHeadingChange}
                 /></Suspense>}
@@ -6049,6 +6271,7 @@ function App() {
                 annotations={sortedAnnotations}
                 brokenIds={brokenAnnotationIds}
                 approximateIds={approximateAnnotationIds}
+                geometricFallbackIds={geometricFallbackIds}
                 annotationsLoading={annotationsLoading}
                 annotationSort={annotationSort}
                 onAnnotationSortChange={setAnnotationSort}
@@ -6061,6 +6284,7 @@ function App() {
                 onGenerateAnnotationCard={handleGenerateCardFromAnnotation}
                 onCompileAnnotationsDigest={handleOpenBookDigest}
                 onClearAnnotations={() => void handleClearAnnotations()}
+                annotationsPanel={markdownAnnotationsPanel}
                 linksState={documentLinksState}
                 onSelectLinkDocument={handleSelectLinkDocument}
                 onPreviewLinkTarget={handlePreviewPanelTarget}
@@ -6127,7 +6351,6 @@ function App() {
             }
           >
             <HomeView
-              reviewSummary={homeReviewSummary}
               remainingEstimate={remainingEstimateForItem}
               onOpenAnnotation={handleSelectLibraryAnnotation}
             />
@@ -6139,7 +6362,7 @@ function App() {
             fallback={
               <div className="stats-state">
                 <span className="spinner" aria-hidden="true" />
-                正在加载回顾…
+                正在加载间隔回顾…
               </div>
             }
           >
@@ -6147,7 +6370,7 @@ function App() {
               session={reviewSession}
               onSessionChange={setReviewSession}
               onOpenAnnotation={handleSelectLibraryAnnotation}
-              onExit={() => setActiveView("home")}
+              onExit={() => setActiveView("reader")}
             />
           </Suspense>
         )}
@@ -6211,6 +6434,7 @@ function App() {
             annotations={sortedAnnotations}
             brokenIds={brokenAnnotationIds}
             approximateIds={approximateAnnotationIds}
+            geometricFallbackIds={geometricFallbackIds}
             annotationsLoading={annotationsLoading}
             annotationSort={annotationSort}
             onAnnotationSortChange={setAnnotationSort}
@@ -6233,6 +6457,7 @@ function App() {
             }}
             onCompileAnnotationsDigest={handleOpenBookDigest}
             onClearAnnotations={() => void handleClearAnnotations()}
+            annotationsPanel={markdownAnnotationsPanel}
             linksState={documentLinksState}
             onSelectLinkDocument={handleSelectLinkDocument}
             onPreviewLinkTarget={handlePreviewPanelTarget}
@@ -6276,12 +6501,10 @@ function App() {
           open={Boolean(pendingSelection) && annotationTool === "view"}
           x={toolbarPos.x}
           y={toolbarPos.y}
-          color={highlightColor}
-          onPickColor={(color) => void handlePickColor(color)}
-          onHighlight={() => void handleSaveHighlight(false)}
+          tone={excerptTone}
+          onMark={() => void handleSaveHighlight(false)}
+          onPickTone={(tone) => void handlePickTone(tone)}
           onUnderline={() => void handleSaveUnderline()}
-          onAddNote={() => void handleSaveHighlight(true)}
-          onBookmark={() => void handleCreateBookmark()}
           onMakeCard={handleMakeCardFromSelection}
           onFindRelated={handleFindRelated}
           canFindRelated={canFindRelated}
@@ -6289,7 +6512,7 @@ function App() {
             IS_WEB_RUNTIME ? () => void handleCopySelectionLink() : undefined
           }
           onClose={closeToolbar}
-          canHighlight={Boolean(pendingSelection)}
+          canMark={Boolean(pendingSelection)}
         />
 
         {relatedPassages && (
@@ -6448,10 +6671,10 @@ function App() {
           <div
             className="annotation-note-editor reade-motion-panel"
             role="dialog"
-            aria-label={noteDraft.mode === "create" ? "添加标注笔记" : "编辑标注笔记"}
+            aria-label={noteDraft.mode === "create" ? "添加感悟" : "编辑感悟"}
           >
             <label>
-              笔记
+              感悟
               <textarea
                 value={noteDraft.text}
                 onChange={(event) =>

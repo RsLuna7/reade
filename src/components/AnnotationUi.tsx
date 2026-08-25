@@ -8,6 +8,7 @@ import type {
 import {
   ANNOTATION_COLORS,
   APPROXIMATE_ANCHOR_LABEL,
+  GEOMETRIC_FALLBACK_LABEL,
   annotationKindLabel,
   annotationListTitle,
   colorAccessibleLabel,
@@ -15,6 +16,11 @@ import {
   isAnnotationMarkKind,
   type AnnotationMarkKind,
 } from "../lib/annotations";
+import {
+  ANNOTATION_TONES,
+  ANNOTATION_TONE_META,
+  type AnnotationTone,
+} from "../lib/annotationModel";
 import { previewGroupAnnotations } from "../lib/annotationHub";
 import { isRelocatableAnnotation } from "../lib/annotationRelocate";
 import type { RebindDryRunReport } from "../lib/rebindDryRun";
@@ -24,7 +30,7 @@ export type AnnotationTool = "view" | AnnotationMarkKind;
 
 /**
  * 颜色语义命名(plan-annotation-color-names CN-D5):组件直接读 store,
- * 改名即时反映到所有色块;label 恒带颜色词("金句（黄色）"),无障碍不丢底色。
+ * 改名即时反映到所有色块;label 恒带颜色词("暖砂（黄色）"),无障碍不丢底色。
  */
 function useAnnotationColorNames(): Record<AnnotationColor, string> {
   return useReaderStore((state) => state.annotationColorNames);
@@ -34,13 +40,10 @@ interface SelectionToolbarProps {
   open: boolean;
   x: number;
   y: number;
-  color: AnnotationColor;
-  /** 点击色块:直接以该色落高亮,同时更新偏好色。 */
-  onPickColor: (color: AnnotationColor) => void;
-  onHighlight: () => void;
+  tone: AnnotationTone;
+  onMark: () => void;
+  onPickTone: (tone: AnnotationTone) => void;
   onUnderline: () => void;
-  onAddNote: () => void;
-  onBookmark: () => void;
   /** 金句卡片入口(QC-D5):选区文本生成引文卡片。未传时不渲染按钮。 */
   onMakeCard?: () => void;
   /** 相关段落入口(RP-D4)。未传时不渲染按钮。 */
@@ -53,27 +56,25 @@ interface SelectionToolbarProps {
    */
   onCopyDeepLink?: () => void;
   onClose: () => void;
-  canHighlight: boolean;
+  canMark: boolean;
 }
 
 export function SelectionToolbar({
   open,
   x,
   y,
-  color,
-  onPickColor,
-  onHighlight,
+  tone,
+  onMark,
+  onPickTone,
   onUnderline,
-  onAddNote,
-  onBookmark,
   onMakeCard,
   onFindRelated,
   canFindRelated = false,
   onCopyDeepLink,
   onClose,
-  canHighlight,
+  canMark,
 }: SelectionToolbarProps) {
-  const colorNames = useAnnotationColorNames();
+  const [moreOpen, setMoreOpen] = useState(false);
   if (!open) return null;
   return (
     <div
@@ -83,57 +84,89 @@ export function SelectionToolbar({
       style={{ left: x, top: y }}
       onMouseDown={(event) => event.preventDefault()}
     >
-      <div className="annotation-toolbar-colors">
-        {ANNOTATION_COLORS.map((item) => (
-          <button
-            key={item}
-            type="button"
-            className={`annotation-color-swatch annotation-color-swatch--${item}${color === item ? " active" : ""}`}
-            aria-label={`以${colorAccessibleLabel(item, colorNames)}高亮`}
-            title={colorAccessibleLabel(item, colorNames)}
-            aria-pressed={color === item}
-            disabled={!canHighlight}
-            onClick={() => onPickColor(item)}
-          />
-        ))}
+      <button type="button" disabled={!canMark} onClick={onMark}>
+        标记
+      </button>
+      <div className="annotation-toolbar-more">
+        <button
+          type="button"
+          aria-expanded={moreOpen}
+          aria-haspopup="menu"
+          disabled={!canMark}
+          onClick={() => setMoreOpen((current) => !current)}
+        >
+          更多
+        </button>
+        {moreOpen ? (
+          <div className="annotation-toolbar-menu" role="menu" aria-label="更多标注操作">
+            {ANNOTATION_TONES.map((item) => (
+              <button
+                key={item}
+                type="button"
+                role="menuitem"
+                className={item === tone ? "active" : ""}
+                aria-label={ANNOTATION_TONE_META[item].label}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onPickTone(item);
+                }}
+              >
+                <span className={`annotation-tone-swatch annotation-tone-swatch--${item}`} aria-hidden="true" />
+                {ANNOTATION_TONE_META[item].label}
+              </button>
+            ))}
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                setMoreOpen(false);
+                onUnderline();
+              }}
+            >
+              下划线
+            </button>
+            {onFindRelated ? (
+              <button
+                type="button"
+                role="menuitem"
+                disabled={!canFindRelated}
+                title={canFindRelated ? "在全库中寻找相关段落" : "至少选中 8 个字符"}
+                onClick={() => {
+                  setMoreOpen(false);
+                  onFindRelated();
+                }}
+              >
+                相关
+              </button>
+            ) : null}
+            {onMakeCard ? (
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  setMoreOpen(false);
+                  onMakeCard();
+                }}
+              >
+                卡片
+              </button>
+            ) : null}
+            {onCopyDeepLink ? (
+              <button
+                type="button"
+                role="menuitem"
+                title="复制指向这段文字的分享链接"
+                onClick={() => {
+                  setMoreOpen(false);
+                  onCopyDeepLink();
+                }}
+              >
+                链接
+              </button>
+            ) : null}
+          </div>
+        ) : null}
       </div>
-      <button type="button" disabled={!canHighlight} onClick={onHighlight}>
-        高亮
-      </button>
-      <button type="button" disabled={!canHighlight} onClick={onUnderline}>
-        下划线
-      </button>
-      <button type="button" disabled={!canHighlight} onClick={onAddNote}>
-        笔记
-      </button>
-      <button type="button" onClick={onBookmark}>
-        书签
-      </button>
-      {onFindRelated ? (
-        <button
-          type="button"
-          disabled={!canFindRelated}
-          title={canFindRelated ? "在全库中寻找相关段落" : "至少选中 8 个字符"}
-          onClick={onFindRelated}
-        >
-          相关
-        </button>
-      ) : null}
-      {onMakeCard ? (
-        <button type="button" disabled={!canHighlight} onClick={onMakeCard}>
-          卡片
-        </button>
-      ) : null}
-      {onCopyDeepLink ? (
-        <button
-          type="button"
-          disabled={!canHighlight}
-          title="复制指向这段文字的分享链接"
-          onClick={onCopyDeepLink}
-        >
-          链接
-        </button>
-      ) : null}
       <button type="button" className="annotation-toolbar-close" aria-label="关闭标注工具条" onClick={onClose}>
         ×
       </button>
@@ -217,7 +250,7 @@ export function AnnotationEditBubble({
       ) : null}
       <div className="annotation-edit-actions">
         <button type="button" onClick={() => onEditNote(annotation)}>
-          笔记
+          感悟
         </button>
         {onGenerateCard && annotationSupportsCard(annotation) ? (
           <button type="button" onClick={() => onGenerateCard(annotation)}>
@@ -334,6 +367,8 @@ interface AnnotationListProps {
   brokenIds: Set<string>;
   /** Ids anchored through a non-exact step (normalized/fuzzy weak hint). */
   approximateIds?: Set<string>;
+  /** PDF quote miss with a stored rect still painted as the old layout. */
+  geometricFallbackIds?: Set<string>;
   loading?: boolean;
   sort?: AnnotationListSort;
   onSortChange?: (sort: AnnotationListSort) => void;
@@ -355,6 +390,7 @@ export function AnnotationList({
   annotations,
   brokenIds,
   approximateIds,
+  geometricFallbackIds,
   loading = false,
   sort = "time",
   onSortChange,
@@ -383,6 +419,12 @@ export function AnnotationList({
   const renderItem = (annotation: Annotation, broken: boolean) => {
     const canRecolor = isAnnotationMarkKind(annotation.kind) && Boolean(onChangeColor);
     const approximate = !broken && Boolean(approximateIds?.has(annotation.id));
+    const geometric = !broken && Boolean(geometricFallbackIds?.has(annotation.id));
+    const honestyLabel = geometric
+      ? GEOMETRIC_FALLBACK_LABEL
+      : approximate
+        ? APPROXIMATE_ANCHOR_LABEL
+        : null;
     return (
       <li key={annotation.id} className={`annotation-list-item${broken ? " is-broken" : ""}`}>
         <button type="button" className="annotation-list-main" onClick={() => onSelect(annotation)}>
@@ -392,12 +434,12 @@ export function AnnotationList({
             }`}
           >
             {annotationKindLabel(annotation.kind)}
-            {approximate ? (
+            {honestyLabel ? (
               <span
-                className="annotation-method-dot"
+                className={`annotation-method-dot${geometric ? " annotation-method-dot--geometric" : ""}`}
                 role="img"
-                title={APPROXIMATE_ANCHOR_LABEL}
-                aria-label={APPROXIMATE_ANCHOR_LABEL}
+                title={honestyLabel}
+                aria-label={honestyLabel}
               />
             ) : null}
           </span>
@@ -427,7 +469,7 @@ export function AnnotationList({
           </div>
         ) : null}
         <div className="annotation-list-actions">
-          {broken && onRelocate && isRelocatableAnnotation(annotation) ? (
+          {(broken || geometric) && onRelocate && isRelocatableAnnotation(annotation) ? (
             <button
               type="button"
               aria-label="在文档中定位此文本"
@@ -447,7 +489,7 @@ export function AnnotationList({
             </button>
           ) : null}
           <button type="button" onClick={() => onEditNote(annotation)}>
-            笔记
+            感悟
           </button>
           <button type="button" onClick={() => onDelete(annotation)}>
             删除
@@ -544,6 +586,8 @@ export interface AnnotationLibraryFilters {
   query: string;
   kinds: AnnotationKind[];
   colors: AnnotationColor[];
+  hasReflection?: boolean;
+  enrolled?: boolean;
 }
 
 const ANNOTATION_KIND_CHIPS: ReadonlyArray<[AnnotationKind, string]> = [
@@ -616,6 +660,22 @@ export function AnnotationFilterControls({
             {colorDisplayName(color, colorNames)}
           </button>
         ))}
+        <button
+          type="button"
+          className={`annotation-filter-chip${filters.hasReflection ? " active" : ""}`}
+          aria-pressed={Boolean(filters.hasReflection)}
+          onClick={() => onChange({ ...filters, hasReflection: !filters.hasReflection })}
+        >
+          有感悟
+        </button>
+        <button
+          type="button"
+          className={`annotation-filter-chip${filters.enrolled ? " active" : ""}`}
+          aria-pressed={Boolean(filters.enrolled)}
+          onClick={() => onChange({ ...filters, enrolled: !filters.enrolled })}
+        >
+          已加入间隔回顾
+        </button>
       </div>
     </div>
   );
@@ -1105,7 +1165,7 @@ export function AnnotationLibraryPanel({
     <div className="annotation-library">
       {onOpenHub ? (
         <button type="button" className="annotation-hub-link" onClick={onOpenHub}>
-          在中枢中打开
+          打开全库摘录
         </button>
       ) : null}
       {filterControls}

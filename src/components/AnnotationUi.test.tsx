@@ -41,98 +41,78 @@ describe("SelectionToolbar", () => {
     open: true,
     x: 10,
     y: 10,
-    color: "yellow" as const,
-    onPickColor: vi.fn(),
-    onHighlight: vi.fn(),
+    tone: "sand" as const,
+    onMark: vi.fn(),
+    onPickTone: vi.fn(),
     onUnderline: vi.fn(),
-    onAddNote: vi.fn(),
-    onBookmark: vi.fn(),
     onClose: vi.fn(),
-    canHighlight: true,
+    canMark: true,
   };
 
-  it("offers highlight, underline, note and bookmark actions", () => {
-    const onUnderline = vi.fn();
-    render(<SelectionToolbar {...baseProps} onUnderline={onUnderline} />);
-    expect(screen.getByRole("button", { name: "高亮" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "笔记" })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "书签" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "下划线" }));
-    expect(onUnderline).toHaveBeenCalledTimes(1);
-  });
-
-  it("applies a highlight directly when a color swatch is clicked", () => {
-    const onPickColor = vi.fn();
-    render(<SelectionToolbar {...baseProps} onPickColor={onPickColor} />);
-    fireEvent.click(screen.getByRole("button", { name: "以疑问（绿色）高亮" }));
-    expect(onPickColor).toHaveBeenCalledWith("green");
-  });
-
-  it("renders the copy-deep-link button only when the web runtime wires it", () => {
-    // 桌面运行时不传 onCopyDeepLink(App 以 IS_WEB_RUNTIME 守卫),按钮不存在。
+  it("keeps the first layer to mark and more", () => {
     render(<SelectionToolbar {...baseProps} />);
-    expect(screen.queryByRole("button", { name: "链接" })).not.toBeInTheDocument();
-    cleanup();
+    expect(screen.getByRole("button", { name: "标记" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "更多" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "书签" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "笔记" })).not.toBeInTheDocument();
+  });
 
+  it("saves a mark from the primary action", () => {
+    const onMark = vi.fn();
+    render(<SelectionToolbar {...baseProps} onMark={onMark} />);
+    fireEvent.click(screen.getByRole("button", { name: "标记" }));
+    expect(onMark).toHaveBeenCalledTimes(1);
+  });
+
+  it("lists the three tones with text names inside more", () => {
+    const onPickTone = vi.fn();
+    render(<SelectionToolbar {...baseProps} onPickTone={onPickTone} />);
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.getByRole("menuitem", { name: "暖砂" })).toBeInTheDocument();
+    expect(screen.getByRole("menuitem", { name: "墨蓝" })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("menuitem", { name: "青灰" }));
+    expect(onPickTone).toHaveBeenCalledWith("sage");
+  });
+
+  it("hides related, card and deep-link until the runtime wires them", () => {
+    render(<SelectionToolbar {...baseProps} />);
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    expect(screen.queryByRole("menuitem", { name: "相关" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "卡片" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("menuitem", { name: "链接" })).not.toBeInTheDocument();
+  });
+
+  it("renders the copy-deep-link action only when the web runtime wires it", () => {
     const onCopyDeepLink = vi.fn();
     render(<SelectionToolbar {...baseProps} onCopyDeepLink={onCopyDeepLink} />);
-    fireEvent.click(screen.getByRole("button", { name: "链接" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "链接" }));
     expect(onCopyDeepLink).toHaveBeenCalledTimes(1);
   });
 
-  it("labels every swatch with its semantic name plus the base color word", () => {
-    render(<SelectionToolbar {...baseProps} />);
-    for (const name of [
-      "以金句（黄色）高亮",
-      "以疑问（绿色）高亮",
-      "以行动（蓝色）高亮",
-      "以术语（粉色）高亮",
-    ]) {
-      expect(screen.getByRole("button", { name })).toBeInTheDocument();
-    }
-    // 色块同时携带 tooltip(title),鼠标悬停可见语义名。
-    expect(screen.getByRole("button", { name: "以金句（黄色）高亮" })).toHaveAttribute(
-      "title",
-      "金句（黄色）",
-    );
-  });
-
-  it("reflects renamed colors immediately (store-driven labels)", () => {
-    useReaderStore.getState().setAnnotationColorName("green", "灵感");
-    render(<SelectionToolbar {...baseProps} />);
-    expect(screen.getByRole("button", { name: "以灵感（绿色）高亮" })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "以疑问（绿色）高亮" })).not.toBeInTheDocument();
-  });
-
   it("renders the quote-card action only when a handler is wired (QC)", () => {
-    const view = render(<SelectionToolbar {...baseProps} />);
-    expect(screen.queryByRole("button", { name: "卡片" })).not.toBeInTheDocument();
-    view.unmount();
-
     const onMakeCard = vi.fn();
     render(<SelectionToolbar {...baseProps} onMakeCard={onMakeCard} />);
-    fireEvent.click(screen.getByRole("button", { name: "卡片" }));
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    fireEvent.click(screen.getByRole("menuitem", { name: "卡片" }));
     expect(onMakeCard).toHaveBeenCalledTimes(1);
   });
 
-  it("disables the quote-card action together with the mark actions", () => {
-    render(<SelectionToolbar {...baseProps} onMakeCard={vi.fn()} canHighlight={false} />);
-    expect(screen.getByRole("button", { name: "卡片" })).toBeDisabled();
+  it("disables mark actions together", () => {
+    render(<SelectionToolbar {...baseProps} onMakeCard={vi.fn()} canMark={false} />);
+    expect(screen.getByRole("button", { name: "标记" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "更多" })).toBeDisabled();
   });
 
   it("gates the related-passages action on the selection length (RP)", () => {
     const onFindRelated = vi.fn();
-    const view = render(
+    render(
       <SelectionToolbar {...baseProps} onFindRelated={onFindRelated} canFindRelated={false} />,
     );
-    const related = screen.getByRole("button", { name: "相关" });
+    fireEvent.click(screen.getByRole("button", { name: "更多" }));
+    const related = screen.getByRole("menuitem", { name: "相关" });
     expect(related).toBeDisabled();
     expect(related).toHaveAttribute("title", "至少选中 8 个字符");
-    view.unmount();
-
-    render(<SelectionToolbar {...baseProps} onFindRelated={onFindRelated} canFindRelated />);
-    fireEvent.click(screen.getByRole("button", { name: "相关" }));
-    expect(onFindRelated).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -153,7 +133,7 @@ describe("AnnotationEditBubble", () => {
     render(<AnnotationEditBubble {...baseProps} onChangeColor={onChangeColor} onDelete={onDelete} />);
     expect(screen.getByRole("dialog", { name: "编辑标注" })).toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: "改为行动（蓝色）" }));
+    fireEvent.click(screen.getByRole("button", { name: "改为墨蓝（蓝色）" }));
     expect(onChangeColor).toHaveBeenCalledWith(baseProps.annotation, "blue");
 
     fireEvent.click(screen.getByRole("button", { name: "删除" }));
@@ -217,7 +197,7 @@ describe("AnnotationList", () => {
     render(<AnnotationList {...baseProps} onExport={onExport} />);
     fireEvent.click(screen.getByRole("button", { name: "导出本文档" }));
     expect(onExport).toHaveBeenCalledTimes(1);
-    expect(screen.getByRole("button", { name: "改为术语（粉色）" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "改为旧粉（粉色）" })).toBeInTheDocument();
   });
 
   it("offers the quote-card action only for marks with an excerpt (QC-D3 M2)", () => {
@@ -287,7 +267,7 @@ describe("AnnotationList unanchored group (§5.6 A)", () => {
     expect(item).not.toBeNull();
     expect(item!.querySelector(".annotation-list-title")).toHaveTextContent("消失的文字");
     expect(item!.querySelectorAll("button.annotation-color-swatch").length).toBe(4);
-    expect(item!.textContent).toContain("笔记");
+    expect(item!.textContent).toContain("感悟");
     expect(item!.textContent).toContain("删除");
 
     fireEvent.click(screen.getByRole("button", { name: "在文档中定位此文本" }));
@@ -338,6 +318,22 @@ describe("AnnotationList unanchored group (§5.6 A)", () => {
       />,
     );
     expect(screen.queryByRole("img", { name: "非精确定位" })).not.toBeInTheDocument();
+  });
+
+  it("labels geometric PDF fallback as 旧版面位置 and offers relocate", () => {
+    const onRelocate = vi.fn();
+    render(
+      <AnnotationList
+        {...baseProps}
+        annotations={[highlight()]}
+        geometricFallbackIds={new Set(["ann-1"])}
+        onRelocate={onRelocate}
+      />,
+    );
+    expect(screen.getByRole("img", { name: "旧版面位置" })).toBeInTheDocument();
+    expect(screen.queryByRole("img", { name: "非精确定位" })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "在文档中定位此文本" }));
+    expect(onRelocate).toHaveBeenCalledWith(expect.objectContaining({ id: "ann-1" }));
   });
 });
 
@@ -565,7 +561,7 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
       colors: [],
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "筛选行动（蓝色）标注" }));
+    fireEvent.click(screen.getByRole("button", { name: "筛选墨蓝（蓝色）标注" }));
     expect(onFiltersChange).toHaveBeenCalledWith({ query: "", kinds: [], colors: ["blue"] });
   });
 
@@ -577,9 +573,9 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
         onFiltersChange={vi.fn()}
       />,
     );
-    const chip = screen.getByRole("button", { name: "筛选金句（黄色）标注" });
-    expect(chip).toHaveTextContent("金句");
-    expect(chip).toHaveAttribute("title", "金句（黄色）");
+    const chip = screen.getByRole("button", { name: "筛选暖砂（黄色）标注" });
+    expect(chip).toHaveTextContent("暖砂");
+    expect(chip).toHaveAttribute("title", "暖砂（黄色）");
   });
 
   it("switches the count line and export label while filtering", () => {
@@ -677,7 +673,7 @@ describe("AnnotationLibraryPanel search, filters and groups (方案四 A1/A2)", 
   it("offers the hub entry link when a handler is provided", () => {
     const onOpenHub = vi.fn();
     render(<AnnotationLibraryPanel {...baseProps} onOpenHub={onOpenHub} />);
-    fireEvent.click(screen.getByRole("button", { name: "在中枢中打开" }));
+    fireEvent.click(screen.getByRole("button", { name: "打开全库摘录" }));
     expect(onOpenHub).toHaveBeenCalledTimes(1);
   });
 });

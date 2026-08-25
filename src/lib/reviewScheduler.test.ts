@@ -35,7 +35,7 @@ function candidate(
 }
 
 describe("state machine", () => {
-  it("initial state is box 0 due one day after creation (R-D3)", () => {
+  it("enrollment start state is box 0 due one day after join", () => {
     expect(initialReviewState(NOW)).toEqual({
       box: 0,
       dueAt: NOW + DAY_MS,

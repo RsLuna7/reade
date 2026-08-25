@@ -6,6 +6,12 @@ import type {
   AnnotationRect,
   BookmarkTarget,
 } from "./backend";
+import type {
+  Excerpt,
+  ReadingPlace,
+  Reflection,
+  ReviewEnrollment,
+} from "./annotationModel";
 import { deriveAnnotationSortIndex, isValidSortIndex } from "./annotations";
 import { validateLibraryRelativePath } from "./webLibrary";
 
@@ -886,4 +892,183 @@ export function buildReadwiseCsv(
     }
   }
   return { csv: `${lines.join("\r\n")}\r\n`, rows };
+}
+
+// ---------------------------------------------------------------------------
+// ReadeUserDataArchiveV2 (annotation redesign §9.6)
+// ---------------------------------------------------------------------------
+
+export const ARCHIVE_FORMAT_VERSION = 2;
+export const ARCHIVE_TYPE = "reade_user_data_archive";
+
+export interface ArchiveCollectionSnapshotV2 {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+  items: Array<{ relativePath: string; position: number; addedAt: number }>;
+}
+
+export interface ArchivePreferencesV2 {
+  excerptTone?: string;
+  annotationColorNames?: Record<string, string>;
+}
+
+export interface ReadeUserDataArchiveV2 {
+  formatVersion: typeof ARCHIVE_FORMAT_VERSION;
+  type: typeof ARCHIVE_TYPE;
+  generator: string;
+  exportedAt: number;
+  deviceId: string;
+  includeDeleted: boolean;
+  schemaVersions: { user: number };
+  documents: AnnotationTransferDocument[];
+  excerpts: Excerpt[];
+  places: ReadingPlace[];
+  reflections: Reflection[];
+  reviewEnrollments: ReviewEnrollment[];
+  collections: ArchiveCollectionSnapshotV2[];
+  preferences: ArchivePreferencesV2;
+  checksums: Record<string, string>;
+}
+
+export interface ParsedUserDataArchive {
+  envelope: AnnotationTransferEnvelope;
+  archive: ReadeUserDataArchiveV2 | null;
+}
+
+export function archiveSectionChecksum(value: unknown): string {
+  const json = JSON.stringify(value);
+  let hash = 0x811c9dc5;
+  for (let index = 0; index < json.length; index += 1) {
+    hash ^= json.charCodeAt(index);
+    hash = Math.imul(hash, 0x01000193);
+  }
+  return (hash >>> 0).toString(16).padStart(8, "0");
+}
+
+function archiveChecksums(archive: Omit<ReadeUserDataArchiveV2, "checksums">): Record<string, string> {
+  return {
+    documents: archiveSectionChecksum(archive.documents),
+    excerpts: archiveSectionChecksum(archive.excerpts),
+    places: archiveSectionChecksum(archive.places),
+    reflections: archiveSectionChecksum(archive.reflections),
+    reviewEnrollments: archiveSectionChecksum(archive.reviewEnrollments),
+    collections: archiveSectionChecksum(archive.collections),
+    preferences: archiveSectionChecksum(archive.preferences),
+  };
+}
+
+export interface BuildArchiveV2Options {
+  envelope: AnnotationTransferEnvelope;
+  excerpts?: readonly Excerpt[];
+  places?: readonly ReadingPlace[];
+  reflections?: readonly Reflection[];
+  reviewEnrollments?: readonly ReviewEnrollment[];
+  collections?: readonly ArchiveCollectionSnapshotV2[];
+  preferences?: ArchivePreferencesV2;
+}
+
+export function buildReadeUserDataArchiveV2(
+  options: BuildArchiveV2Options,
+): ReadeUserDataArchiveV2 {
+  const body = {
+    formatVersion: ARCHIVE_FORMAT_VERSION,
+    type: ARCHIVE_TYPE,
+    generator: options.envelope.generator,
+    exportedAt: options.envelope.exportedAt,
+    deviceId: options.envelope.deviceId,
+    includeDeleted: options.envelope.includeDeleted,
+    schemaVersions: { user: 6 },
+    documents: options.envelope.documents,
+    excerpts: [...(options.excerpts ?? [])],
+    places: [...(options.places ?? [])],
+    reflections: [...(options.reflections ?? [])],
+    reviewEnrollments: [...(options.reviewEnrollments ?? [])],
+    collections: [...(options.collections ?? [])],
+    preferences: options.preferences ?? {},
+  } satisfies Omit<ReadeUserDataArchiveV2, "checksums">;
+  return { ...body, checksums: archiveChecksums(body) };
+}
+
+export function serializeReadeUserDataArchive(archive: ReadeUserDataArchiveV2): string {
+  return JSON.stringify(archive, null, 2);
+}
+
+function readArchiveArray<T>(value: unknown, label: string, cap: number): T[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) fail(`${label} 必须是数组`);
+  if (value.length > cap) fail(`${label} 超出 ${cap} 条上限`);
+  return value as T[];
+}
+
+export function parseUserDataArchive(text: string): ParsedUserDataArchive {
+  if (text.length > MAX_TRANSFER_TEXT_CHARS) fail("导入文件过大");
+  let raw: unknown;
+  try {
+    raw = JSON.parse(text);
+  } catch {
+    fail("导入文件不是有效的 JSON");
+  }
+  if (!isRecord(raw)) fail("导入文件不是标注导出文件");
+  if (raw.type === TRANSFER_TYPE) {
+    return { envelope: parseAnnotationEnvelope(text), archive: null };
+  }
+  if (raw.type !== ARCHIVE_TYPE) fail("导入文件不是 Reade 标注导出文件");
+  if (raw.formatVersion !== ARCHIVE_FORMAT_VERSION) {
+    fail(
+      `不支持的导出格式版本（${String(raw.formatVersion)}）；` +
+        "该文件可能来自更新版本的 Reade",
+    );
+  }
+  const v1Payload = {
+    type: TRANSFER_TYPE,
+    formatVersion: TRANSFER_FORMAT_VERSION,
+    generator: raw.generator,
+    exportedAt: raw.exportedAt,
+    deviceId: raw.deviceId,
+    includeDeleted: raw.includeDeleted,
+    documents: raw.documents,
+  };
+  const envelope = parseAnnotationEnvelope(JSON.stringify(v1Payload));
+  const archiveBody: Omit<ReadeUserDataArchiveV2, "checksums"> = {
+    formatVersion: ARCHIVE_FORMAT_VERSION,
+    type: ARCHIVE_TYPE,
+    generator: envelope.generator,
+    exportedAt: envelope.exportedAt,
+    deviceId: envelope.deviceId,
+    includeDeleted: envelope.includeDeleted,
+    schemaVersions:
+      isRecord(raw.schemaVersions) && typeof raw.schemaVersions.user === "number"
+        ? { user: raw.schemaVersions.user }
+        : { user: 6 },
+    documents: envelope.documents,
+    excerpts: readArchiveArray<Excerpt>(raw.excerpts, "excerpts", MAX_TRANSFER_ANNOTATIONS),
+    places: readArchiveArray<ReadingPlace>(raw.places, "places", MAX_TRANSFER_ANNOTATIONS),
+    reflections: readArchiveArray<Reflection>(
+      raw.reflections,
+      "reflections",
+      MAX_TRANSFER_ANNOTATIONS,
+    ),
+    reviewEnrollments: readArchiveArray<ReviewEnrollment>(
+      raw.reviewEnrollments,
+      "reviewEnrollments",
+      MAX_TRANSFER_ANNOTATIONS,
+    ),
+    collections: readArchiveArray<ArchiveCollectionSnapshotV2>(
+      raw.collections,
+      "collections",
+      MAX_TRANSFER_DOCUMENTS,
+    ),
+    preferences: isRecord(raw.preferences) ? (raw.preferences as ArchivePreferencesV2) : {},
+  };
+  const expected = archiveChecksums(archiveBody);
+  if (isRecord(raw.checksums)) {
+    for (const [section, digest] of Object.entries(expected)) {
+      if (raw.checksums[section] !== digest) {
+        fail(`归档 ${section} 校验和不匹配`);
+      }
+    }
+  }
+  return { envelope, archive: { ...archiveBody, checksums: expected } };
 }

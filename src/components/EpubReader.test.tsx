@@ -214,4 +214,72 @@ describe("EpubReader", () => {
     expect(mark!.textContent).toBe("A. 正确");
     expect((mark!.previousSibling as Text).data).toBe("A. 正确 tail ");
   });
+
+  it("retries a stale blockIndex inside the chapter and reports it as approximate", async () => {
+    const document: EpubDocument = {
+      title: "Book",
+      assets: [],
+      notes: [],
+      chapters: [{
+        id: "c1",
+        title: "第一章",
+        level: 1,
+        blocks: [
+          {
+            kind: "paragraph",
+            content: [{ kind: "text", text: "unrelated paragraph", bold: false, italic: false, strike: false, code: false }],
+          },
+          {
+            kind: "paragraph",
+            content: [{ kind: "text", text: "the quoted phrase lives here", bold: false, italic: false, strike: false, code: false }],
+          },
+        ],
+      }],
+    };
+    const annotation: Annotation = {
+      id: "ann-epub-stale-block",
+      relativePath: "book.epub",
+      kind: "highlight",
+      color: "yellow",
+      note: null,
+      selectedText: "quoted phrase",
+      title: "quoted phrase",
+      locator: {
+        kind: "epub",
+        chapterId: "c1",
+        blockIndex: 0,
+        startOffset: 0,
+        endOffset: 13,
+        quote: "quoted phrase",
+        prefix: "the ",
+        suffix: " lives",
+      },
+      sortIndex: "E|00000|00000000",
+      createdAt: 1,
+      updatedAt: 1,
+    };
+    const onBroken = vi.fn();
+    const onApproximate = vi.fn();
+    const view = render(
+      <EpubReader
+        relativePath="book.epub"
+        document={document}
+        locator={null}
+        motionLevel="subtle"
+        annotations={[annotation]}
+        onBrokenAnnotationsChange={onBroken}
+        onApproximateAnnotationsChange={onApproximate}
+        onTocChange={() => undefined}
+        onActiveChange={() => undefined}
+      />,
+    );
+    await waitFor(() => {
+      expect(view.container.querySelector('[data-annotation-id="ann-epub-stale-block"]')).not.toBeNull();
+    });
+    const mark = view.container.querySelector('[data-annotation-id="ann-epub-stale-block"]');
+    expect(mark!.textContent).toBe("quoted phrase");
+    expect(mark!.classList.contains("annotation-mark--approx")).toBe(true);
+    expect(onBroken.mock.calls[onBroken.mock.calls.length - 1]?.[0]).toEqual([]);
+    expect(onApproximate.mock.calls[onApproximate.mock.calls.length - 1]?.[0]).toEqual(["ann-epub-stale-block"]);
+  });
 });

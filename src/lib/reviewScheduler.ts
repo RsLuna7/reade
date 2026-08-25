@@ -14,6 +14,8 @@ export const REVIEW_INTERVALS_DAYS = [1, 3, 7, 14, 30, 60] as const;
 export const REVIEW_MAX_BOX = REVIEW_INTERVALS_DAYS.length - 1;
 /** Default cards per daily batch (decision R-D2; constant, not a setting). */
 export const DAILY_REVIEW_LIMIT = 10;
+/** `dueAt` write window ceiling, matching the desktop validator. */
+export const REVIEW_DUE_FUTURE_LIMIT_MS = 180 * 24 * 60 * 60 * 1000;
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -33,9 +35,8 @@ export interface ReviewState {
 export type ReviewOutcome = "remembered" | "again" | "suspend";
 
 /**
- * Implicit state for annotations without a stored review row (lazy
- * initialisation): box 0, first due one day after creation (decision R-D3).
- * The desktop mirrors this as SQL `COALESCE(due_at, created_at + 86400000)`.
+ * First due state when the user explicitly joins spaced review: box 0,
+ * due one day after enrollment. Ordinary marks do not call this.
  */
 export function initialReviewState(createdAtMs: number): ReviewState {
   return {

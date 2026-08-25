@@ -144,3 +144,103 @@ describe("collection IPC wrappers (snake_case commands, camelCase keys)", () => 
     });
   });
 });
+
+describe("v6 annotation IPC wrappers", () => {
+  it("sends camelCase keys for every new command", async () => {
+    invokeMock.mockResolvedValue({});
+    const draft = {
+      id: "ex-1",
+      relativePath: "notes/a.md",
+      sourceText: "hello",
+      anchor: {
+        format: "markdown" as const,
+        quote: { exact: "hello", prefix: "", suffix: "" },
+        headingId: null,
+      },
+      appearance: { style: "highlight" as const, tone: "sand" as const },
+      sortIndex: "M|00000|00000000",
+    };
+
+    const { createExcerpt, createReadingPlace, deleteAnnotationEntry, deleteReflection, listDocumentAnnotations, restoreAnnotationEntry, setReviewEnrollment, updateExcerptAppearance, upsertReflection } = await import("./tauriBackend");
+
+    await listDocumentAnnotations("notes/a.md");
+    expect(invokeMock).toHaveBeenCalledWith("list_document_annotations", {
+      relativePath: "notes/a.md",
+    });
+
+    await createExcerpt(draft);
+    expect(invokeMock).toHaveBeenCalledWith("create_excerpt", { draft });
+
+    await updateExcerptAppearance("ex-1", { style: "underline", tone: "sage" });
+    expect(invokeMock).toHaveBeenCalledWith("update_excerpt_appearance", {
+      id: "ex-1",
+      appearance: { style: "underline", tone: "sage" },
+    });
+
+    await createReadingPlace({
+      id: "pl-1",
+      relativePath: "notes/a.md",
+      title: "here",
+      target: { format: "markdown", headingId: null, scrollRatio: 0.2 },
+      sortIndex: "M|00000|20000000",
+    });
+    expect(invokeMock).toHaveBeenCalledWith("create_reading_place", {
+      draft: {
+        id: "pl-1",
+        relativePath: "notes/a.md",
+        title: "here",
+        target: { format: "markdown", headingId: null, scrollRatio: 0.2 },
+        sortIndex: "M|00000|20000000",
+      },
+    });
+
+    await upsertReflection("ex-1", "excerpt", "感悟");
+    expect(invokeMock).toHaveBeenCalledWith("upsert_reflection", {
+      entryId: "ex-1",
+      entryKind: "excerpt",
+      body: "感悟",
+    });
+
+    await deleteReflection("ex-1");
+    expect(invokeMock).toHaveBeenCalledWith("delete_reflection", { entryId: "ex-1" });
+
+    await deleteAnnotationEntry("ex-1", "excerpt");
+    expect(invokeMock).toHaveBeenCalledWith("delete_annotation_entry", {
+      id: "ex-1",
+      entryKind: "excerpt",
+    });
+
+    await restoreAnnotationEntry("ex-1", "excerpt");
+    expect(invokeMock).toHaveBeenCalledWith("restore_annotation_entry", {
+      id: "ex-1",
+      entryKind: "excerpt",
+    });
+
+    await setReviewEnrollment("ex-1", true);
+    expect(invokeMock).toHaveBeenCalledWith("set_review_enrollment", {
+      excerptId: "ex-1",
+      enabled: true,
+    });
+
+    const { recordExcerptReviewOutcome, searchAnnotationEntries } = await import("./tauriBackend");
+    await searchAnnotationEntries("hello", 50);
+    expect(invokeMock).toHaveBeenCalledWith("search_annotation_entries", {
+      query: "hello",
+      limit: 50,
+    });
+    await recordExcerptReviewOutcome("ex-1", {
+      box: 1,
+      dueAt: 2,
+      lastReviewedAt: 1,
+      totalReviews: 1,
+      suspended: false,
+    });
+    expect(invokeMock).toHaveBeenCalledWith("record_excerpt_review_outcome", {
+      annotationId: "ex-1",
+      boxLevel: 1,
+      dueAt: 2,
+      lastReviewedAt: 1,
+      suspended: false,
+    });
+  });
+});

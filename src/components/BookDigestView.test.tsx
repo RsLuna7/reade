@@ -77,7 +77,7 @@ describe("BookDigestView", () => {
       />,
     );
     expect(screen.getByRole("dialog", { name: "读书报告" })).toBeInTheDocument();
-    expect(screen.getByText("2 条摘录 · 1 条笔记 · 已略过 1 条书签")).toBeInTheDocument();
+    expect(screen.getByText("2 条摘录 · 1 条感悟 · 已略过 1 条书签")).toBeInTheDocument();
     const headings = screen.getAllByRole("heading", { level: 3 });
     expect(headings.map((node) => node.textContent)).toEqual(["一、导论", "二、用法"]);
     expect(screen.getByText("导论里的摘录")).toBeInTheDocument();

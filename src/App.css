@@ -36,6 +36,17 @@
   PDF 页面恒为白底、不随主题,故 .pdf-user-highlight--* 固定用明色系字面量。
 */
 :root {
+  /* Reading-first excerpt palette (v6): low-chroma, appearance only.
+     Body marks use these fills/lines; --annot-* stays for 4-color UI chrome. */
+  --excerpt-sand: #b5965d;
+  --excerpt-sand-fill: rgb(181 150 93 / 22%);
+  --excerpt-sand-line: #7f6537;
+  --excerpt-sage: #6e938a;
+  --excerpt-sage-fill: rgb(110 147 138 / 20%);
+  --excerpt-sage-line: #4d6f67;
+  --excerpt-slate: #6d829d;
+  --excerpt-slate-fill: rgb(109 130 157 / 20%);
+  --excerpt-slate-line: #50657f;
   --annot-yellow: #efcf53;
   --annot-yellow-fill: rgb(239 207 83 / 50%);
   --annot-yellow-line: #a07a00;
@@ -52,6 +63,15 @@
 
 /* 主题 id 契约为 `${series}-${mode}`(theme-tokens.css),后缀匹配即覆盖全部暗色系。 */
 :root[data-theme$="-dark"] {
+  --excerpt-sand: #c7aa72;
+  --excerpt-sand-fill: rgb(199 170 114 / 22%);
+  --excerpt-sand-line: #d0b680;
+  --excerpt-sage: #88aaa1;
+  --excerpt-sage-fill: rgb(136 170 161 / 22%);
+  --excerpt-sage-line: #9abbb2;
+  --excerpt-slate: #899db7;
+  --excerpt-slate-fill: rgb(137 157 183 / 22%);
+  --excerpt-slate-line: #9fb2c9;
   --annot-yellow: #d1b64a;
   --annot-yellow-fill: rgb(209 182 74 / 30%);
   --annot-yellow-line: #d8bd51;
@@ -1585,6 +1605,7 @@ a:focus-visible {
   max-width: none;
   height: 100%;
   min-height: 0;
+  margin-inline: 0;
   padding: 48px 56px;
   box-sizing: border-box;
 }
@@ -1794,11 +1815,12 @@ a:focus-visible {
 }
 
 .article-shell {
-  /* Fill the middle column (like the reference site); optional max via --reader-measure. */
+  /* Optional --reader-measure caps line length. Center the column so leftover
+     space in a wide pane does not look like a missing right-hand panel. */
   width: 100%;
   max-width: var(--reader-measure);
   min-height: 100%;
-  margin: 0;
+  margin-inline: auto;
   padding: 52px var(--reader-gutter-toc) 110px var(--reader-gutter-inline);
   box-sizing: border-box;
 }
@@ -2074,20 +2096,20 @@ a:focus-visible {
   mix-blend-mode: multiply;
 }
 /* PDF 页面恒为白底(不随主题),固定用明色系字面量,不走 --annot-* token。 */
-.pdf-user-highlight--highlight.pdf-user-highlight--yellow { background: rgb(239 207 83 / 50%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--green { background: rgb(135 226 168 / 45%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--blue { background: rgb(161 207 255 / 45%); }
-.pdf-user-highlight--highlight.pdf-user-highlight--pink { background: rgb(255 176 202 / 45%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--yellow,
+.pdf-user-highlight--highlight.pdf-user-highlight--pink { background: rgb(181 150 93 / 22%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--green { background: rgb(110 147 138 / 20%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--blue { background: rgb(109 130 157 / 20%); }
 .pdf-user-highlight--underline {
   background: transparent;
   mix-blend-mode: normal;
   border-bottom-width: 3px;
   border-bottom-style: solid;
 }
-.pdf-user-highlight--underline.pdf-user-highlight--yellow { border-bottom-color: #a07a00; }
-.pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: #318f5a; }
-.pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: #407bc5; }
-.pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: #c5547c; }
+.pdf-user-highlight--underline.pdf-user-highlight--yellow,
+.pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: #7f6537; }
+.pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: #4d6f67; }
+.pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: #50657f; }
 .pdf-annotation-layer { pointer-events: none; z-index: 3; }
 .pdf-annotation-layer a { position: absolute; pointer-events: auto; border-radius: 2px; background: color-mix(in srgb, #3f82b8 12%, transparent); }
 .pdf-annotation-layer a:hover { outline: 1px solid #3f82b8; background: color-mix(in srgb, #3f82b8 22%, transparent); }
@@ -3246,6 +3268,16 @@ a:focus-visible {
   outline-offset: 1px;
 }
 
+.pdf-user-highlight--geometric {
+  outline: 1px dashed var(--muted);
+  outline-offset: 1px;
+}
+
+.annotation-method-dot--geometric {
+  background: var(--muted);
+  border-radius: 1px;
+}
+
 /* ----- 单条重锚(§5.6 B):预览高亮 + 确认条 ----- */
 
 .annotation-mark.annotation-relocate-preview {
@@ -3430,6 +3462,230 @@ a:focus-visible {
   min-width: 24px;
 }
 
+.annotation-toolbar-more {
+  position: relative;
+}
+
+.annotation-toolbar-menu {
+  position: absolute;
+  z-index: 1;
+  top: calc(100% + 6px);
+  left: 0;
+  display: flex;
+  min-width: 148px;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+}
+
+.annotation-toolbar-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  justify-content: flex-start;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 8px;
+  color: var(--ink);
+  background: transparent;
+  font-size: 12px;
+  text-align: start;
+}
+
+.annotation-toolbar-menu button.active,
+.annotation-toolbar-menu button:hover {
+  background: var(--paper);
+}
+
+.annotation-tone-swatch {
+  width: 12px;
+  height: 12px;
+  border: 1px solid rgb(0 0 0 / 18%);
+  border-radius: 999px;
+  flex-shrink: 0;
+}
+
+.annotation-tone-swatch--sand { background: var(--excerpt-sand); }
+.annotation-tone-swatch--sage { background: var(--excerpt-sage); }
+.annotation-tone-swatch--slate { background: var(--excerpt-slate); }
+
+.document-annotations {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 4px 2px 12px;
+}
+
+.document-annotations-header {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-annotations-meta {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.document-annotations-views {
+  display: flex;
+  gap: 4px;
+}
+
+.document-annotations-views button {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.document-annotations-views button.active {
+  color: var(--ink);
+  border-color: var(--line-strong);
+  background: var(--paper-raised);
+}
+
+.document-annotations-search input {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.document-annotations-status,
+.document-annotations-empty {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+
+.document-annotations-section-toggle {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 6px 2px;
+  border: 0;
+  color: var(--ink);
+  background: transparent;
+  font-size: 13px;
+  font-weight: 600;
+  text-align: start;
+}
+
+.document-annotations-section-count {
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.document-annotations-entry {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 8px;
+  padding: 6px 2px 8px;
+  border-top: 1px solid var(--line);
+}
+
+.document-annotations-entry-main {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: start;
+}
+
+.document-annotations-entry-text {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 1;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.document-annotations-entry.is-expanded .document-annotations-entry-text {
+  -webkit-line-clamp: unset;
+}
+
+.document-annotations-entry-meta {
+  color: var(--ink-soft);
+  font-size: 11px;
+}
+
+.document-annotations-entry-toggle,
+.document-annotations-editor-actions button {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font-size: 12px;
+}
+
+.document-annotations-editor {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.document-annotations-editor textarea {
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.document-annotations-editor-actions {
+  display: flex;
+  gap: 6px;
+}
+
+@media (max-width: 640px) {
+  .annotation-toolbar {
+    left: 8px !important;
+    right: 8px;
+    top: auto !important;
+    bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    justify-content: center;
+  }
+
+  .annotation-toolbar-menu {
+    top: auto;
+    bottom: calc(100% + 6px);
+  }
+
+  .annotation-toolbar button:not(.annotation-color-swatch),
+  .annotation-toolbar-menu button {
+    min-width: 44px;
+    min-height: 44px;
+  }
+}
+
 .annotation-edit-bubble {
   position: fixed;
   z-index: 42;
@@ -3470,10 +3726,10 @@ a:focus-visible {
   color: inherit;
 }
 
-.annotation-mark--highlight.annotation-mark--yellow { background: var(--annot-yellow-fill); }
-.annotation-mark--highlight.annotation-mark--green { background: var(--annot-green-fill); }
-.annotation-mark--highlight.annotation-mark--blue { background: var(--annot-blue-fill); }
-.annotation-mark--highlight.annotation-mark--pink { background: var(--annot-pink-fill); }
+.annotation-mark--highlight.annotation-mark--yellow,
+.annotation-mark--highlight.annotation-mark--pink { background: var(--excerpt-sand-fill); }
+.annotation-mark--highlight.annotation-mark--green { background: var(--excerpt-sage-fill); }
+.annotation-mark--highlight.annotation-mark--blue { background: var(--excerpt-slate-fill); }
 
 .annotation-mark--underline {
   background: transparent;
@@ -3481,10 +3737,10 @@ a:focus-visible {
   border-bottom: 2px solid currentColor;
   padding-bottom: 1px;
 }
-.annotation-mark--underline.annotation-mark--yellow { border-bottom-color: var(--annot-yellow-line); }
-.annotation-mark--underline.annotation-mark--green { border-bottom-color: var(--annot-green-line); }
-.annotation-mark--underline.annotation-mark--blue { border-bottom-color: var(--annot-blue-line); }
-.annotation-mark--underline.annotation-mark--pink { border-bottom-color: var(--annot-pink-line); }
+.annotation-mark--underline.annotation-mark--yellow,
+.annotation-mark--underline.annotation-mark--pink { border-bottom-color: var(--excerpt-sand-line); }
+.annotation-mark--underline.annotation-mark--green { border-bottom-color: var(--excerpt-sage-line); }
+.annotation-mark--underline.annotation-mark--blue { border-bottom-color: var(--excerpt-slate-line); }
 
 /* 朗读当前句(RA-D3 修订):CSS Custom Highlight,零 DOM 变异——React
    重渲不可能再与句高亮冲突(P1 insertBefore 崩溃的根修复)。仍是选区色

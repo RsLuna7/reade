@@ -21,18 +21,20 @@ import {
   isValidSortIndex,
   normalizePdfRects,
   paintTextQuoteMarks,
+  pdfHighlightPaintDecision,
   rangeFromTextIndex,
   resolveTextQuote,
   serializeTextQuote,
+  GEOMETRIC_FALLBACK_LABEL,
   type TextQuoteMarkInput,
 } from "./annotations";
 
 describe("annotation color names (plan-annotation-color-names)", () => {
   it("falls back to the default name for empty or non-string input", () => {
-    expect(normalizeAnnotationColorName("yellow", "")).toBe("金句");
-    expect(normalizeAnnotationColorName("green", "   ")).toBe("疑问");
-    expect(normalizeAnnotationColorName("blue", 42)).toBe("行动");
-    expect(normalizeAnnotationColorName("pink", undefined)).toBe("术语");
+    expect(normalizeAnnotationColorName("yellow", "")).toBe("暖砂");
+    expect(normalizeAnnotationColorName("green", "   ")).toBe("青灰");
+    expect(normalizeAnnotationColorName("blue", 42)).toBe("墨蓝");
+    expect(normalizeAnnotationColorName("pink", undefined)).toBe("旧粉");
   });
 
   it("trims and truncates custom names to six characters", () => {
@@ -44,16 +46,16 @@ describe("annotation color names (plan-annotation-color-names)", () => {
     expect(normalizeAnnotationColorNames(null)).toEqual(DEFAULT_ANNOTATION_COLOR_NAMES);
     expect(normalizeAnnotationColorNames({ yellow: "灵感", blue: 42, extra: "x" })).toEqual({
       yellow: "灵感",
-      green: "疑问",
-      blue: "行动",
-      pink: "术语",
+      green: "青灰",
+      blue: "墨蓝",
+      pink: "旧粉",
     });
   });
 
   it("keeps the base color word in the accessible label", () => {
-    expect(colorDisplayName("yellow")).toBe("金句");
+    expect(colorDisplayName("yellow")).toBe("暖砂");
     expect(colorDisplayName("yellow", { yellow: "灵感" })).toBe("灵感");
-    expect(colorAccessibleLabel("yellow")).toBe("金句（黄色）");
+    expect(colorAccessibleLabel("yellow")).toBe("暖砂（黄色）");
     expect(colorAccessibleLabel("pink", { pink: "生词" })).toBe("生词（粉色）");
   });
 });
@@ -302,6 +304,26 @@ describe("paintTextQuoteMarks", () => {
       expect(segment.classList.contains("annotation-mark--approx")).toBe(false);
       expect(segment.title).toBe("");
     }
+  });
+});
+
+describe("pdf highlight paint honesty", () => {
+  it("does not paint detached overlays and labels geometric fallback distinctly from approximate", () => {
+    expect(pdfHighlightPaintDecision({ status: "detached", fallback: "page" })).toEqual({
+      paint: false,
+      className: null,
+      title: null,
+    });
+    expect(pdfHighlightPaintDecision({ status: "geometricFallback", page: 4 })).toEqual({
+      paint: true,
+      className: "pdf-user-highlight--geometric",
+      title: GEOMETRIC_FALLBACK_LABEL,
+    });
+    expect(pdfHighlightPaintDecision({ status: "approximate", method: "fuzzy" }).className).toBe(
+      "pdf-user-highlight--approx",
+    );
+    expect(pdfHighlightPaintDecision({ status: "exact", method: "hint" }).className).toBeNull();
+    expect(pdfHighlightPaintDecision({ status: "unchecked" }).className).toBeNull();
   });
 });
 

@@ -7,6 +7,7 @@ import type { Annotation } from "./backend";
 const backendMocks = vi.hoisted(() => ({
   listAnnotations: vi.fn<(relativePath?: string | null) => Promise<Annotation[]>>(),
   upsertAnnotation: vi.fn<(annotation: Annotation) => Promise<Annotation>>(),
+  createExcerpt: vi.fn(),
   deleteAnnotation: vi.fn<(id: string) => Promise<void>>(),
   clearDocumentAnnotations: vi.fn<(relativePath: string) => Promise<void>>(),
 }));
@@ -51,6 +52,7 @@ function renderAnnotations(initialPath: string | null) {
 beforeEach(() => {
   backendMocks.listAnnotations.mockReset().mockResolvedValue([]);
   backendMocks.upsertAnnotation.mockReset().mockImplementation(async (annotation) => annotation);
+  backendMocks.createExcerpt.mockReset();
   backendMocks.deleteAnnotation.mockReset().mockResolvedValue(undefined);
   backendMocks.clearDocumentAnnotations.mockReset().mockResolvedValue(undefined);
 });
@@ -170,6 +172,41 @@ describe("undo semantics", () => {
     await act(async () => {
       await expect(result.current.undo()).resolves.toBe(false);
     });
+  });
+
+  it("saves a markdown excerpt through createExcerpt and records undo", async () => {
+    backendMocks.createExcerpt.mockImplementation(async (draft) => ({
+      ...draft,
+      sourceRevision: null,
+      createdAt: 10,
+      updatedAt: 10,
+      deletedAt: null,
+      legacyKind: draft.appearance.style,
+      legacyColor: "yellow",
+      legacyTitle: null,
+      legacySelectedText: draft.sourceText,
+    }));
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.saveExcerpt({
+        id: "ex-1",
+        relativePath: "docs/a.md",
+        sourceText: "quoted line",
+        anchor: {
+          format: "markdown",
+          quote: { exact: "quoted line", prefix: "", suffix: "" },
+          headingId: null,
+        },
+        appearance: { style: "highlight", tone: "sand" },
+        sortIndex: "M|00000|00000000",
+      });
+    });
+    expect(backendMocks.createExcerpt).toHaveBeenCalledTimes(1);
+    expect(backendMocks.upsertAnnotation).not.toHaveBeenCalled();
+    expect(result.current.annotations[0]?.id).toBe("ex-1");
+    expect(result.current.canUndo).toBe(true);
   });
 
   it("skips undo recording when recordUndo is false", async () => {
