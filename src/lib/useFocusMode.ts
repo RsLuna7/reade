@@ -1,27 +1,20 @@
 import { useEffect, type RefObject } from "react";
 import {
+  FOCUS_CONTAINER_ATTR,
   TYPEWRITER_ARM_WINDOW_MS,
   TYPEWRITER_MIN_DELTA_PX,
   TYPEWRITER_SETTLE_MS,
+  collectFocusBlocks,
   focusReferenceLine,
   selectFocusIndex,
+  type FocusContentKind,
 } from "./focusMode";
 import type { ReaderMotionLevel } from "./motion";
 
-export type FocusContentKind = "markdown" | "epub" | "pdf-reading";
-
-/**
- * 顶层块容器选择器（plan-focus-mode 定稿 §6.1）：容器的元素子级即
- * 聚焦候选块；PDF 原版式无段落 DOM，由调用方直接不启用。
- */
-const CONTAINER_SELECTORS: Record<FocusContentKind, string> = {
-  markdown: ".annotated-markdown > .markdown-body",
-  epub: ".epub-chapter",
-  "pdf-reading": ".pdf-reading-page > .markdown-body",
-};
+export type { FocusContentKind };
+export { FOCUS_CONTAINER_ATTR };
 
 export const FOCUS_SPOTLIGHT_CLASS = "focus-spotlight";
-export const FOCUS_CONTAINER_ATTR = "data-focus-container";
 export const FOCUS_CURRENT_ATTR = "data-focus-current";
 
 /** 打字机武装键：会移动阅读位置的导航键（FM 定稿 §6.1）。 */
@@ -80,7 +73,6 @@ export function useFocusMode(options: {
     const active = Boolean(enabledKind && (spotlight || typewriter));
     if (!reader || !article || !active || !enabledKind) return;
 
-    const selector = CONTAINER_SELECTORS[enabledKind];
     let blocks: HTMLElement[] = [];
     const visible = new Set<HTMLElement>();
     let currentBlock: HTMLElement | null = null;
@@ -143,17 +135,8 @@ export function useFocusMode(options: {
       observer.disconnect();
       visible.clear();
       clearCurrent();
-      blocks = [];
-      for (const container of Array.from(
-        article.querySelectorAll<HTMLElement>(selector),
-      )) {
-        container.setAttribute(FOCUS_CONTAINER_ATTR, "true");
-        for (const child of Array.from(container.children)) {
-          if (!(child instanceof HTMLElement)) continue;
-          blocks.push(child);
-          observer.observe(child);
-        }
-      }
+      blocks = collectFocusBlocks(article, enabledKind, { markContainers: true });
+      for (const block of blocks) observer.observe(block);
     };
 
     // ---- 打字机滚动(§3.2) ----

@@ -39,6 +39,10 @@ import {
 } from "../lib/navHistory";
 import { clampTtsRate, TTS_DEFAULT_RATE } from "../lib/ttsPlayer";
 import {
+  AUTO_PACE_BIAS_DEFAULT,
+  clampAutoPaceBias,
+} from "../lib/autoPace";
+import {
   LEGACY_THEME_ID_MAP,
   SERIES_FONT_PRESET,
   THEME_META,
@@ -249,6 +253,8 @@ type PersistedReaderPreferences = Partial<
     | "focusSpotlight"
     | "typewriterScroll"
     | "readingRuler"
+    | "autoPaceEnabled"
+    | "autoPaceBias"
     | "readNextEnabled"
     | "libraryViewMode"
     | "ttsRate"
@@ -322,6 +328,13 @@ export function migrateReaderPreferences(
     ...(typeof state.readingRuler === "boolean"
       ? { readingRuler: state.readingRuler }
       : {}),
+    // 自动推进(plan-auto-pace):缺键/坏值回默认关与 bias=1。
+    ...(typeof state.autoPaceEnabled === "boolean"
+      ? { autoPaceEnabled: state.autoPaceEnabled }
+      : {}),
+    ...(typeof state.autoPaceBias === "number"
+      ? { autoPaceBias: clampAutoPaceBias(state.autoPaceBias) }
+      : {}),
     // 读完接着读(plan-read-next):缺键/坏值回默认开。
     ...(typeof state.readNextEnabled === "boolean"
       ? { readNextEnabled: state.readNextEnabled }
@@ -387,6 +400,12 @@ interface ReaderState {
   focusSpotlight: boolean;
   typewriterScroll: boolean;
   readingRuler: boolean;
+  /**
+   * 自感应按段推进(plan-auto-pace):开关默认关;bias 整体偏快/偏慢
+   * (默认 1,类似语速),持久化、双端同构。
+   */
+  autoPaceEnabled: boolean;
+  autoPaceBias: number;
   /**
    * 读完接着读(plan-read-next):滚动到末尾时的"下一篇"推荐卡。
    * 默认开;持久化、双端同构。
@@ -457,6 +476,8 @@ interface ReaderState {
   setFocusSpotlight: (enabled: boolean) => void;
   setTypewriterScroll: (enabled: boolean) => void;
   setReadingRuler: (enabled: boolean) => void;
+  setAutoPaceEnabled: (enabled: boolean) => void;
+  setAutoPaceBias: (bias: number) => void;
   setReadNextEnabled: (enabled: boolean) => void;
   setLibraryViewMode: (mode: LibraryViewMode) => void;
   setActiveView: (view: ReaderView) => void;
@@ -568,6 +589,8 @@ export const useReaderStore = create<ReaderState>()(
         focusSpotlight: false,
         typewriterScroll: false,
         readingRuler: false,
+        autoPaceEnabled: false,
+        autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
         readNextEnabled: true,
         libraryViewMode: "tree",
         expandedPaths: [],
@@ -826,6 +849,14 @@ export const useReaderStore = create<ReaderState>()(
           set({ readingRuler: enabled === true });
         },
 
+        setAutoPaceEnabled: (enabled) => {
+          set({ autoPaceEnabled: enabled === true });
+        },
+
+        setAutoPaceBias: (bias) => {
+          set({ autoPaceBias: clampAutoPaceBias(bias) });
+        },
+
         setReadNextEnabled: (enabled) => {
           set({ readNextEnabled: typeof enabled === "boolean" ? enabled : true });
         },
@@ -900,6 +931,8 @@ export const useReaderStore = create<ReaderState>()(
             focusSpotlight: false,
             typewriterScroll: false,
             readingRuler: false,
+            autoPaceEnabled: false,
+            autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
             readNextEnabled: true,
           });
         },
@@ -961,6 +994,8 @@ export const useReaderStore = create<ReaderState>()(
         focusSpotlight: state.focusSpotlight,
         typewriterScroll: state.typewriterScroll,
         readingRuler: state.readingRuler,
+        autoPaceEnabled: state.autoPaceEnabled,
+        autoPaceBias: state.autoPaceBias,
         readNextEnabled: state.readNextEnabled,
         libraryViewMode: state.libraryViewMode,
         ttsRate: state.ttsRate,
@@ -1041,6 +1076,14 @@ export const useReaderStore = create<ReaderState>()(
             typeof preferences.readingRuler === "boolean"
               ? preferences.readingRuler
               : current.readingRuler,
+          autoPaceEnabled:
+            typeof preferences.autoPaceEnabled === "boolean"
+              ? preferences.autoPaceEnabled
+              : current.autoPaceEnabled,
+          autoPaceBias:
+            typeof preferences.autoPaceBias === "number"
+              ? clampAutoPaceBias(preferences.autoPaceBias)
+              : current.autoPaceBias,
           readNextEnabled:
             typeof preferences.readNextEnabled === "boolean"
               ? preferences.readNextEnabled

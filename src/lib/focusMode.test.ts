@@ -1,6 +1,8 @@
+// @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
 import {
   FOCUS_ANCHOR_RATIO,
+  collectFocusBlocks,
   focusReferenceLine,
   rulerBandHeight,
   selectFocusIndex,
@@ -108,5 +110,28 @@ describe("rulerBandHeight", () => {
     expect(rulerBandHeight(0, 0)).toBe(12);
     expect(rulerBandHeight(Number.NaN, 2)).toBe(12);
     expect(rulerBandHeight(200, 3)).toBe(120);
+  });
+});
+
+describe("collectFocusBlocks", () => {
+  it("collects top-level markdown body children and marks containers", () => {
+    const article = document.createElement("div");
+    article.innerHTML = `
+      <div class="annotated-markdown">
+        <article class="markdown-body">
+          <p>one</p>
+          <h2>two</h2>
+          <pre>code</pre>
+        </article>
+      </div>
+    `;
+    const blocks = collectFocusBlocks(article, "markdown", { markContainers: true });
+    expect(blocks).toHaveLength(3);
+    expect(blocks[0].tagName).toBe("P");
+    expect(blocks[1].tagName).toBe("H2");
+    expect(blocks[2].tagName).toBe("PRE");
+    expect(
+      article.querySelector(".markdown-body")?.getAttribute("data-focus-container"),
+    ).toBe("true");
   });
 });

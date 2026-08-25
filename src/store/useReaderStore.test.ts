@@ -520,10 +520,14 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().focusSpotlight).toBe(false);
     expect(useReaderStore.getState().typewriterScroll).toBe(false);
     expect(useReaderStore.getState().readingRuler).toBe(false);
+    expect(useReaderStore.getState().autoPaceEnabled).toBe(false);
+    expect(useReaderStore.getState().autoPaceBias).toBe(1);
 
     useReaderStore.getState().setFocusSpotlight(true);
     useReaderStore.getState().setTypewriterScroll(true);
     useReaderStore.getState().setReadingRuler(true);
+    useReaderStore.getState().setAutoPaceEnabled(true);
+    useReaderStore.getState().setAutoPaceBias(1.4);
     const stored = JSON.parse(
       localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
     ) as { state: Record<string, unknown> };
@@ -531,6 +535,8 @@ describe("reading settings", () => {
       focusSpotlight: true,
       typewriterScroll: true,
       readingRuler: true,
+      autoPaceEnabled: true,
+      autoPaceBias: 1.4,
     });
 
     // 显式开启的偏好在下次启动 rehydrate 后保留。
@@ -538,18 +544,28 @@ describe("reading settings", () => {
       focusSpotlight: false,
       typewriterScroll: false,
       readingRuler: false,
+      autoPaceEnabled: false,
+      autoPaceBias: 1,
     });
     localStorage.setItem(
       READER_PREFERENCES_STORAGE_KEY,
       JSON.stringify({
         version: READER_PREFERENCES_VERSION,
-        state: { focusSpotlight: true, typewriterScroll: true, readingRuler: true },
+        state: {
+          focusSpotlight: true,
+          typewriterScroll: true,
+          readingRuler: true,
+          autoPaceEnabled: true,
+          autoPaceBias: 1.4,
+        },
       }),
     );
     await useReaderStore.persist.rehydrate();
     expect(useReaderStore.getState().focusSpotlight).toBe(true);
     expect(useReaderStore.getState().typewriterScroll).toBe(true);
     expect(useReaderStore.getState().readingRuler).toBe(true);
+    expect(useReaderStore.getState().autoPaceEnabled).toBe(true);
+    expect(useReaderStore.getState().autoPaceBias).toBe(1.4);
   });
 
   it("collapses corrupt focus-mode values to the default-off state", async () => {
@@ -557,18 +573,28 @@ describe("reading settings", () => {
       focusSpotlight: false,
       typewriterScroll: false,
       readingRuler: false,
+      autoPaceEnabled: false,
+      autoPaceBias: 1,
     });
     localStorage.setItem(
       READER_PREFERENCES_STORAGE_KEY,
       JSON.stringify({
         version: READER_PREFERENCES_VERSION,
-        state: { focusSpotlight: "yes", typewriterScroll: 1, readingRuler: null },
+        state: {
+          focusSpotlight: "yes",
+          typewriterScroll: 1,
+          readingRuler: null,
+          autoPaceEnabled: "on",
+          autoPaceBias: "fast",
+        },
       }),
     );
     await useReaderStore.persist.rehydrate();
     expect(useReaderStore.getState().focusSpotlight).toBe(false);
     expect(useReaderStore.getState().typewriterScroll).toBe(false);
     expect(useReaderStore.getState().readingRuler).toBe(false);
+    expect(useReaderStore.getState().autoPaceEnabled).toBe(false);
+    expect(useReaderStore.getState().autoPaceBias).toBe(1);
 
     // 旧持久化数据没有这些键时不注入。
     const migrated = migrateReaderPreferences(
@@ -578,15 +604,21 @@ describe("reading settings", () => {
     expect(migrated).not.toHaveProperty("focusSpotlight");
     expect(migrated).not.toHaveProperty("typewriterScroll");
     expect(migrated).not.toHaveProperty("readingRuler");
+    expect(migrated).not.toHaveProperty("autoPaceEnabled");
+    expect(migrated).not.toHaveProperty("autoPaceBias");
 
-    // 恢复默认把三开关拨回默认关。
+    // 恢复默认把开关拨回默认关。
     useReaderStore.getState().setFocusSpotlight(true);
     useReaderStore.getState().setTypewriterScroll(true);
     useReaderStore.getState().setReadingRuler(true);
+    useReaderStore.getState().setAutoPaceEnabled(true);
+    useReaderStore.getState().setAutoPaceBias(1.6);
     useReaderStore.getState().resetReaderPreferences();
     expect(useReaderStore.getState().focusSpotlight).toBe(false);
     expect(useReaderStore.getState().typewriterScroll).toBe(false);
     expect(useReaderStore.getState().readingRuler).toBe(false);
+    expect(useReaderStore.getState().autoPaceEnabled).toBe(false);
+    expect(useReaderStore.getState().autoPaceBias).toBe(1);
   });
 
   it("persists the read-next switch and defaults it on (plan-read-next)", async () => {

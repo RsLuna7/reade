@@ -228,8 +228,10 @@ import { useReadAloud } from "./lib/useReadAloud";
 // 聚焦模式(plan-focus-mode):spotlight/打字机共享驱动在 lib,
 // 标尺是纯视觉组件;PDF 原版式无段落 DOM,三者一律不接线。
 import { useFocusMode, type FocusContentKind } from "./lib/useFocusMode";
+import { useAutoPace } from "./lib/useAutoPace";
 import { ReadingRuler } from "./components/ReadingRuler";
 import { ReadAloudBar } from "./components/ReadAloudBar";
+import { AutoPaceBar } from "./components/AutoPaceBar";
 import {
   AnnotationEditBubble,
   AnnotationImportConfirm,
@@ -817,6 +819,8 @@ export function ReadingSettingsPanel({
   const setTypewriterScroll = useReaderStore((state) => state.setTypewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
   const setReadingRuler = useReaderStore((state) => state.setReadingRuler);
+  const autoPaceEnabled = useReaderStore((state) => state.autoPaceEnabled);
+  const setAutoPaceEnabled = useReaderStore((state) => state.setAutoPaceEnabled);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
   const setReadNextEnabled = useReaderStore((state) => state.setReadNextEnabled);
   const verticalWriting = useReaderStore((state) => state.verticalWriting);
@@ -1055,6 +1059,7 @@ export function ReadingSettingsPanel({
           ["段落聚焦", focusSpotlight, setFocusSpotlight, "focus-spotlight"],
           ["打字机滚动", typewriterScroll, setTypewriterScroll, "typewriter-scroll"],
           ["阅读标尺", readingRuler, setReadingRuler, "reading-ruler"],
+          ["自动推进", autoPaceEnabled, setAutoPaceEnabled, "auto-pace"],
         ] as const).map(([label, value, setValue, key]) => (
           <div className="focus-mode-row" key={key}>
             <span className="focus-mode-row-label">{label}</span>
@@ -1083,7 +1088,7 @@ export function ReadingSettingsPanel({
         ))}
         <p className="setting-hint">
           {focusUnavailableReason ??
-            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带。"}
+            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带；自动推进按段停留后跳到下一段，并根据你的抢滚/回退自感应调速。"}
         </p>
       </fieldset>
 
@@ -1541,6 +1546,10 @@ function App() {
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
   const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
   const readingRuler = useReaderStore((state) => state.readingRuler);
+  const autoPaceEnabled = useReaderStore((state) => state.autoPaceEnabled);
+  const autoPaceBias = useReaderStore((state) => state.autoPaceBias);
+  const setAutoPaceEnabled = useReaderStore((state) => state.setAutoPaceEnabled);
+  const setAutoPaceBias = useReaderStore((state) => state.setAutoPaceBias);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
   const treeLayout = useReaderStore((state) => state.treeLayout);
   // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
@@ -2360,21 +2369,12 @@ function App() {
           ? "pdf-reading"
           : null;
   const focusUnavailableReason = verticalActive
-    ? "竖排模式下聚焦功能暂停（段落聚焦/打字机滚动/阅读标尺都是横排纵轴假设）；关闭竖排后恢复。"
+    ? "竖排模式下聚焦功能暂停（段落聚焦/打字机滚动/阅读标尺/自动推进都是横排纵轴假设）；关闭竖排后恢复。"
     : currentContent?.kind === "pdf" && pdfViewMode === "original"
       ? "PDF 原版式没有段落结构，聚焦模式不适用；切换到阅读模式后可用。"
       : null;
-  useFocusMode({
-    readerRef,
-    articleRef,
-    enabledKind: activeView === "reader" && !verticalActive ? focusContentKind : null,
-    contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
-    spotlight: focusSpotlight,
-    typewriter: typewriterScroll,
-    // TTS 的滚动跟随优先(§3.4):控制条打开期间打字机让位。
-    typewriterSuspended: readAloudBarOpen,
-    motionLevel,
-  });
+
+  // useFocusMode / useAutoPace 在 readingSpeed 就绪后接线（见下方）。
 
   // ---- 分栏对照(plan-split-view) ----
   // 副栏的会话记忆由 App 持有:窄窗退化会卸载副栏组件,恢复分栏后仍能回位。
@@ -4683,6 +4683,33 @@ function App() {
     return readingSpeed.calibrated ? `${line} · 个人速度已校准` : line;
   }, [currentPath, estimateForPath, readingSpeed.calibrated]);
 
+  // ---- 聚焦模式 + 自感应按段推进（依赖个人阅读速度底盘）----
+  const autoPace = useAutoPace({
+    readerRef,
+    articleRef,
+    enabledKind: activeView === "reader" && !verticalActive ? focusContentKind : null,
+    contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
+    enabled: autoPaceEnabled && focusUnavailableReason === null,
+    suspended: readAloudBarOpen,
+    charsPerMinute: readingSpeed.charsPerMinute,
+    bias: autoPaceBias,
+    motionLevel,
+    onNotice: showNotice,
+    onRequestDisable: () => setAutoPaceEnabled(false),
+  });
+
+  useFocusMode({
+    readerRef,
+    articleRef,
+    enabledKind: activeView === "reader" && !verticalActive ? focusContentKind : null,
+    contentKey: `${currentPath ?? ""}::${pdfViewMode}`,
+    spotlight: focusSpotlight,
+    typewriter: typewriterScroll,
+    // TTS 或自动推进播放时打字机让位。
+    typewriterSuspended: readAloudBarOpen || autoPace.playing,
+    motionLevel,
+  });
+
   // ---- 读完接着读(plan-read-next) ----
   // 哨兵可见 + 高水位 ≥0.98 + 800ms 驻留才出卡(RN-D2);dismiss 是
   // 会话级 Set(RN-D4),换库清空;推荐结果按文档缓存,反链 IPC 至多一次。
@@ -5086,6 +5113,10 @@ function App() {
             stopReadAloud();
             return;
           }
+          if (autoPace.barOpen) {
+            autoPace.stop();
+            return;
+          }
           if (annotationTool !== "view") {
             setAnnotationTool("view");
           }
@@ -5155,6 +5186,8 @@ function App() {
     handleUndoAnnotation,
     closeRelatedPassages,
     readAloudBarOpen,
+    autoPace.barOpen,
+    autoPace.stop,
     annotationTool,
     setAnnotationTool,
     stopReadAloud,
@@ -6492,8 +6525,8 @@ function App() {
         />
 
 
-        {/* 读完接着读:与朗读条同区位,朗读中不出卡(RN-D3)。 */}
-        {readNextTarget && !readAloud.barOpen && !overlayViewOpen && (
+        {/* 读完接着读:与朗读条/自动推进条同区位,互斥渲染。 */}
+        {readNextTarget && !readAloud.barOpen && !autoPace.barOpen && !overlayViewOpen && (
           <Suspense fallback={null}>
             <ReadNextCard
               title={readNextTarget.title}
@@ -6505,6 +6538,17 @@ function App() {
               onDismiss={dismissReadNext}
             />
           </Suspense>
+        )}
+
+        {autoPace.barOpen && !readAloud.barOpen && !overlayViewOpen && (
+          <AutoPaceBar
+            status={autoPace.status}
+            paceHint={autoPace.paceHint}
+            bias={autoPaceBias}
+            onToggle={autoPace.toggle}
+            onBiasChange={setAutoPaceBias}
+            onStop={autoPace.stop}
+          />
         )}
 
         {readAloud.barOpen && !overlayViewOpen && (
