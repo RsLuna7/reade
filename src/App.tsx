@@ -234,12 +234,10 @@ import {
   AnnotationEditBubble,
   AnnotationImportConfirm,
   AnnotationList,
-  AnnotationLibraryPanel,
   AnnotationToolsPanel,
   SelectionToolbar,
   type AnnotationLibraryFilters,
   type AnnotationLibraryGroup,
-  type AnnotationLibraryStatus,
   type AnnotationListSort,
   type LibraryDocumentOption,
   type LostDocumentEntry,
@@ -1368,7 +1366,7 @@ export function TocNavigation({
   );
 }
 
-type SidePanelTab = "toc" | "annotations" | "library";
+type SidePanelTab = "toc" | "annotations";
 
 function SidePanel({
   tab,
@@ -1397,24 +1395,6 @@ function SidePanel({
   onCompileAnnotationsDigest,
   onClearAnnotations,
   annotationsPanel,
-  libraryStatus,
-  libraryGroups,
-  libraryError,
-  currentPath,
-  lostDocuments,
-  libraryDocuments,
-  libraryFilters,
-  onLibraryFiltersChange,
-  libraryFilterActive,
-  onDryRunRebind,
-  onRebindLostDocument,
-  onRefreshLibraryAnnotations,
-  onExportLibraryAnnotations,
-  onExportLibraryGroup,
-  onExportLibraryJson,
-  onExportLibraryCsv,
-  onImportLibraryAnnotations,
-  onSelectLibraryAnnotation,
   onOpenLibraryHub,
 }: {
   tab: SidePanelTab;
@@ -1445,24 +1425,7 @@ function SidePanel({
   onClearAnnotations: () => void;
   /** Chapter/page-band outline for Markdown/PDF/EPUB; honesty fallback stays AnnotationList. */
   annotationsPanel?: React.ReactNode;
-  libraryStatus: AnnotationLibraryStatus;
-  libraryGroups: AnnotationLibraryGroup[];
-  libraryError: string | null;
-  currentPath: string | null;
-  lostDocuments: LostDocumentEntry[];
-  libraryDocuments: LibraryDocumentOption[];
-  libraryFilters: AnnotationLibraryFilters;
-  onLibraryFiltersChange: (filters: AnnotationLibraryFilters) => void;
-  libraryFilterActive: boolean;
-  onDryRunRebind: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
-  onRebindLostDocument: (oldPath: string, newPath: string) => Promise<void>;
-  onRefreshLibraryAnnotations: () => void;
-  onExportLibraryAnnotations: () => void;
-  onExportLibraryGroup: (group: AnnotationLibraryGroup) => void;
-  onExportLibraryJson: () => void;
-  onExportLibraryCsv: () => void;
-  onImportLibraryAnnotations: () => void;
-  onSelectLibraryAnnotation: (annotation: Annotation) => void;
+  /** 二级入口：全屏全库摘录（命令面板亦可）。 */
   onOpenLibraryHub?: () => void;
 }) {
   return (
@@ -1487,15 +1450,6 @@ function SidePanel({
           标注
           {annotations.length > 0 ? <span className="side-panel-count">{annotations.length}</span> : null}
         </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "library"}
-          className={tab === "library" ? "active" : ""}
-          onClick={() => onTabChange("library")}
-        >
-          全库
-        </button>
       </div>
       {tab === "toc" ? (
         <TocNavigation
@@ -1507,49 +1461,34 @@ function SidePanel({
           onSelectTop={onSelectDocumentTop}
           estimateLine={tocEstimateLine}
         />
-      ) : tab === "annotations" ? (
-        annotationsPanel ?? (
-        <AnnotationList
-          annotations={annotations}
-          brokenIds={brokenIds}
-          approximateIds={approximateIds}
-          geometricFallbackIds={geometricFallbackIds}
-          loading={annotationsLoading}
-          sort={annotationSort}
-          onSortChange={onAnnotationSortChange}
-          onExport={onExportAnnotations}
-          onSelect={onSelectAnnotation}
-          onDelete={onDeleteAnnotation}
-          onEditNote={onEditAnnotationNote}
-          onChangeColor={onChangeAnnotationColor}
-          onRelocate={onRelocateAnnotation}
-          onGenerateCard={onGenerateAnnotationCard}
-          onCompileDigest={onCompileAnnotationsDigest}
-          onClearAll={onClearAnnotations}
-        />
-        )
       ) : (
-        <AnnotationLibraryPanel
-          status={libraryStatus}
-          groups={libraryGroups}
-          error={libraryError}
-          currentPath={currentPath}
-          lostDocuments={lostDocuments}
-          documents={libraryDocuments}
-          filters={libraryFilters}
-          onFiltersChange={onLibraryFiltersChange}
-          filterActive={libraryFilterActive}
-          onDryRunRebind={onDryRunRebind}
-          onRebindLostDocument={onRebindLostDocument}
-          onRefresh={onRefreshLibraryAnnotations}
-          onExport={onExportLibraryAnnotations}
-          onExportGroup={onExportLibraryGroup}
-          onExportJson={onExportLibraryJson}
-          onExportCsv={onExportLibraryCsv}
-          onImport={onImportLibraryAnnotations}
-          onSelect={onSelectLibraryAnnotation}
-          onOpenHub={onOpenLibraryHub}
-        />
+        <>
+          {onOpenLibraryHub ? (
+            <button type="button" className="annotation-hub-link side-panel-hub-link" onClick={onOpenLibraryHub}>
+              打开全库摘录
+            </button>
+          ) : null}
+          {annotationsPanel ?? (
+            <AnnotationList
+              annotations={annotations}
+              brokenIds={brokenIds}
+              approximateIds={approximateIds}
+              geometricFallbackIds={geometricFallbackIds}
+              loading={annotationsLoading}
+              sort={annotationSort}
+              onSortChange={onAnnotationSortChange}
+              onExport={onExportAnnotations}
+              onSelect={onSelectAnnotation}
+              onDelete={onDeleteAnnotation}
+              onEditNote={onEditAnnotationNote}
+              onChangeColor={onChangeAnnotationColor}
+              onRelocate={onRelocateAnnotation}
+              onGenerateCard={onGenerateAnnotationCard}
+              onCompileDigest={onCompileAnnotationsDigest}
+              onClearAll={onClearAnnotations}
+            />
+          )}
+        </>
       )}
     </div>
   );
@@ -3664,7 +3603,7 @@ function App() {
     [annotations, markEditor],
   );
 
-  // B7:全库标注总览。首次打开"全库"tab 时拉取;当前文档标注
+  // B7:全库标注总览。打开全屏「全库摘录」时拉取;当前文档标注
   // 变化时置为过期,下次打开(或正打开时)自动重新拉取。
   const loadLibraryAnnotations = useCallback(async () => {
     setLibraryAnnotations({ status: "loading" });
@@ -3684,13 +3623,10 @@ function App() {
   }, [annotations]);
 
   useEffect(() => {
-    if (
-      (sidePanelTab === "library" || activeView === "annotations") &&
-      libraryAnnotations.status === "idle"
-    ) {
+    if (activeView === "annotations" && libraryAnnotations.status === "idle") {
       void loadLibraryAnnotations();
     }
-  }, [activeView, libraryAnnotations.status, loadLibraryAnnotations, sidePanelTab]);
+  }, [activeView, libraryAnnotations.status, loadLibraryAnnotations]);
 
   // 方案四 A1:全库检索与筛选。检索输入 240ms 防抖(沿库搜索的既有模式),
   // 桌面走 search_annotations(FTS5 trigram),Web 由 wrapper 走同构内存过滤;
@@ -3906,7 +3842,7 @@ function App() {
     [handleSelectLibraryAnnotation],
   );
 
-  /** 全屏中枢入口(方案四 A2):来自全库 tab 顶部链接,footer 不加第四图标。 */
+  /** 全屏中枢入口:标注 tab 顶栏链接 + 命令面板;footer 不加第四图标。 */
   const openAnnotationHub = useCallback(() => {
     setCompactTocOpen(false);
     setMobileLibraryOpen(false);
@@ -4184,7 +4120,7 @@ function App() {
     setMarkEditor(null);
     setRelatedPassages(null);
     setCollectionsPopoverOpen(false);
-    setSidePanelTab((current) => (current === "library" ? current : "toc"));
+    setSidePanelTab("toc");
     // 编纂视图是单文档的:换文档即关闭,防 overlay 展示上一篇的报告。
     setBookDigestOpen(false);
     setMarkdownBrokenIds([]);
@@ -6262,24 +6198,6 @@ function App() {
                 onCompileAnnotationsDigest={handleOpenBookDigest}
                 onClearAnnotations={() => void handleClearAnnotations()}
                 annotationsPanel={documentAnnotationsPanel}
-                libraryStatus={libraryAnnotations.status}
-                libraryGroups={libraryGroups}
-                libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
-                currentPath={currentPath}
-                lostDocuments={lostDocuments}
-                libraryDocuments={libraryDocumentOptions}
-                libraryFilters={libraryFilters}
-                onLibraryFiltersChange={setLibraryFilters}
-                libraryFilterActive={libraryFilterActive}
-                onDryRunRebind={handleDryRunRebind}
-                onRebindLostDocument={handleRebindLostDocument}
-                onRefreshLibraryAnnotations={() => void loadLibraryAnnotations()}
-                onExportLibraryAnnotations={() => void handleExportLibraryAnnotations()}
-                onExportLibraryGroup={(group) => void handleExportLibraryGroup(group)}
-                onExportLibraryJson={() => void handleExportAnnotationsJson()}
-                onExportLibraryCsv={() => void handleExportAnnotationsCsv()}
-                onImportLibraryAnnotations={() => void handleImportAnnotations()}
-                onSelectLibraryAnnotation={handleSelectLibraryAnnotation}
                 onOpenLibraryHub={openAnnotationHub}
               />
             </aside>
@@ -6362,12 +6280,19 @@ function App() {
               groups={libraryGroups}
               error={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
               currentPath={currentPath}
+              lostDocuments={lostDocuments}
+              documents={libraryDocumentOptions}
               filters={libraryFilters}
               onFiltersChange={setLibraryFilters}
               filterActive={libraryFilterActive}
+              onDryRunRebind={handleDryRunRebind}
+              onRebindLostDocument={handleRebindLostDocument}
               onRefresh={() => void loadLibraryAnnotations()}
               onExport={() => void handleExportLibraryAnnotations()}
               onExportGroup={(group) => void handleExportLibraryGroup(group)}
+              onExportJson={() => void handleExportAnnotationsJson()}
+              onExportCsv={() => void handleExportAnnotationsCsv()}
+              onImport={() => void handleImportAnnotations()}
               onCompileCurrentGroup={handleOpenBookDigest}
               onSelect={handleSelectLibraryAnnotation}
               onExit={() => setActiveView("reader")}
@@ -6431,24 +6356,6 @@ function App() {
             onCompileAnnotationsDigest={handleOpenBookDigest}
             onClearAnnotations={() => void handleClearAnnotations()}
             annotationsPanel={documentAnnotationsPanel}
-            libraryStatus={libraryAnnotations.status}
-            libraryGroups={libraryGroups}
-            libraryError={libraryAnnotations.status === "error" ? libraryAnnotations.message : null}
-            currentPath={currentPath}
-            lostDocuments={lostDocuments}
-            libraryDocuments={libraryDocumentOptions}
-            libraryFilters={libraryFilters}
-            onLibraryFiltersChange={setLibraryFilters}
-            libraryFilterActive={libraryFilterActive}
-            onDryRunRebind={handleDryRunRebind}
-            onRebindLostDocument={handleRebindLostDocument}
-            onRefreshLibraryAnnotations={() => void loadLibraryAnnotations()}
-            onExportLibraryAnnotations={() => void handleExportLibraryAnnotations()}
-            onExportLibraryGroup={(group) => void handleExportLibraryGroup(group)}
-            onExportLibraryJson={() => void handleExportAnnotationsJson()}
-            onExportLibraryCsv={() => void handleExportAnnotationsCsv()}
-            onImportLibraryAnnotations={() => void handleImportAnnotations()}
-            onSelectLibraryAnnotation={handleSelectLibraryAnnotation}
             onOpenLibraryHub={openAnnotationHub}
           />
         </aside>

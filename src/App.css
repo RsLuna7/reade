@@ -2719,7 +2719,9 @@ a:focus-visible {
 .side-panel-tabs button {
   display: inline-flex;
   align-items: center;
-  flex-shrink: 0;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
   gap: 6px;
   padding: 6px 9px;
   border: 1px solid transparent;
@@ -2955,6 +2957,16 @@ a:focus-visible {
   text-decoration: underline;
   text-underline-offset: 3px;
   cursor: pointer;
+}
+
+.side-panel-hub-link {
+  display: block;
+  margin: 8px 2px 6px;
+}
+
+.annotation-hub-empty {
+  display: grid;
+  gap: 12px;
 }
 
 .annotation-filter-controls {
@@ -7560,6 +7572,8 @@ button.review-primary {
 .annotation-hub-tools {
   display: flex;
   flex-shrink: 0;
+  flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
 }
 

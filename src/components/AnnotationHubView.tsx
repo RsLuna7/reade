@@ -1,33 +1,43 @@
 import { useEffect, useRef } from "react";
 import { ArrowLeft } from "lucide-react";
 import type { Annotation } from "../lib/backend";
+import type { RebindDryRunReport } from "../lib/rebindDryRun";
 import { ANNOTATION_TONES, ANNOTATION_TONE_META } from "../lib/annotationModel";
 import {
   AnnotationFilterControls,
   AnnotationLibraryGroupList,
+  AnnotationTransferActions,
+  LostDocumentsSection,
   type AnnotationLibraryFilters,
   type AnnotationLibraryGroup,
   type AnnotationLibraryStatus,
+  type LibraryDocumentOption,
+  type LostDocumentEntry,
 } from "./AnnotationUi";
 import { useReaderStore } from "../store/useReaderStore";
 
 /**
- * 全屏标注中枢(方案四 A2):左列筛选(检索/类型/颜色/文档快捷定位),
- * 右列分组卡片流。分组与条目渲染和侧栏「全库」tab 共享同一套组件
- * (AnnotationUi 的 AnnotationLibraryGroupList),仅容器与密度不同;
- * 数据与筛选状态由 App 持有,与侧栏 tab 完全同源。
+ * 全屏「全库摘录」中枢：检索/筛选、按文档分组、导出导入与失联重绑。
+ * 侧栏阅读态不再挂「全库」peer tab；入口为标注 tab 顶栏链接与命令面板。
  */
 interface AnnotationHubViewProps {
   status: AnnotationLibraryStatus;
   groups: AnnotationLibraryGroup[];
   error?: string | null;
   currentPath?: string | null;
+  lostDocuments?: LostDocumentEntry[];
+  documents?: LibraryDocumentOption[];
   filters: AnnotationLibraryFilters;
   onFiltersChange: (filters: AnnotationLibraryFilters) => void;
   filterActive: boolean;
+  onDryRunRebind?: (oldPath: string, newPath: string) => Promise<RebindDryRunReport>;
+  onRebindLostDocument?: (oldPath: string, newPath: string) => Promise<void>;
   onRefresh: () => void;
   onExport: () => void;
   onExportGroup: (group: AnnotationLibraryGroup) => void;
+  onExportJson?: () => void;
+  onExportCsv?: () => void;
+  onImport?: () => void;
   /** 编纂读书报告(plan-book-digest):仅当前文档分组渲染。 */
   onCompileCurrentGroup?: (group: AnnotationLibraryGroup) => void;
   onSelect: (annotation: Annotation) => void;
@@ -39,12 +49,19 @@ export function AnnotationHubView({
   groups,
   error = null,
   currentPath = null,
+  lostDocuments = [],
+  documents = [],
   filters,
   onFiltersChange,
   filterActive,
+  onDryRunRebind,
+  onRebindLostDocument,
   onRefresh,
   onExport,
   onExportGroup,
+  onExportJson,
+  onExportCsv,
+  onImport,
   onCompileCurrentGroup,
   onSelect,
   onExit,
@@ -86,6 +103,28 @@ export function AnnotationHubView({
         : `共 ${total} 条 · ${groups.length} 个文档`
       : "正在汇总全库标注…";
 
+  const transferActions =
+    !filterActive ? (
+      <AnnotationTransferActions
+        onExportJson={onExportJson}
+        onExportCsv={onExportCsv}
+        onImport={onImport}
+      />
+    ) : null;
+
+  const lostSection =
+    status === "ready" &&
+    !filterActive &&
+    onDryRunRebind &&
+    onRebindLostDocument ? (
+      <LostDocumentsSection
+        entries={lostDocuments}
+        documents={documents}
+        onDryRun={onDryRunRebind}
+        onRebind={onRebindLostDocument}
+      />
+    ) : null;
+
   let results;
   if (status === "error") {
     results = (
@@ -108,19 +147,32 @@ export function AnnotationHubView({
     );
   } else if (!groups.length) {
     results = (
-      <p className="toc-empty">
-        {filterActive ? "没有命中的标注。" : "整个文档库还没有标注。"}
-      </p>
+      <div className="annotation-hub-empty">
+        <p className="toc-empty">
+          {filterActive ? "没有命中的标注。" : "整个文档库还没有标注。"}
+        </p>
+        {!filterActive && onImport ? (
+          <div className="annotation-list-toolbar-actions">
+            <button type="button" onClick={onImport}>
+              导入标注…
+            </button>
+          </div>
+        ) : null}
+        {lostSection}
+      </div>
     );
   } else {
     results = (
-      <AnnotationLibraryGroupList
-        groups={groups}
-        currentPath={currentPath}
-        onSelect={onSelect}
-        onExportGroup={onExportGroup}
-        onCompileCurrentGroup={onCompileCurrentGroup}
-      />
+      <>
+        {lostSection}
+        <AnnotationLibraryGroupList
+          groups={groups}
+          currentPath={currentPath}
+          onSelect={onSelect}
+          onExportGroup={onExportGroup}
+          onCompileCurrentGroup={onCompileCurrentGroup}
+        />
+      </>
     );
   }
 
@@ -144,9 +196,12 @@ export function AnnotationHubView({
           <button type="button" onClick={onRefresh}>
             刷新
           </button>
-          <button type="button" onClick={onExport}>
-            {filterActive ? "导出当前结果" : "导出全库"}
-          </button>
+          {status === "ready" ? (
+            <button type="button" onClick={onExport}>
+              {filterActive ? "导出当前结果" : "导出全库"}
+            </button>
+          ) : null}
+          {status === "ready" ? transferActions : null}
         </div>
       </header>
       <div className="annotation-hub-layout">

@@ -961,6 +961,14 @@ describe("markdown annotation grouping (MVS)", () => {
 });
 
 describe("library-wide annotations (B7)", () => {
+  async function openLibraryHub() {
+    fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
+    await waitFor(() => {
+      expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
+    });
+  }
+
   it("lists annotations across documents and jumps into another document", async () => {
     const currentDocAnnotation = markdownAnnotation();
     const otherDocAnnotation = markdownAnnotation({
@@ -991,7 +999,8 @@ describe("library-wide annotations (B7)", () => {
     });
 
     render(<App />);
-    fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
+    await screen.findAllByRole("tab", { name: /标注\s*1/ });
+    await openLibraryHub();
 
     await waitFor(() => {
       expect(listAnnotations).toHaveBeenCalledWith();
@@ -1000,14 +1009,22 @@ describe("library-wide annotations (B7)", () => {
     // 全库缓存失效会触发一次重取,列表节点可能被替换;
     // 在 waitFor 内重查并点击,避免点到已卸载的节点。
     await waitFor(() => {
-      const [libraryItem] = screen.getAllByText("Second body");
-      fireEvent.click(libraryItem);
+      const hub = document.querySelector<HTMLElement>(".annotation-hub-view")!;
+      fireEvent.click(within(hub).getByText("Second body"));
       expect(useReaderStore.getState().currentPath).toBe("other.md");
     });
   });
 });
 
 describe("library annotation search and filters (方案四 A1)", () => {
+  async function openLibraryHub() {
+    fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
+    await waitFor(() => {
+      expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
+    });
+  }
+
   function setTwoDocumentState() {
     useReaderStore.setState({
       documents: [markdownDocument("guide.md", "Guide"), markdownDocument("other.md", "Other")],
@@ -1051,17 +1068,18 @@ describe("library annotation search and filters (方案四 A1)", () => {
 
     render(<App />);
     // 等当前文档标注装载完成(其变更会使全库缓存失效并重建面板),
-    // 再打开全库,检索框才不会在输入中途被替换。
+    // 再打开全库摘录,检索框才不会在输入中途被替换。
     await screen.findAllByRole("tab", { name: /标注\s*1/ });
-    fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
+    await openLibraryHub();
+    const hub = document.querySelector<HTMLElement>(".annotation-hub-view")!;
     await waitFor(() => {
-      expect(screen.getAllByRole("searchbox", { name: "搜索全库标注" }).length).toBeGreaterThan(0);
+      expect(within(hub).getByRole("searchbox", { name: "搜索全库标注" })).toBeInTheDocument();
     });
 
-    fireEvent.change(screen.getAllByRole("searchbox", { name: "搜索全库标注" })[0], {
+    fireEvent.change(within(hub).getByRole("searchbox", { name: "搜索全库标注" }), {
       target: { value: "术" },
     });
-    fireEvent.change(screen.getAllByRole("searchbox", { name: "搜索全库标注" })[0], {
+    fireEvent.change(within(hub).getByRole("searchbox", { name: "搜索全库标注" }), {
       target: { value: "术语" },
     });
 
@@ -1071,15 +1089,15 @@ describe("library annotation search and filters (方案四 A1)", () => {
     });
     expect(searchAnnotations).toHaveBeenCalledWith("术语");
     await waitFor(() => {
-      expect(screen.getAllByText("命中 2 条，来自 1 个文档").length).toBeGreaterThan(0);
+      expect(within(hub).getByText("命中 2 条，来自 1 个文档")).toBeInTheDocument();
     });
 
     // 类型筛选是纯前端过滤,与检索结果求交:书签命中被滤掉。
-    fireEvent.click(screen.getAllByRole("button", { name: "高亮" })[0]);
+    fireEvent.click(within(hub).getByRole("button", { name: "高亮" }));
     await waitFor(() => {
-      expect(screen.getAllByText("命中 1 条，来自 1 个文档").length).toBeGreaterThan(0);
+      expect(within(hub).getByText("命中 1 条，来自 1 个文档")).toBeInTheDocument();
     });
-    expect(screen.queryByText("术语乙")).not.toBeInTheDocument();
+    expect(within(hub).queryByText("术语乙")).not.toBeInTheDocument();
     expect(searchAnnotations).toHaveBeenCalledTimes(1);
   });
 
@@ -1098,14 +1116,13 @@ describe("library annotation search and filters (方案四 A1)", () => {
     try {
       render(<App />);
       await screen.findAllByRole("tab", { name: /标注\s*1/ });
-      fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
+      await openLibraryHub();
+      const hub = document.querySelector<HTMLElement>(".annotation-hub-view")!;
       await waitFor(() => {
-        expect(
-          screen.getAllByRole("button", { name: "导出 Guide 的标注" }).length,
-        ).toBeGreaterThan(0);
+        expect(within(hub).getByRole("button", { name: "导出 Guide 的标注" })).toBeInTheDocument();
       });
 
-      fireEvent.click(screen.getAllByRole("button", { name: "导出 Guide 的标注" })[0]);
+      fireEvent.click(within(hub).getByRole("button", { name: "导出 Guide 的标注" }));
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledTimes(1);
       });
@@ -1121,7 +1138,7 @@ describe("library annotation search and filters (方案四 A1)", () => {
 });
 
 describe("annotation hub view (方案四 A2)", () => {
-  it("opens the hub from the library tab link and jumps back to the reader on entry click", async () => {
+  it("opens the hub from the annotations tab link and jumps back to the reader on entry click", async () => {
     const guideAnnotation = markdownAnnotation();
     vi.mocked(listAnnotations).mockImplementation(async (relativePath?: string | null) =>
       relativePath && relativePath !== "guide.md" ? [] : [guideAnnotation],
@@ -1130,8 +1147,7 @@ describe("annotation hub view (方案四 A2)", () => {
 
     const view = render(<App />);
     await screen.findAllByRole("tab", { name: /标注\s*1/ });
-    fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
-
+    fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     expect(useReaderStore.getState().activeView).toBe("annotations");
 
@@ -1141,7 +1157,6 @@ describe("annotation hub view (方案四 A2)", () => {
     // 阅读面保持挂载、仅隐藏(stats/home 的挂载模式)。
     expect(view.container.querySelector(".content-grid")).toHaveAttribute("hidden");
 
-    // 中枢与侧栏共享同一套分组/条目组件:同一数据在第二容器完整渲染。
     const hub = view.container.querySelector<HTMLElement>(".annotation-hub-view")!;
     await waitFor(() => {
       expect(within(hub).getByRole("button", { name: "Guide" })).toBeInTheDocument();
@@ -1282,9 +1297,13 @@ describe("lost documents rebind (§5.6 C)", () => {
 
     render(<App />);
     // 等当前文档的标注装载完成(其变更会使全库缓存失效并重建面板),
-    // 再打开全库,失联文档区块才不会在交互中途被重建。
+    // 再打开全库摘录,失联文档区块才不会在交互中途被重建。
     await screen.findAllByRole("tab", { name: /标注\s*1/ });
-    fireEvent.click(screen.getAllByRole("tab", { name: "全库" })[0]);
+    fireEvent.click(screen.getAllByRole("tab", { name: /标注/ })[0]);
+    fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
+    await waitFor(() => {
+      expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
+    });
 
     const section = await screen.findByRole("region", { name: "失联文档" });
     expect(section).toHaveTextContent("ghost.md");

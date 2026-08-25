@@ -1091,7 +1091,7 @@ interface AnnotationLibraryPanelProps {
 }
 
 /** 「导出标注…」的格式二选(JSON / CSV)与「导入标注…」入口,选择后收起。 */
-function AnnotationTransferActions({
+export function AnnotationTransferActions({
   onExportJson,
   onExportCsv,
   onImport,
