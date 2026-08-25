@@ -2,7 +2,7 @@
 
 - 开始日期：2026-08-25
 - 规格：`docs/plan-annotation-system-redesign.md`
-- 状态：**下一轮进行中（D-012）：PDF/EPUB 文字选区 `createExcerpt` + 侧栏 DocumentAnnotationsView（页段/章节）。阶段 0–6 + D-011 已收口**
+- 状态：**D-012 已推送；用户真机确认 PDF 划选「标记」不抢目录 tab。阶段 0–6 + D-011 + PDF/EPUB createExcerpt + 侧栏统一回看已收口**
 
 ## 冻结基线
 
@@ -39,13 +39,16 @@
 - [x] 阶段 5：间隔回顾改为 enrollment-only；主页去掉今日回顾卡；命令面板 / 全库摘录入口；ArchiveV2 导出与 v1 导入兼容
 - [x] 阶段 6：README / USER_GUIDE / 旧计划文档取代声明（Web + Tauri Markdown 明暗抽检已做；完整 §12 矩阵与 PDF/EPUB 真机仍未做）
 
-## 暂停点（2026-08-25 晚；下一轮 PDF/EPUB 新捕获进行中）
+## 暂停点（2026-08-25 晚；D-012 已接线并真机确认）
 
 - 阅读主路径：默认划选 →「标记 / 更多」；顶栏可开连续落笔（三色）。
 - **D-012**：Markdown/PDF/EPUB 文字选区统一 `createExcerpt`；书签仍 upsert；无文本层不可摘录。
-- **侧栏**：三格式均用 `DocumentAnnotationsView`（Markdown 标题 / PDF Outline 或 20 页段 / EPUB 章节）；失效与「旧版面位置」仍由下方 `AnnotationList` 诚实展示。
+- **侧栏**：三格式均用 `DocumentAnnotationsView`；失效与「旧版面位置」仍由下方 `AnnotationList` 诚实展示。
+- **真机（用户确认，2026-08-25）**：PDF 划选「标记」后**不抢目录 tab**。
 - HomeView/StatsView 跨午夜测试仍是基线失败，不要改。
 - Web 不新增 PDF/EPUB 阅读能力。
+
+下一可选项（未开工）：全库定位状态筛选（D-007）、ArchiveV2 同事务导入（D-008）、停双写观察期。
 
 ## 偏差记录
 

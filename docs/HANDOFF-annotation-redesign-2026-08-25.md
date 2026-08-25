@@ -1,8 +1,8 @@
 # Handoff：Reade 标注系统重设计
 
-- 日期：2026-08-25（晚间收口）
+- 日期：2026-08-25（晚间；D-012 真机确认）
 - 分支：`main`
-- 状态：**阶段 0–6 + D-011（可选连续落笔）已收口；用户确认真机验收可结束。下一轮：PDF/EPUB `createExcerpt` 新捕获。当前 PDF/EPUB 新捕获仍走 `upsertAnnotation`**
+- 状态：**D-012 已推送；用户确认 PDF 划选「标记」不抢目录 tab。Markdown/PDF/EPUB 文字摘录均走 createExcerpt；侧栏统一 DocumentAnnotationsView**
 - 规格真源：`docs/plan-annotation-system-redesign.md`
 - 实施账本：`docs/annotation-redesign-implementation-notes.md`
 - 视觉证据：`output/playwright/annotation-redesign-2026-08-25/`（含 `VISUAL-REPORT.md`）
@@ -15,7 +15,7 @@
    - vertical writing 下 `margin-inline: 0`；
    - 对应 “centers a measured article” 测试。
 3. 不提交、不发布，除非用户另行授权。
-4. 本轮已收口。下一轮开工前先读账本暂停点；**未再授权前不要开始 PDF/EPUB `createExcerpt`**。
+4. D-012 已收口。后续延期项见账本暂停点（D-007 / D-008 / 停双写）；未授权前不要扩大范围。
 5. `.cursor/`、`skills/`、`skills-lock.json` 是用户已有未跟踪内容，不纳入本任务。
 
 ## 2. 已确认的产品方向
@@ -66,34 +66,29 @@
 
 早期 handoff 曾记录 `user_store.rs` command 外壳缺 helper、`cargo check` E0425。**现已全部补齐并接线**。若再出现编译错误，按当前源码诊断，不要按本节旧清单照搬。
 
-## 5. 推荐接手顺序（下一轮：PDF/EPUB 新捕获）
+## 5. 推荐接手顺序（延期项，需授权）
 
-1. 确认本轮已 push、工作区无未提交标注改动。
-2. PDF 原版式 / 阅读视图：有文本层时划选走 `createExcerpt`；静默标记、三色、不抢目录 tab。
-3. EPUB：chapter/block 选区同样走 `createExcerpt`。
-4. Exact / Approximate / GeometricFallback / Detached / 无文本层不可摘录 —— 文案与视觉诚实。
-5. Web 不新增 PDF/EPUB；共享语义 DTO，不假装格式同构。
-6. 定向测试：`PdfReader` / `EpubReader` / capture / relocate + 相关 App 接线。
-
-未获用户明确授权前不要开始上述切片。
+1. D-007：全库定位状态筛选（勿伪造未检查条目）。
+2. D-008：ArchiveV2 导入与标注同事务 + Leitner 进度。
+3. 稳定发布周期后评估停双写（仍不得自动删旧表）。
 
 ## 6. 当前验证状态
 
 | 验证 | 结果 |
 |---|---|
-| D-011 相关 `App` / `AnnotationUi` / `AppCss` 定向测试 | 146 passed |
-| `pnpm exec tsc --noEmit` | 通过（收口时） |
-| 真机验收 | 用户确认可结束，不再阻塞下一轮 |
-| PDF/EPUB `createExcerpt` | **未开始** |
+| D-012 定向测试（App / capture / DocumentAnnotationsView） | 88 passed（收口时） |
+| `pnpm exec tsc --noEmit` | 通过 |
+| PDF 划选不抢目录 tab | **用户真机确认** |
 | HomeView / StatsView 跨午夜日期测试 | 基线失败，不要改 |
 
 ## 7. 工作区文件边界
 
-任务相关已修改（不完全列表）：见实施账本与 git history（`ebb42e9` 起）。不纳入：`.cursor/`、`skills/`、`skills-lock.json`、临时 fixture。
+见 git history（`ebb42e9` … `31556ef`）。不纳入：`.cursor/`、`skills/`、`skills-lock.json`、临时 fixture。
 
-## 8. 完成定义（本轮）
+## 8. 完成定义（本切片）
 
 - [x] Markdown MVS + v6 双端 + enrollment 回顾 + 三色 + 文档
 - [x] D-011 可选连续落笔
-- [x] 真机验收按用户确认收口
-- [ ] 下一轮：PDF/EPUB `createExcerpt`（另开工）
+- [x] D-012 PDF/EPUB `createExcerpt` + 侧栏统一回看
+- [x] PDF 划选不抢 tab（用户确认）
+- [ ] 延期：D-007 / D-008 / 停双写
