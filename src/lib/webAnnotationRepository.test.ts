@@ -17,7 +17,7 @@ beforeEach(() => {
 });
 
 describe("web v6 annotation repository", () => {
-  it("creates an excerpt, dual-writes the legacy row, and skips review enrollment", async () => {
+  it("creates an excerpt without dual-writing the legacy store, and skips review enrollment", async () => {
     const excerpt = await createExcerpt({
       id: "ex-1",
       relativePath: "notes/a.md",
@@ -47,6 +47,23 @@ describe("web v6 annotation repository", () => {
       color: "yellow",
       selectedText: "hello world",
     });
+
+    const db = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open("reade-annotations");
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error ?? new Error("open failed"));
+    });
+    try {
+      const raw = await new Promise<unknown[]>((resolve, reject) => {
+        const tx = db.transaction("annotations", "readonly");
+        const req = tx.objectStore("annotations").getAll();
+        req.onsuccess = () => resolve(req.result);
+        req.onerror = () => reject(req.error ?? new Error("read failed"));
+      });
+      expect(raw).toEqual([]);
+    } finally {
+      db.close();
+    }
   });
 
   it("preserves excerpt tone and rewrites the v6 anchor on legacy relocate upsert", async () => {
@@ -93,7 +110,7 @@ describe("web v6 annotation repository", () => {
     });
   });
 
-  it("writes a reading place, reflection, enrollment and tombstone dual-write", async () => {
+  it("writes a reading place, reflection, enrollment without legacy dual-write", async () => {
     await createExcerpt({
       id: "ex-2",
       relativePath: "notes/a.md",

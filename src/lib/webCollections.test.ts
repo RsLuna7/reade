@@ -82,12 +82,11 @@ beforeEach(() => {
 });
 
 describe("v4 → v5 upgrade", () => {
-  it("adds the collection stores while keeping v4 data readable", async () => {
+  it("adds the collection stores; v7 wipe clears seeded annotations", async () => {
     await buildV4Database();
 
-    // Any module call opens the database at version 5 and runs the step.
-    const annotations = await listWebAnnotations(null);
-    expect(annotations.map((annotation) => annotation.id)).toEqual(["ann-v4"]);
+    // Opening upgrades through v7: annotation content is wiped, shells remain.
+    expect(await listWebAnnotations(null)).toEqual([]);
 
     const collection = await createWebCollection("col-1", "升级后可写", 1_000);
     expect(collection).toEqual({
@@ -99,7 +98,7 @@ describe("v4 → v5 upgrade", () => {
 
     resetWebAnnotationStoreForTests();
     const db = await openRaw();
-    expect(db.version).toBe(6);
+    expect(db.version).toBe(7);
     expect(Array.from(db.objectStoreNames).sort()).toEqual([
       "annotationReviews",
       "annotationV6Meta",

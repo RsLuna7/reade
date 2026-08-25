@@ -48,7 +48,7 @@ use crate::library::{
     validate_relative_library_path, AppState, CommandResult, DocumentInfo, MAX_MARKDOWN_BYTES,
 };
 
-const USER_SCHEMA_VERSION: i64 = 6;
+const USER_SCHEMA_VERSION: i64 = 7;
 const USER_DB_FILE: &str = "reade-user.sqlite3";
 const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
 /// Tombstoned annotations are physically purged 90 days after deletion.
@@ -483,8 +483,9 @@ pub fn upsert_annotation(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("Cannot begin annotation upsert: {error}"))?;
-    upsert_annotation_row_legacy(&transaction, &root_key, &sanitized)?;
-    mirror_legacy_annotation_into_v6(&transaction, &root_key, &sanitized)?;
+    ensure_v6_root_writable(&transaction, &root_key)?;
+    mirror_legacy_annotation_into_v6_core(&transaction, &root_key, &sanitized)?;
+    refresh_v6_migration_ledger(&transaction, &root_key, sanitized.updated_at)?;
     transaction
         .commit()
         .map_err(|error| format!("Cannot commit annotation upsert: {error}"))?;
@@ -498,9 +499,27 @@ pub fn delete_annotation(
     user: State<'_, UserState>,
 ) -> CommandResult<()> {
     let root = current_root(&library)?;
+    let root_key = normalize_root(&root);
     validate_annotation_id(&id)?;
-    let connection = lock_user(&user)?;
-    tombstone_annotation(&connection, &normalize_root(&root), &id, now_millis())
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin annotation deletion: {error}"))?;
+    ensure_v6_root_writable(&transaction, &root_key)?;
+    let entry_kind = if read_excerpt_row(&transaction, &root_key, &id)?.is_some() {
+        AnnotationEntryKind::Excerpt
+    } else if read_reading_place_row(&transaction, &root_key, &id)?.is_some() {
+        AnnotationEntryKind::Place
+    } else {
+        return Err("Annotation was not found".to_owned());
+    };
+    set_annotation_entry_deleted_row(&transaction, &root_key, &id, &entry_kind, true, now)?;
+    refresh_v6_migration_ledger(&transaction, &root_key, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit annotation deletion: {error}"))?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -566,9 +585,6 @@ pub fn create_excerpt(
         legacy_selected_text: Some(source_text),
     };
     upsert_excerpt_row(&transaction, &root_key, &excerpt, None)?;
-    let legacy = new_excerpt_legacy_projection(&excerpt, None);
-    upsert_annotation_row_legacy(&transaction, &root_key, &legacy)?;
-    ensure_legacy_review_suspended(&transaction, &root_key, &excerpt.id, now)?;
     refresh_v6_migration_ledger(&transaction, &root_key, now)?;
     transaction
         .commit()
@@ -610,14 +626,6 @@ pub fn update_excerpt_appearance(
         &excerpt,
         live_reflection_body(reflection.as_ref()),
     )?;
-    upsert_annotation_row_legacy(
-        &transaction,
-        &root_key,
-        &excerpt_to_legacy_annotation(
-            &excerpt,
-            live_reflection_body(reflection.as_ref()).map(str::to_owned),
-        ),
-    )?;
     refresh_v6_migration_ledger(&transaction, &root_key, excerpt.updated_at)?;
     transaction
         .commit()
@@ -657,11 +665,6 @@ pub fn create_reading_place(
         legacy_selected_text: None,
     };
     upsert_reading_place_row(&transaction, &root_key, &place)?;
-    upsert_annotation_row_legacy(
-        &transaction,
-        &root_key,
-        &reading_place_to_legacy_annotation(&place, None),
-    )?;
     refresh_v6_migration_ledger(&transaction, &root_key, now)?;
     transaction
         .commit()
@@ -700,7 +703,7 @@ pub fn upsert_reflection(
         deleted_at: None,
     };
     upsert_reflection_row(&transaction, &root_key, &reflection)?;
-    sync_reflection_to_entry_and_legacy(&transaction, &root_key, &reflection)?;
+    sync_reflection_to_entry(&transaction, &root_key, &reflection)?;
     refresh_v6_migration_ledger(&transaction, &root_key, now)?;
     transaction
         .commit()
@@ -731,7 +734,7 @@ pub fn delete_reflection(
     reflection.deleted_at = Some(now);
     reflection.updated_at = now;
     upsert_reflection_row(&transaction, &root_key, &reflection)?;
-    sync_reflection_to_entry_and_legacy(&transaction, &root_key, &reflection)?;
+    sync_reflection_to_entry(&transaction, &root_key, &reflection)?;
     refresh_v6_migration_ledger(&transaction, &root_key, now)?;
     transaction
         .commit()
@@ -799,7 +802,7 @@ pub fn set_review_enrollment(
         .transaction()
         .map_err(|error| format!("Cannot begin review enrollment update: {error}"))?;
     ensure_v6_root_writable(&transaction, &root_key)?;
-    let excerpt = read_excerpt_row(&transaction, &root_key, &excerpt_id)?
+    let _excerpt = read_excerpt_row(&transaction, &root_key, &excerpt_id)?
         .filter(|entry| entry.deleted_at.is_none())
         .ok_or_else(|| "Excerpt was not found".to_owned())?;
     let result = if enabled {
@@ -819,7 +822,6 @@ pub fn set_review_enrollment(
         enrollment.deleted_at = None;
         enrollment.updated_at = now;
         upsert_review_enrollment_row(&transaction, &root_key, &enrollment)?;
-        sync_enrollment_to_legacy_review(&transaction, &root_key, &enrollment)?;
         Some(enrollment)
     } else {
         if let Some(mut enrollment) =
@@ -830,7 +832,6 @@ pub fn set_review_enrollment(
             enrollment.updated_at = now;
             upsert_review_enrollment_row(&transaction, &root_key, &enrollment)?;
         }
-        ensure_legacy_review_suspended(&transaction, &root_key, &excerpt.id, now)?;
         None
     };
     refresh_v6_migration_ledger(&transaction, &root_key, now)?;
@@ -948,8 +949,8 @@ pub fn list_review_queue(
     list_review_queue_rows(&connection, &normalize_root(&root), now_ms, limit)
 }
 
-/// Persists a client-derived review state after validating it (annotation
-/// exists and is live, box within the ladder, due date inside the skew
+/// Persists a client-derived review state after validating it (excerpt
+/// exists and is enrolled, box within the ladder, due date inside the skew
 /// window). `total_reviews` is counted server-side; suspending does not
 /// count as a review.
 #[tauri::command]
@@ -962,34 +963,18 @@ pub fn record_review_outcome(
     library: State<'_, AppState>,
     user: State<'_, UserState>,
 ) -> CommandResult<()> {
-    let root = current_root(&library)?;
-    let root_key = normalize_root(&root);
-    let now = now_millis();
-    let connection = lock_user(&user)?;
-    record_review_outcome_row(
-        &connection,
-        &root_key,
-        &annotation_id,
+    record_excerpt_review_outcome(
+        annotation_id,
         box_level,
         due_at,
         last_reviewed_at,
         suspended,
-        now,
-    )?;
-    sync_review_outcome_to_enrollment(
-        &connection,
-        &root_key,
-        &annotation_id,
-        box_level,
-        due_at,
-        last_reviewed_at,
-        suspended,
-        now,
+        library,
+        user,
     )
 }
 
-/// v6-native outcome write: requires a live enrollment. Dual-writes the
-/// legacy `annotation_reviews` row so an older binary still sees progress.
+/// v6-native outcome write: requires a live enrollment.
 #[tauri::command]
 pub fn record_excerpt_review_outcome(
     annotation_id: String,
@@ -1002,17 +987,22 @@ pub fn record_excerpt_review_outcome(
 ) -> CommandResult<()> {
     let root = current_root(&library)?;
     let root_key = normalize_root(&root);
+    validate_annotation_id(&annotation_id)?;
     let now = now_millis();
-    let connection = lock_user(&user)?;
-    ensure_v6_root_writable(&connection, &root_key)?;
-    if read_review_enrollment_row(&connection, &root_key, &annotation_id)?
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin excerpt review outcome: {error}"))?;
+    ensure_v6_root_writable(&transaction, &root_key)?;
+    if read_review_enrollment_row(&transaction, &root_key, &annotation_id)?
         .filter(|entry| entry.deleted_at.is_none())
         .is_none()
     {
         return Err("Excerpt is not enrolled in spaced review".to_owned());
     }
-    record_review_outcome_row(
-        &connection,
+    validate_review_outcome_fields(box_level, due_at, last_reviewed_at, now)?;
+    sync_review_outcome_to_enrollment(
+        &transaction,
         &root_key,
         &annotation_id,
         box_level,
@@ -1021,16 +1011,11 @@ pub fn record_excerpt_review_outcome(
         suspended,
         now,
     )?;
-    sync_review_outcome_to_enrollment(
-        &connection,
-        &root_key,
-        &annotation_id,
-        box_level,
-        due_at,
-        last_reviewed_at,
-        suspended,
-        now,
-    )
+    refresh_v6_migration_ledger(&transaction, &root_key, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit excerpt review outcome: {error}"))?;
+    Ok(())
 }
 
 /// Data for enrolled-queue counts. The local-timezone day boundary is
@@ -1410,6 +1395,7 @@ fn run_migration_chain(
             4 => migrate_to_v4(&transaction)?,
             5 => migrate_to_v5(&transaction)?,
             6 => migrate_to_v6(&transaction)?,
+            7 => migrate_to_v7(&transaction)?,
             _ => return Err(format!("Unknown user data migration step {step}")),
         }
         transaction
@@ -1777,6 +1763,61 @@ fn migrate_to_v6(transaction: &Connection) -> CommandResult<()> {
                 );
             }
         }
+    }
+    Ok(())
+}
+
+/// v7: user-approved wipe to v6-only. Clears legacy + v6 annotation content,
+/// keeps fingerprints/collections shells, and seeds a ready empty ledger for
+/// every known root so writers never fall back to dual-write.
+fn migrate_to_v7(transaction: &Connection) -> CommandResult<()> {
+    let mut roots: HashSet<String> = HashSet::new();
+    for sql in [
+        "SELECT DISTINCT library_root FROM annotations",
+        "SELECT DISTINCT library_root FROM excerpts",
+        "SELECT DISTINCT library_root FROM reading_places",
+        "SELECT DISTINCT library_root FROM annotation_v6_migration",
+        "SELECT DISTINCT library_root FROM documents",
+    ] {
+        let mut statement = transaction
+            .prepare(sql)
+            .map_err(|error| format!("Cannot prepare annotation v7 roots: {error}"))?;
+        let rows = statement
+            .query_map([], |row| row.get::<_, String>(0))
+            .map_err(|error| format!("Cannot read annotation v7 roots: {error}"))?;
+        for row in rows {
+            roots.insert(row.map_err(|error| format!("Cannot decode annotation v7 root: {error}"))?);
+        }
+    }
+
+    transaction
+        .execute_batch(
+            "DELETE FROM annotations;
+             DELETE FROM annotation_reviews;
+             DELETE FROM excerpts;
+             DELETE FROM reading_places;
+             DELETE FROM reflections;
+             DELETE FROM review_enrollments;
+             DELETE FROM collection_items;
+             DELETE FROM annotation_v6_migration;
+             INSERT INTO annotations_fts(annotations_fts) VALUES('rebuild');
+             INSERT INTO excerpts_fts(excerpts_fts) VALUES('rebuild');",
+        )
+        .map_err(|error| format!("Cannot wipe annotation tables for v7: {error}"))?;
+
+    let migrated_at = now_millis();
+    let empty_checksum = migration_checksum("", &[])?;
+    for root in roots {
+        transaction
+            .execute(
+                "INSERT INTO annotation_v6_migration(
+                     library_root, legacy_total, excerpt_total, place_total,
+                     reflection_total, enrollment_total, source_checksum,
+                     target_checksum, migrated_at
+                 ) VALUES (?1, 0, 0, 0, 0, 0, ?2, ?2, ?3)",
+                params![root, empty_checksum, migrated_at as i64],
+            )
+            .map_err(|error| format!("Cannot seed annotation v7 ledger: {error}"))?;
     }
     Ok(())
 }
@@ -2711,8 +2752,13 @@ fn detect_moved_rows(
     let annotated: Vec<(String, u64)> = {
         let mut statement = connection
             .prepare(
-                "SELECT relative_path, count(*) FROM annotations
-                 WHERE library_root = ?1 AND deleted_at IS NULL
+                "SELECT relative_path, count(*) FROM (
+                     SELECT relative_path FROM excerpts
+                     WHERE library_root = ?1 AND deleted_at IS NULL
+                     UNION ALL
+                     SELECT relative_path FROM reading_places
+                     WHERE library_root = ?1 AND deleted_at IS NULL
+                 )
                  GROUP BY relative_path",
             )
             .map_err(|error| format!("Cannot prepare the move detection: {error}"))?;
@@ -2824,6 +2870,21 @@ fn rebind_annotation_rows(
     // future sync/export cannot resurrect annotations under the old path.
     let migrated = transaction
         .execute(
+            "UPDATE excerpts SET relative_path = ?1
+             WHERE library_root = ?2 AND relative_path = ?3",
+            params![new_path, root, old_path],
+        )
+        .map_err(|error| format!("Cannot rebind excerpts: {error}"))?
+        + transaction
+            .execute(
+                "UPDATE reading_places SET relative_path = ?1
+                 WHERE library_root = ?2 AND relative_path = ?3",
+                params![new_path, root, old_path],
+            )
+            .map_err(|error| format!("Cannot rebind reading places: {error}"))?;
+    // Keep empty legacy shells consistent if any stray rows remain.
+    transaction
+        .execute(
             "UPDATE annotations SET relative_path = ?1
              WHERE library_root = ?2 AND relative_path = ?3",
             params![new_path, root, old_path],
@@ -2855,6 +2916,7 @@ fn rebind_annotation_rows(
             params![root, old_path],
         )
         .map_err(|error| format!("Cannot drop the stale document fingerprint: {error}"))?;
+    refresh_v6_migration_ledger(&transaction, root, now_millis())?;
     transaction
         .commit()
         .map_err(|error| format!("Cannot commit the annotation rebind: {error}"))?;
@@ -2866,36 +2928,17 @@ fn list_annotation_rows(
     root: &str,
     relative_path: Option<&str>,
 ) -> CommandResult<Vec<Annotation>> {
-    let mut statement = if relative_path.is_some() {
-        connection.prepare(
-            "SELECT id, relative_path, kind, color, note, selected_text, title, locator_json,
-                    sort_index, created_at, updated_at, deleted_at
-             FROM annotations
-             WHERE library_root = ?1 AND relative_path = ?2 AND deleted_at IS NULL
-             ORDER BY updated_at DESC, id ASC",
-        )
-    } else {
-        connection.prepare(
-            "SELECT id, relative_path, kind, color, note, selected_text, title, locator_json,
-                    sort_index, created_at, updated_at, deleted_at
-             FROM annotations
-             WHERE library_root = ?1 AND deleted_at IS NULL
-             ORDER BY updated_at DESC, id ASC",
-        )
+    let mut annotations = reverse_project_v6_annotations(connection, root)?;
+    annotations.retain(|annotation| annotation.deleted_at.is_none());
+    if let Some(path) = relative_path {
+        annotations.retain(|annotation| annotation.relative_path == path);
     }
-    .map_err(|error| format!("Cannot prepare annotation list: {error}"))?;
-
-    let mapped = if let Some(path) = relative_path {
-        statement.query_map(params![root, path], annotation_from_row)
-    } else {
-        statement.query_map(params![root], annotation_from_row)
-    }
-    .map_err(|error| format!("Cannot list annotations: {error}"))?;
-
-    let mut annotations = Vec::new();
-    for row in mapped {
-        annotations.push(row.map_err(|error| format!("Cannot decode annotation: {error}"))?);
-    }
+    annotations.sort_by(|left, right| {
+        right
+            .updated_at
+            .cmp(&left.updated_at)
+            .then_with(|| left.id.cmp(&right.id))
+    });
     Ok(annotations)
 }
 
@@ -2905,13 +2948,7 @@ const ANNOTATION_COLUMNS: &str = "id, relative_path, kind, color, note, selected
      locator_json, sort_index, created_at, updated_at, deleted_at";
 
 fn transfer_annotation_rows(connection: &Connection, root: &str) -> CommandResult<Vec<Annotation>> {
-    let sql = format!(
-        "SELECT {ANNOTATION_COLUMNS}
-         FROM annotations
-         WHERE library_root = ?1
-         ORDER BY relative_path ASC, sort_index ASC, id ASC"
-    );
-    query_annotations(connection, &sql, params![root])
+    reverse_project_v6_annotations(connection, root)
 }
 
 fn document_fingerprint_rows(
@@ -3039,7 +3076,7 @@ fn import_annotation_rows(
         .transaction()
         .map_err(|error| format!("Cannot begin the annotation import: {error}"))?;
     for annotation in &sanitized {
-        upsert_annotation_row(&transaction, root, annotation)?;
+        mirror_legacy_annotation_into_v6_core(&transaction, root, annotation)?;
     }
     for (relative_path, content_hash) in &fingerprint_rows {
         // Present paths keep their scan-maintained rows; existing rows for
@@ -3058,23 +3095,18 @@ fn import_annotation_rows(
             )
             .map_err(|error| format!("Cannot record an imported fingerprint: {error}"))?;
     }
-    if v6_ledger_ready(&transaction, root)? {
-        for annotation in &sanitized {
-            mirror_legacy_annotation_into_v6_core(&transaction, root, annotation)?;
+    ensure_v6_root_writable(&transaction, root)?;
+    for reflection in &reflections {
+        if reflection.deleted_at.is_some() {
+            continue;
         }
-        for reflection in &reflections {
-            if reflection.deleted_at.is_some() {
-                continue;
-            }
-            upsert_reflection_row(&transaction, root, reflection)?;
-            sync_reflection_to_entry_and_legacy(&transaction, root, reflection)?;
-        }
-        for enrollment in &enrollments {
-            upsert_review_enrollment_row(&transaction, root, enrollment)?;
-            sync_enrollment_to_legacy_review(&transaction, root, enrollment)?;
-        }
-        refresh_v6_migration_ledger(&transaction, root, now)?;
+        upsert_reflection_row(&transaction, root, reflection)?;
+        sync_reflection_to_entry(&transaction, root, reflection)?;
     }
+    for enrollment in &enrollments {
+        upsert_review_enrollment_row(&transaction, root, enrollment)?;
+    }
+    refresh_v6_migration_ledger(&transaction, root, now)?;
     transaction
         .commit()
         .map_err(|error| format!("Cannot commit the annotation import: {error}"))?;
@@ -3082,30 +3114,14 @@ fn import_annotation_rows(
 }
 
 /// Shared WHERE clause for enrollment-only review-queue candidates: live
-/// mark annotations with a non-blank excerpt, an unsuspended review row,
-/// and `due_at` by `?2`. Missing review rows stay out of the pool
-/// (redesign §1.1.6). Parameters: ?1 root, ?2 now.
-const REVIEW_CANDIDATE_CONDITIONS: &str = "a.library_root = ?1
-       AND a.deleted_at IS NULL
-       AND a.kind IN ('highlight', 'underline')
-       AND a.selected_text IS NOT NULL
-       AND trim(a.selected_text, ' \t\r\n') <> ''
+/// excerpts with an unsuspended enrollment and `due_at` by `?2`.
+/// Parameters: ?1 root, ?2 now.
+const REVIEW_CANDIDATE_CONDITIONS: &str = "e.library_root = ?1
+       AND e.deleted_at IS NULL
+       AND trim(e.source_text, ' \t\r\n') <> ''
+       AND r.deleted_at IS NULL
        AND r.suspended = 0
        AND r.due_at <= ?2";
-
-fn review_queue_item_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewQueueItem> {
-    let annotation = annotation_from_row(row)?;
-    Ok(ReviewQueueItem {
-        annotation,
-        review: ReviewState {
-            box_level: row.get(12)?,
-            due_at: row.get::<_, i64>(13)? as u64,
-            last_reviewed_at: row.get::<_, Option<i64>>(14)?.map(|value| value as u64),
-            total_reviews: row.get::<_, i64>(15)? as u64,
-            suspended: row.get::<_, i64>(16)? != 0,
-        },
-    })
-}
 
 fn list_review_queue_rows(
     connection: &Connection,
@@ -3116,49 +3132,58 @@ fn list_review_queue_rows(
     let capped = limit.clamp(1, MAX_REVIEW_QUEUE_LIMIT);
     let fetch = (capped * REVIEW_QUEUE_OVERFETCH) as i64;
     let sql = format!(
-        "SELECT a.id, a.relative_path, a.kind, a.color, a.note, a.selected_text, a.title,
-                a.locator_json, a.sort_index, a.created_at, a.updated_at, a.deleted_at,
-                r.box,
-                r.due_at,
-                r.last_reviewed_at,
-                r.total_reviews,
-                r.suspended
-         FROM annotations a
-         INNER JOIN annotation_reviews r
-             ON r.annotation_id = a.id AND r.library_root = a.library_root
+        "SELECT e.id, e.relative_path, e.source_text, e.anchor_json, e.source_revision_json,
+                e.style, e.tone, e.legacy_kind, e.legacy_color, e.legacy_title,
+                e.legacy_selected_text, e.sort_index, e.created_at, e.updated_at, e.deleted_at,
+                r.box, r.due_at, r.last_reviewed_at, r.total_reviews, r.suspended
+         FROM excerpts e
+         INNER JOIN review_enrollments r
+             ON r.excerpt_id = e.id AND r.library_root = e.library_root
          WHERE {REVIEW_CANDIDATE_CONDITIONS}
-         ORDER BY r.due_at ASC, a.id ASC
+         ORDER BY r.due_at ASC, e.id ASC
          LIMIT ?3"
     );
     let mut statement = connection
         .prepare(&sql)
         .map_err(|error| format!("Cannot prepare the review queue: {error}"))?;
+    let reflections = reflection_map(connection, root)?;
     let mapped = statement
         .query_map(
             params![root, now_ms.min(i64::MAX as u64) as i64, fetch],
-            review_queue_item_from_row,
+            |row| {
+                let excerpt = excerpt_from_row(row)?;
+                let review = ReviewState {
+                    box_level: row.get(15)?,
+                    due_at: row.get::<_, i64>(16)? as u64,
+                    last_reviewed_at: row.get::<_, Option<i64>>(17)?.map(|value| value as u64),
+                    total_reviews: row.get::<_, i64>(18)? as u64,
+                    suspended: row.get::<_, i64>(19)? != 0,
+                };
+                Ok((excerpt, review))
+            },
         )
         .map_err(|error| format!("Cannot list the review queue: {error}"))?;
     let mut items = Vec::new();
     for row in mapped {
-        items.push(row.map_err(|error| format!("Cannot decode a review queue item: {error}"))?);
+        let (excerpt, review) =
+            row.map_err(|error| format!("Cannot decode a review queue item: {error}"))?;
+        let note = projected_reflection_note(excerpt.deleted_at, reflections.get(&excerpt.id));
+        items.push(ReviewQueueItem {
+            annotation: excerpt_to_legacy_annotation(&excerpt, note),
+            review,
+        });
     }
     Ok(items)
 }
 
 // The parameter list mirrors the review columns on purpose.
 #[allow(clippy::too_many_arguments)]
-fn record_review_outcome_row(
-    connection: &Connection,
-    root: &str,
-    annotation_id: &str,
+fn validate_review_outcome_fields(
     box_level: i64,
     due_at: u64,
     last_reviewed_at: Option<u64>,
-    suspended: bool,
     now: u64,
 ) -> CommandResult<()> {
-    validate_annotation_id(annotation_id)?;
     if !(0..=REVIEW_MAX_BOX).contains(&box_level) {
         return Err(format!("Review box must be between 0 and {REVIEW_MAX_BOX}"));
     }
@@ -3172,46 +3197,6 @@ fn record_review_outcome_row(
             return Err("Review timestamp is in the future".to_owned());
         }
     }
-    let live: i64 = connection
-        .query_row(
-            "SELECT count(*) FROM annotations
-             WHERE id = ?1 AND library_root = ?2 AND deleted_at IS NULL",
-            params![annotation_id, root],
-            |row| row.get(0),
-        )
-        .map_err(|error| format!("Cannot verify the reviewed annotation: {error}"))?;
-    if live == 0 {
-        return Err("Annotation was not found".to_owned());
-    }
-    // Suspending is bookkeeping, not a review: total_reviews only counts
-    // remembered/again outcomes (review plan §3.4).
-    let increment: i64 = i64::from(!suspended);
-    connection
-        .execute(
-            "INSERT INTO annotation_reviews(
-                 annotation_id, library_root, box, due_at, last_reviewed_at,
-                 total_reviews, suspended, updated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
-             ON CONFLICT(annotation_id) DO UPDATE SET
-                 library_root = excluded.library_root,
-                 box = excluded.box,
-                 due_at = excluded.due_at,
-                 last_reviewed_at = excluded.last_reviewed_at,
-                 total_reviews = annotation_reviews.total_reviews + ?6,
-                 suspended = excluded.suspended,
-                 updated_at = excluded.updated_at",
-            params![
-                annotation_id,
-                root,
-                box_level,
-                due_at as i64,
-                last_reviewed_at.map(|value| value as i64),
-                increment,
-                i64::from(suspended),
-                now as i64,
-            ],
-        )
-        .map_err(|error| format!("Cannot save the review outcome: {error}"))?;
     Ok(())
 }
 
@@ -3255,9 +3240,9 @@ fn review_summary_rows(
     }
     let sql = format!(
         "SELECT count(*)
-         FROM annotations a
-         INNER JOIN annotation_reviews r
-             ON r.annotation_id = a.id AND r.library_root = a.library_root
+         FROM excerpts e
+         INNER JOIN review_enrollments r
+             ON r.excerpt_id = e.id AND r.library_root = e.library_root
          WHERE {REVIEW_CANDIDATE_CONDITIONS}"
     );
     let now_clamped = now_ms.min(i64::MAX as u64) as i64;
@@ -3266,8 +3251,9 @@ fn review_summary_rows(
         .map_err(|error| format!("Cannot count due reviews: {error}"))?;
     let reviewed_today: i64 = connection
         .query_row(
-            "SELECT count(*) FROM annotation_reviews
+            "SELECT count(*) FROM review_enrollments
              WHERE library_root = ?1
+               AND deleted_at IS NULL
                AND last_reviewed_at IS NOT NULL
                AND last_reviewed_at >= ?2 AND last_reviewed_at <= ?3",
             params![root, day_start_ms.min(i64::MAX as u64) as i64, now_clamped],
@@ -3340,62 +3326,24 @@ fn search_annotation_rows(
         return Ok(Vec::new());
     }
     let capped = limit.clamp(1, MAX_ANNOTATION_SEARCH_RESULTS);
-    let fetch = capped as i64;
-    let mut results = if normalized.chars().count() >= MIN_FTS_QUERY_CHARS {
-        let sql = format!(
-            "SELECT {ANNOTATION_COLUMNS}
-             FROM annotations
-             WHERE rowid IN (SELECT rowid FROM annotations_fts
-                             WHERE annotations_fts MATCH ?1)
-               AND library_root = ?2 AND deleted_at IS NULL
-             ORDER BY relative_path ASC, sort_index ASC, id ASC
-             LIMIT ?3"
-        );
-        query_annotations(
-            connection,
-            &sql,
-            params![fts_phrase(&normalized), root, fetch],
-        )?
-    } else {
-        let sql = format!(
-            "SELECT {ANNOTATION_COLUMNS}
-             FROM annotations
-             WHERE library_root = ?2 AND deleted_at IS NULL
-               AND searchable_text LIKE ?1 ESCAPE '\\'
-             ORDER BY relative_path ASC, sort_index ASC, id ASC
-             LIMIT ?3"
-        );
-        query_annotations(
-            connection,
-            &sql,
-            params![like_pattern(&normalized), root, fetch],
-        )?
-    };
-    // Bookmark titles are not part of searchable_text (decision A-D3: no
-    // schema change); a LIKE supplement over `title` merges them in. LIKE is
-    // only ASCII-case-insensitive, so unlike selected_text/note the title
-    // match is byte-wise for non-ASCII case — see the TS contract note.
-    if results.len() < capped {
-        let sql = format!(
-            "SELECT {ANNOTATION_COLUMNS}
-             FROM annotations
-             WHERE library_root = ?2 AND deleted_at IS NULL
-               AND title IS NOT NULL AND title LIKE ?1 ESCAPE '\\'
-             ORDER BY relative_path ASC, sort_index ASC, id ASC
-             LIMIT ?3"
-        );
-        let supplement = query_annotations(
-            connection,
-            &sql,
-            params![like_pattern(&normalized), root, fetch],
-        )?;
-        let seen: HashSet<&str> = results.iter().map(|a| a.id.as_str()).collect();
-        let missing: Vec<Annotation> = supplement
-            .into_iter()
-            .filter(|annotation| !seen.contains(annotation.id.as_str()))
-            .collect();
-        results.extend(missing);
-    }
+    let live = list_annotation_rows(connection, root, None)?;
+    let mut results: Vec<Annotation> = live
+        .into_iter()
+        .filter(|annotation| {
+            let haystack = build_searchable_text(
+                annotation.selected_text.as_deref(),
+                annotation.note.as_deref(),
+            )
+            .to_lowercase();
+            if haystack.contains(&normalized) {
+                return true;
+            }
+            annotation
+                .title
+                .as_ref()
+                .is_some_and(|title| title.to_lowercase().contains(&normalized))
+        })
+        .collect();
     results.sort_by(|a, b| {
         a.relative_path
             .cmp(&b.relative_path)
@@ -3413,8 +3361,8 @@ fn annotation_search_hits(
 ) -> CommandResult<Vec<AnnotationSearchHit>> {
     let enrolled_ids: HashSet<String> = connection
         .prepare(
-            "SELECT annotation_id FROM annotation_reviews
-             WHERE library_root = ?1 AND suspended = 0",
+            "SELECT excerpt_id FROM review_enrollments
+             WHERE library_root = ?1 AND suspended = 0 AND deleted_at IS NULL",
         )
         .map_err(|error| format!("Cannot prepare enrollment lookup: {error}"))?
         .query_map(params![root], |row| row.get(0))
@@ -3781,9 +3729,6 @@ fn mirror_legacy_annotation_into_v6_core(
     root: &str,
     annotation: &Annotation,
 ) -> CommandResult<()> {
-    if !v6_ledger_ready(connection, root)? {
-        return Ok(());
-    }
     let source_revision = source_revision_for_path(
         connection,
         root,
@@ -3912,15 +3857,8 @@ fn ensure_v6_root_writable(connection: &Connection, root: &str) -> CommandResult
     if v6_ledger_ready(connection, root)? {
         return Ok(());
     }
-    let legacy = count_root_rows(
-        connection,
-        "SELECT count(*) FROM annotations WHERE library_root = ?1",
-        root,
-    )?;
-    if legacy == 0 {
-        return Ok(());
-    }
-    Err("this library is still on the legacy annotation reader".to_owned())
+    // Fresh roots after v7 have no ledger row yet; seed an empty ready ledger.
+    refresh_v6_migration_ledger(connection, root, now_millis())
 }
 
 fn excerpt_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Excerpt> {
@@ -4582,7 +4520,7 @@ fn ensure_v6_entry_in_root(
     Ok(())
 }
 
-fn sync_reflection_to_entry_and_legacy(
+fn sync_reflection_to_entry(
     connection: &Connection,
     root: &str,
     reflection: &Reflection,
@@ -4596,28 +4534,9 @@ fn sync_reflection_to_entry_and_legacy(
                 root,
                 &excerpt,
                 live_reflection_body(Some(reflection)),
-            )?;
-            upsert_annotation_row_legacy(
-                connection,
-                root,
-                &excerpt_to_legacy_annotation(
-                    &excerpt,
-                    projected_reflection_note(excerpt.deleted_at, Some(reflection)),
-                ),
             )
         }
-        AnnotationEntryKind::Place => {
-            let place = read_reading_place_row(connection, root, &reflection.entry_id)?
-                .ok_or_else(|| "Reading place was not found".to_owned())?;
-            upsert_annotation_row_legacy(
-                connection,
-                root,
-                &reading_place_to_legacy_annotation(
-                    &place,
-                    projected_reflection_note(place.deleted_at, Some(reflection)),
-                ),
-            )
-        }
+        AnnotationEntryKind::Place => Ok(()),
     }
 }
 
@@ -4668,14 +4587,7 @@ fn set_annotation_entry_deleted_row(
                 &excerpt,
                 live_reflection_body(reflection.as_ref()),
             )?;
-            upsert_annotation_row_legacy(
-                connection,
-                root,
-                &excerpt_to_legacy_annotation(
-                    &excerpt,
-                    projected_reflection_note(excerpt.deleted_at, reflection.as_ref()),
-                ),
-            )
+            Ok(())
         }
         AnnotationEntryKind::Place => {
             let mut place = read_reading_place_row(connection, root, id)?
@@ -4709,19 +4621,12 @@ fn set_annotation_entry_deleted_row(
                 }
             }
             upsert_reading_place_row(connection, root, &place)?;
-            let reflection = read_reflection_row(connection, root, id)?;
-            upsert_annotation_row_legacy(
-                connection,
-                root,
-                &reading_place_to_legacy_annotation(
-                    &place,
-                    projected_reflection_note(place.deleted_at, reflection.as_ref()),
-                ),
-            )
+            Ok(())
         }
     }
 }
 
+#[allow(dead_code)] // Kept for pre-v7 fixtures / rollback experiments; writers are v6-only.
 fn ensure_legacy_review_suspended(
     connection: &Connection,
     root: &str,
@@ -4744,6 +4649,7 @@ fn ensure_legacy_review_suspended(
     Ok(())
 }
 
+#[allow(dead_code)] // Kept for pre-v7 fixtures / rollback experiments; writers are v6-only.
 fn sync_enrollment_to_legacy_review(
     connection: &Connection,
     root: &str,
@@ -4802,18 +4708,9 @@ fn reverse_project_v6_annotations(
 }
 
 fn refresh_v6_migration_ledger(connection: &Connection, root: &str, now: u64) -> CommandResult<()> {
-    let source = transfer_annotation_rows(connection, root)?;
+    // v7+: legacy tables stay empty shells. Ledger tracks v6 only (no dual-write parity).
     let projected = reverse_project_v6_annotations(connection, root)?;
-    if source != projected {
-        return Err(format!(
-            "Annotation v6 reverse projection differs for {root}"
-        ));
-    }
-    let source_checksum = migration_checksum(root, &source)?;
     let target_checksum = migration_checksum(root, &projected)?;
-    if source_checksum != target_checksum {
-        return Err(format!("Annotation v6 checksum mismatch for {root}"));
-    }
     let excerpt_total = count_root_rows(
         connection,
         "SELECT count(*) FROM excerpts WHERE library_root = ?1",
@@ -4841,9 +4738,9 @@ fn refresh_v6_migration_ledger(connection: &Connection, root: &str, now: u64) ->
                  library_root, legacy_total, excerpt_total, place_total,
                  reflection_total, enrollment_total, source_checksum,
                  target_checksum, migrated_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+             ) VALUES (?1, 0, ?2, ?3, ?4, ?5, ?6, ?6, ?7)
              ON CONFLICT(library_root) DO UPDATE SET
-                 legacy_total = excluded.legacy_total,
+                 legacy_total = 0,
                  excerpt_total = excluded.excerpt_total,
                  place_total = excluded.place_total,
                  reflection_total = excluded.reflection_total,
@@ -4853,12 +4750,10 @@ fn refresh_v6_migration_ledger(connection: &Connection, root: &str, now: u64) ->
                  migrated_at = excluded.migrated_at",
             params![
                 root,
-                source.len() as i64,
                 excerpt_total,
                 place_total,
                 reflection_total,
                 enrollment_total,
-                source_checksum,
                 target_checksum,
                 now as i64,
             ],
@@ -4867,6 +4762,7 @@ fn refresh_v6_migration_ledger(connection: &Connection, root: &str, now: u64) ->
     Ok(())
 }
 
+#[allow(dead_code)] // Test / pre-v7 fixture helper; production writers use v6-only paths.
 fn upsert_annotation_row_legacy(
     connection: &Connection,
     root: &str,
@@ -4940,7 +4836,9 @@ fn upsert_annotation_row(
     root: &str,
     annotation: &Annotation,
 ) -> CommandResult<()> {
-    upsert_annotation_row_legacy(connection, root, annotation)
+    ensure_v6_root_writable(connection, root)?;
+    mirror_legacy_annotation_into_v6_core(connection, root, annotation)?;
+    refresh_v6_migration_ledger(connection, root, annotation.updated_at)
 }
 
 fn tombstone_annotation(
@@ -4949,17 +4847,15 @@ fn tombstone_annotation(
     id: &str,
     now: u64,
 ) -> CommandResult<()> {
-    let updated = connection
-        .execute(
-            "UPDATE annotations SET deleted_at = ?1, updated_at = ?2
-             WHERE id = ?3 AND library_root = ?4 AND deleted_at IS NULL",
-            params![now as i64, now as i64, id, root],
-        )
-        .map_err(|error| format!("Cannot delete annotation: {error}"))?;
-    if updated == 0 {
+    let entry_kind = if read_excerpt_row(connection, root, id)?.is_some() {
+        AnnotationEntryKind::Excerpt
+    } else if read_reading_place_row(connection, root, id)?.is_some() {
+        AnnotationEntryKind::Place
+    } else {
         return Err("Annotation was not found".to_owned());
-    }
-    Ok(())
+    };
+    set_annotation_entry_deleted_row(connection, root, id, &entry_kind, true, now)?;
+    refresh_v6_migration_ledger(connection, root, now)
 }
 
 fn clear_annotation_rows(
@@ -4973,6 +4869,37 @@ fn clear_annotation_rows(
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document annotations: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM review_enrollments WHERE library_root = ?1 AND excerpt_id IN (
+                 SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
+             )",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document enrollments: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM reflections WHERE library_root = ?1 AND entry_id IN (
+                 SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
+                 UNION
+                 SELECT id FROM reading_places WHERE library_root = ?1 AND relative_path = ?2
+             )",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document reflections: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM excerpts WHERE library_root = ?1 AND relative_path = ?2",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document excerpts: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM reading_places WHERE library_root = ?1 AND relative_path = ?2",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document reading places: {error}"))?;
+    refresh_v6_migration_ledger(connection, root, now_millis())?;
     Ok(())
 }
 
@@ -5855,7 +5782,8 @@ mod tests {
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
-                count_rows(&connection, "SELECT count(*) FROM annotations"),
+                count_rows(&connection, "SELECT count(*) FROM excerpts")
+                    + count_rows(&connection, "SELECT count(*) FROM reading_places"),
                 1
             );
         }
@@ -5870,56 +5798,20 @@ mod tests {
         {
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
+            // v1 rescues into annotations, v6 mirrors, v7 wipes to empty v6-only.
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotations"),
-                5
+                0,
+                "v7 wipe clears rescued legacy rows"
             );
-
-            let listed = list_annotation_rows(&connection, ROOT, None).expect("list");
-            assert_eq!(listed.len(), 4);
-            let markdown = listed
-                .iter()
-                .find(|annotation| annotation.id == "ann-markdown")
-                .expect("markdown row");
-            assert_eq!(markdown.relative_path, "notes/a.md");
-            assert_eq!(markdown.kind, AnnotationKind::Highlight);
-            assert_eq!(markdown.color, Some(AnnotationColor::Yellow));
-            assert_eq!(markdown.note.as_deref(), Some("remember"));
-            assert_eq!(markdown.selected_text.as_deref(), Some("ｈｅｌｌｏ world"));
-            assert_eq!(markdown.title.as_deref(), Some("Title"));
-            assert_eq!(markdown.created_at, 100);
-            assert_eq!(markdown.updated_at, 100);
-            assert_eq!(markdown.deleted_at, None);
-            assert!(matches!(
-                &markdown.locator,
-                AnnotationLocator::Markdown { quote, start: None, end: None, .. }
-                    if quote == "hello world"
-            ));
-
-            let sort_index = |id: &str| -> String {
-                connection
-                    .query_row(
-                        "SELECT sort_index FROM annotations WHERE id = ?1",
-                        params![id],
-                        |row| row.get(0),
-                    )
-                    .expect("read sort_index")
-            };
-            assert_eq!(sort_index("ann-markdown"), "M|00000|00000000");
-            assert_eq!(sort_index("ann-pdf"), "P|00003|00002500");
-            assert_eq!(sort_index("ann-epub"), "E|00000|00020015");
-            assert_eq!(sort_index("ann-bookmark"), "M|00000|50000000");
-            assert_eq!(sort_index("ann-corrupt"), BROKEN_SORT_INDEX);
-
-            let searchable: String = connection
-                .query_row(
-                    "SELECT searchable_text FROM annotations WHERE id = 'ann-markdown'",
-                    [],
-                    |row| row.get(0),
-                )
-                .expect("read searchable_text");
-            // NFKC folds the fullwidth letters; separator splits text and note.
-            assert_eq!(searchable, "hello world\u{1f}remember");
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM excerpts"),
+                0,
+                "v7 wipe clears v6 excerpts"
+            );
+            assert!(list_annotation_rows(&connection, ROOT, None)
+                .expect("list")
+                .is_empty());
         }
 
         // The legacy cache table is kept as a fallback and never re-imported.
@@ -5942,7 +5834,7 @@ mod tests {
         let connection = locked(&state);
         assert_eq!(
             count_rows(&connection, "SELECT count(*) FROM annotations"),
-            5
+            0
         );
     }
 
@@ -5965,7 +5857,7 @@ mod tests {
         assert!(error.contains("newer"), "unexpected error: {error}");
         let connection = Connection::open(directory.path().join(USER_DB_FILE)).expect("reopen raw");
         assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            count_rows(&connection, "SELECT count(*) FROM excerpts"),
             1
         );
         assert_eq!(user_version(&connection), 99);
@@ -5998,14 +5890,11 @@ mod tests {
         let state = UserState::new(directory.path().to_path_buf()).expect("upgrade");
         let connection = locked(&state);
         assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
-        let sort_index: String = connection
-            .query_row(
-                "SELECT sort_index FROM annotations WHERE id = 'ann-v1'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("backfilled sort_index");
-        assert_eq!(sort_index, "M|00000|00000000");
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            0,
+            "v7 wipe clears upgraded rows"
+        );
 
         let backup_path = directory.path().join("reade-user.backup-v1.sqlite3");
         assert!(backup_path.exists(), "backup file must be created");
@@ -6036,7 +5925,7 @@ mod tests {
             .is_empty());
         let (deleted_at, updated_at): (Option<i64>, i64) = connection
             .query_row(
-                "SELECT deleted_at, updated_at FROM annotations WHERE id = 'ann-1'",
+                "SELECT deleted_at, updated_at FROM excerpts WHERE id = 'ann-1'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -6075,7 +5964,7 @@ mod tests {
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations WHERE relative_path = 'a.md'",
+                "SELECT count(*) FROM excerpts WHERE relative_path = 'a.md'",
             ),
             0
         );
@@ -6113,14 +6002,14 @@ mod tests {
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations WHERE id = 'ann-old'",
+                "SELECT count(*) FROM excerpts WHERE id = 'ann-old'",
             ),
             0
         );
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations WHERE id = 'ann-fresh'",
+                "SELECT count(*) FROM excerpts WHERE id = 'ann-fresh'",
             ),
             1
         );
@@ -6237,7 +6126,7 @@ mod tests {
         let fts_hits = |query: &str| -> i64 {
             connection
                 .query_row(
-                    "SELECT count(*) FROM annotations_fts WHERE annotations_fts MATCH ?1",
+                    "SELECT count(*) FROM excerpts_fts WHERE excerpts_fts MATCH ?1",
                     params![query],
                     |row| row.get(0),
                 )
@@ -6687,13 +6576,13 @@ mod tests {
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations WHERE relative_path = 'old.md'",
+                "SELECT count(*) FROM excerpts WHERE relative_path = 'old.md'",
             ),
             0
         );
         let (deleted_at,): (Option<i64>,) = connection
             .query_row(
-                "SELECT deleted_at FROM annotations
+                "SELECT deleted_at FROM excerpts
                  WHERE id = 'ann-2' AND relative_path = 'moved/new.md'",
                 [],
                 |row| Ok((row.get(0)?,)),
@@ -6732,7 +6621,7 @@ mod tests {
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations_fts WHERE annotations_fts MATCH 'hello'",
+                "SELECT count(*) FROM excerpts_fts WHERE excerpts_fts MATCH 'hello'",
             ),
             3
         );
@@ -6800,8 +6689,8 @@ mod tests {
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotations"),
-                1,
-                "existing annotations survive the v3 step"
+                0,
+                "v7 wipe clears annotations after upgrade"
             );
             assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 0);
         }
@@ -6876,10 +6765,19 @@ mod tests {
     ) {
         connection
             .execute(
-                "INSERT INTO annotation_reviews(
-                     annotation_id, library_root, box, due_at, last_reviewed_at,
-                     total_reviews, suspended, updated_at
-                 ) VALUES (?1, ?2, ?3, ?4, ?5, 1, ?6, 1)",
+                "INSERT INTO review_enrollments(
+                     excerpt_id, library_root, enrolled_at, box, due_at, last_reviewed_at,
+                     total_reviews, suspended, updated_at, deleted_at
+                 ) VALUES (?1, ?2, 1, ?3, ?4, ?5, 0, ?6, 1, NULL)
+                 ON CONFLICT(excerpt_id) DO UPDATE SET
+                     library_root = excluded.library_root,
+                     box = excluded.box,
+                     due_at = excluded.due_at,
+                     last_reviewed_at = excluded.last_reviewed_at,
+                     total_reviews = excluded.total_reviews,
+                     suspended = excluded.suspended,
+                     updated_at = excluded.updated_at,
+                     deleted_at = NULL",
                 params![
                     annotation_id,
                     root,
@@ -6889,14 +6787,14 @@ mod tests {
                     i64::from(suspended)
                 ],
             )
-            .expect("insert review fixture");
+            .expect("insert review enrollment fixture");
     }
 
     fn review_row(connection: &Connection, id: &str) -> (i64, i64, Option<i64>, i64, i64) {
         connection
             .query_row(
                 "SELECT box, due_at, last_reviewed_at, total_reviews, suspended
-                 FROM annotation_reviews WHERE annotation_id = ?1",
+                 FROM review_enrollments WHERE excerpt_id = ?1",
                 params![id],
                 |row| {
                     Ok((
@@ -6908,7 +6806,43 @@ mod tests {
                     ))
                 },
             )
-            .expect("read review row")
+            .expect("read review enrollment")
+    }
+
+    fn record_review_outcome_for_test(
+        connection: &Connection,
+        root: &str,
+        annotation_id: &str,
+        box_level: i64,
+        due_at: u64,
+        last_reviewed_at: Option<u64>,
+        suspended: bool,
+        now: u64,
+    ) -> CommandResult<()> {
+        validate_annotation_id(annotation_id)?;
+        validate_review_outcome_fields(box_level, due_at, last_reviewed_at, now)?;
+        if read_excerpt_row(connection, root, annotation_id)?
+            .filter(|entry| entry.deleted_at.is_none())
+            .is_none()
+        {
+            return Err("Annotation was not found".to_owned());
+        }
+        if read_review_enrollment_row(connection, root, annotation_id)?
+            .filter(|entry| entry.deleted_at.is_none())
+            .is_none()
+        {
+            return Err("Excerpt is not enrolled in spaced review".to_owned());
+        }
+        sync_review_outcome_to_enrollment(
+            connection,
+            root,
+            annotation_id,
+            box_level,
+            due_at,
+            last_reviewed_at,
+            suspended,
+            now,
+        )
     }
 
     #[test]
@@ -6966,13 +6900,13 @@ mod tests {
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotations"),
-                1,
-                "existing annotations survive the v4 step"
+                0,
+                "v7 wipe clears annotations after upgrade"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
-                1,
-                "v6 materializes the old implicit review as suspended"
+                0,
+                "v7 wipe clears legacy reviews"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM review_enrollments"),
@@ -7022,7 +6956,15 @@ mod tests {
             )
             .expect("insert v4 annotation");
         insert_document_row(&connection, ROOT, "notes/a.md", "pmd5:aaaa");
-        insert_review_row(&connection, ROOT, "ann-v4", 2, 1_000, Some(500), false);
+        connection
+            .execute(
+                "INSERT INTO annotation_reviews(
+                     annotation_id, library_root, box, due_at, last_reviewed_at,
+                     total_reviews, suspended, updated_at
+                 ) VALUES ('ann-v4', ?1, 2, 1000, 500, 1, 0, 1)",
+                params![ROOT],
+            )
+            .expect("insert v4 review");
         connection
             .pragma_update(None, "user_version", 4)
             .expect("mark v4");
@@ -7060,16 +7002,19 @@ mod tests {
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotations"),
-                1
+                0,
+                "v7 wipe"
             );
             assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 1);
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
-                1
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM review_enrollments"),
-                1
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM collections"),
@@ -7112,7 +7057,7 @@ mod tests {
             pink.selected_text = Some("old pink".to_owned());
             pink.title = Some("preserved title".to_owned());
             let pink = sanitize_annotation(pink).expect("pink annotation");
-            upsert_annotation_row(&connection, ROOT, &pink).expect("insert pink");
+            upsert_annotation_row_legacy(&connection, ROOT, &pink).expect("insert pink");
 
             let bookmark = sanitize_annotation(Annotation {
                 id: "mig-bookmark-weird".to_owned(),
@@ -7134,7 +7079,7 @@ mod tests {
                 deleted_at: None,
             })
             .expect("legacy-shaped bookmark");
-            upsert_annotation_row(&connection, ROOT, &bookmark).expect("insert bookmark");
+            upsert_annotation_row_legacy(&connection, ROOT, &bookmark).expect("insert bookmark");
 
             let mut deleted_pdf = sample_annotation("mig-pdf-deleted", "paper.pdf");
             deleted_pdf.locator = AnnotationLocator::Pdf {
@@ -7158,7 +7103,7 @@ mod tests {
             deleted_pdf.updated_at = deleted_at;
             deleted_pdf.deleted_at = Some(deleted_at);
             let deleted_pdf = sanitize_annotation(deleted_pdf).expect("deleted pdf");
-            upsert_annotation_row(&connection, ROOT, &deleted_pdf).expect("insert deleted pdf");
+            upsert_annotation_row_legacy(&connection, ROOT, &deleted_pdf).expect("insert deleted pdf");
 
             insert_document_row(&connection, ROOT, "notes/pink.md", "ntxt:aaaa");
             insert_document_row(&connection, ROOT, "paper.pdf", "pmd5:bbbb");
@@ -7173,74 +7118,38 @@ mod tests {
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotations"),
-                4
+                0,
+                "v7 wipe"
             );
-            assert_eq!(count_rows(&connection, "SELECT count(*) FROM excerpts"), 3);
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM excerpts"),
+                0,
+                "v7 wipe"
+            );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM reading_places"),
-                1
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM reflections"),
-                3
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM review_enrollments"),
-                1
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
-                3
+                0,
+                "v7 wipe"
             );
             assert_eq!(
                 count_rows(&connection, "SELECT count(*) FROM annotation_v6_migration"),
                 1
             );
-
-            let (tone, legacy_color, legacy_title): (String, String, String) = connection
-                .query_row(
-                    "SELECT tone, legacy_color, legacy_title FROM excerpts
-                     WHERE id = 'mig-md-pink'",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-                )
-                .expect("read pink migration");
-            assert_eq!((tone.as_str(), legacy_color.as_str()), ("sand", "pink"));
-            assert_eq!(legacy_title, "preserved title");
-
-            let (color, selected): (String, String) = connection
-                .query_row(
-                    "SELECT legacy_color, legacy_selected_text FROM reading_places
-                     WHERE id = 'mig-bookmark-weird'",
-                    [],
-                    |row| Ok((row.get(0)?, row.get(1)?)),
-                )
-                .expect("read legacy bookmark compatibility");
-            assert_eq!(
-                (color.as_str(), selected.as_str()),
-                ("pink", "legacy bookmark selection")
-            );
-
-            let (legacy_total, excerpts, places, source, target): (i64, i64, i64, String, String) =
-                connection
-                    .query_row(
-                        "SELECT legacy_total, excerpt_total, place_total,
-                                source_checksum, target_checksum
-                         FROM annotation_v6_migration WHERE library_root = ?1",
-                        params![ROOT],
-                        |row| {
-                            Ok((
-                                row.get(0)?,
-                                row.get(1)?,
-                                row.get(2)?,
-                                row.get(3)?,
-                                row.get(4)?,
-                            ))
-                        },
-                    )
-                    .expect("read migration ledger");
-            assert_eq!((legacy_total, excerpts, places), (4, 3, 1));
-            assert_eq!(source, target);
         }
 
         let backup_path = directory.path().join("reade-user.backup-v5.sqlite3");
@@ -7455,7 +7364,7 @@ mod tests {
         // The direct assertion behind "deleting a list never deletes the
         // documents": annotation and fingerprint rows are untouched.
         assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            count_rows(&connection, "SELECT count(*) FROM excerpts"),
             1
         );
         assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 1);
@@ -7880,7 +7789,7 @@ mod tests {
         // library, box outside 0..=5, due date outside [now − 1h, now + 180d],
         // future lastReviewedAt.
         let attempt = |id: &str, root: &str, box_level: i64, due: u64, last: Option<u64>| {
-            record_review_outcome_row(&connection, root, id, box_level, due, last, false, now)
+            record_review_outcome_for_test(&connection, root, id, box_level, due, last, false, now)
         };
         assert!(attempt("ann-unknown", ROOT, 0, now + DAY_MS, Some(now)).is_err());
         assert!(attempt("ann-gone", ROOT, 0, now + DAY_MS, Some(now)).is_err());
@@ -7914,13 +7823,15 @@ mod tests {
         )
         .is_err());
         assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
+            count_rows(&connection, "SELECT count(*) FROM review_enrollments"),
             0,
             "rejected outcomes must not write rows"
         );
 
+        insert_review_row(&connection, ROOT, "ann-live", 0, now + DAY_MS, None, false);
+
         // remembered → box 1; the server counts the review itself.
-        record_review_outcome_row(
+        record_review_outcome_for_test(
             &connection,
             ROOT,
             "ann-live",
@@ -7937,7 +7848,7 @@ mod tests {
         );
 
         // again → box 0, counted again.
-        record_review_outcome_row(
+        record_review_outcome_for_test(
             &connection,
             ROOT,
             "ann-live",
@@ -7954,7 +7865,7 @@ mod tests {
         );
 
         // suspend flips the flag without counting a review.
-        record_review_outcome_row(
+        record_review_outcome_for_test(
             &connection,
             ROOT,
             "ann-live",
@@ -7971,7 +7882,7 @@ mod tests {
         );
 
         // The window boundaries themselves are accepted.
-        record_review_outcome_row(
+        record_review_outcome_for_test(
             &connection,
             ROOT,
             "ann-live",
@@ -7982,7 +7893,7 @@ mod tests {
             now,
         )
         .expect("earliest boundary");
-        record_review_outcome_row(
+        record_review_outcome_for_test(
             &connection,
             ROOT,
             "ann-live",
@@ -8082,7 +7993,10 @@ mod tests {
         // rows without any annotation are dropped.
         let mut remaining: Vec<String> = {
             let mut statement = connection
-                .prepare("SELECT annotation_id FROM annotation_reviews")
+                .prepare(
+                    "SELECT excerpt_id FROM review_enrollments
+                     WHERE deleted_at IS NULL ORDER BY excerpt_id",
+                )
                 .expect("prepare remaining");
             let rows = statement
                 .query_map([], |row| row.get::<_, String>(0))
@@ -8090,12 +8004,11 @@ mod tests {
             rows.collect::<rusqlite::Result<Vec<_>>>()
                 .expect("decode remaining")
         };
-        remaining.sort();
         assert_eq!(remaining, vec!["ann-fresh", "ann-live"]);
         assert_eq!(
             count_rows(
                 &connection,
-                "SELECT count(*) FROM annotations WHERE id = 'ann-old'",
+                "SELECT count(*) FROM excerpts WHERE id = 'ann-old'",
             ),
             0
         );
@@ -8435,12 +8348,12 @@ mod tests {
         .expect("import");
         assert_eq!(written, 3);
         assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            transfer_annotation_rows(&connection, ROOT).expect("transfer").len(),
             3
         );
         let dead: Option<i64> = connection
             .query_row(
-                "SELECT deleted_at FROM annotations WHERE id = 'imp-dead'",
+                "SELECT deleted_at FROM excerpts WHERE id = 'imp-dead'",
                 [],
                 |row| row.get(0),
             )
@@ -8601,19 +8514,11 @@ mod tests {
             9_500,
         )
         .expect("import update");
-        let (note, updated_at): (Option<String>, i64) = connection
-            .query_row(
-                "SELECT note, updated_at FROM annotations WHERE id = 'imp-lww'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("read updated row");
-        assert_eq!(note.as_deref(), Some("imported newer note"));
-        assert_eq!(updated_at, 9_000);
-        assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM annotations"),
-            1
-        );
+        let listed = list_annotation_rows(&connection, ROOT, None).expect("list after update");
+        let updated = listed.iter().find(|item| item.id == "imp-lww").expect("row");
+        assert_eq!(updated.note.as_deref(), Some("imported newer note"));
+        assert_eq!(updated.updated_at, 9_000);
+        assert_eq!(listed.len(), 1);
     }
 
     fn markdown_locator() -> AnnotationLocator {
@@ -8674,14 +8579,6 @@ mod tests {
             legacy_selected_text: Some(source_text),
         };
         upsert_excerpt_row(connection, ROOT, &excerpt, None).expect("upsert excerpt");
-        upsert_annotation_row_legacy(
-            connection,
-            ROOT,
-            &new_excerpt_legacy_projection(&excerpt, None),
-        )
-        .expect("dual-write excerpt");
-        ensure_legacy_review_suspended(connection, ROOT, &excerpt.id, now)
-            .expect("suspend legacy review");
         refresh_v6_migration_ledger(connection, ROOT, now).expect("refresh ledger");
         excerpt
     }
@@ -8708,12 +8605,6 @@ mod tests {
             legacy_selected_text: None,
         };
         upsert_reading_place_row(connection, ROOT, &place).expect("upsert place");
-        upsert_annotation_row_legacy(
-            connection,
-            ROOT,
-            &reading_place_to_legacy_annotation(&place, None),
-        )
-        .expect("dual-write place");
         refresh_v6_migration_ledger(connection, ROOT, now).expect("refresh ledger");
         place
     }
@@ -8886,14 +8777,11 @@ mod tests {
         assert_eq!(listed[0].kind, AnnotationKind::Highlight);
         assert_eq!(listed[0].color, Some(AnnotationColor::Yellow));
         assert_eq!(listed[0].selected_text.as_deref(), Some("hello world"));
-        let (suspended, total): (i64, i64) = connection
-            .query_row(
-                "SELECT suspended, total_reviews FROM annotation_reviews WHERE annotation_id = 'ex-1'",
-                [],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .expect("legacy review");
-        assert_eq!((suspended, total), (1, 0));
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            0,
+            "create_excerpt must not dual-write legacy annotations"
+        );
         assert!(read_review_enrollment_row(&connection, ROOT, &excerpt.id)
             .expect("enrollment")
             .is_none());
@@ -9066,30 +8954,26 @@ mod tests {
             deleted_at: None,
         };
         upsert_reflection_row(&connection, ROOT, &reflection).expect("reflection");
-        sync_reflection_to_entry_and_legacy(&connection, ROOT, &reflection).expect("sync note");
+        sync_reflection_to_entry(&connection, ROOT, &reflection).expect("sync note");
         refresh_v6_migration_ledger(&connection, ROOT, 1_500).expect("ledger");
-        let legacy_note: Option<String> = connection
-            .query_row(
-                "SELECT note FROM annotations WHERE id = 'ex-2'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("legacy note");
-        assert_eq!(legacy_note.as_deref(), Some("我的感悟"));
+        let projected = list_annotation_rows(&connection, ROOT, Some("notes/a.md")).expect("list");
+        let note = projected
+            .iter()
+            .find(|item| item.id == "ex-2")
+            .and_then(|item| item.note.clone());
+        assert_eq!(note.as_deref(), Some("我的感悟"));
 
         let mut deleted = reflection.clone();
         deleted.deleted_at = Some(1_600);
         deleted.updated_at = 1_600;
         upsert_reflection_row(&connection, ROOT, &deleted).expect("tombstone reflection");
-        sync_reflection_to_entry_and_legacy(&connection, ROOT, &deleted).expect("clear note");
+        sync_reflection_to_entry(&connection, ROOT, &deleted).expect("clear note");
         refresh_v6_migration_ledger(&connection, ROOT, 1_600).expect("ledger");
-        let cleared: Option<String> = connection
-            .query_row(
-                "SELECT note FROM annotations WHERE id = 'ex-2'",
-                [],
-                |row| row.get(0),
-            )
-            .expect("cleared note");
+        let projected = list_annotation_rows(&connection, ROOT, Some("notes/a.md")).expect("list after clear");
+        let cleared = projected
+            .iter()
+            .find(|item| item.id == "ex-2")
+            .and_then(|item| item.note.clone());
         assert_eq!(cleared, None);
 
         set_annotation_entry_deleted_row(
@@ -9138,7 +9022,7 @@ mod tests {
         refresh_v6_migration_ledger(&connection, ROOT, 1_900).expect("ledger");
         let (suspended, total): (i64, i64) = connection
             .query_row(
-                "SELECT suspended, total_reviews FROM annotation_reviews WHERE annotation_id = 'ex-2'",
+                "SELECT suspended, total_reviews FROM review_enrollments WHERE excerpt_id = 'ex-2'",
                 [],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
@@ -9168,7 +9052,12 @@ mod tests {
             legacy_selected_text: Some(draft.source_text),
         };
         upsert_excerpt_row(&connection, ROOT, &excerpt, None).expect("v6 only");
-        let error = refresh_v6_migration_ledger(&connection, ROOT, 1).unwrap_err();
-        assert!(error.contains("reverse projection") || error.contains("checksum"));
+        refresh_v6_migration_ledger(&connection, ROOT, 1).expect("v6-only ledger");
+        assert!(v6_ledger_ready(&connection, ROOT).expect("ready"));
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            0,
+            "v6-only writes must not touch legacy annotations"
+        );
     }
 }

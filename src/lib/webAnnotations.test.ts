@@ -24,9 +24,11 @@ const DB_NAME = "reade-annotations";
 const STORE_NAME = "annotations";
 const DOCUMENTS_STORE = "documents";
 const REVIEWS_STORE = "annotationReviews";
+const REVIEW_ENROLLMENTS_STORE = "reviewEnrollments";
 const DAY_MS = 24 * 60 * 60 * 1000;
 const HASH_A = `ntxt:${"a".repeat(64)}`;
 const HASH_B = `ntxt:${"b".repeat(64)}`;
+const CURRENT_DB_VERSION = 7;
 
 function requestToPromise<T>(request: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -64,7 +66,14 @@ function seedRecords(db: IDBDatabase, records: unknown[]): Promise<void> {
   });
 }
 
-async function readAllRaw(): Promise<Annotation[]> {
+/** Reads reverse-projected rows (tombstones included) from the v6 stores. */
+async function readAllProjected(includeDeleted = true): Promise<Annotation[]> {
+  return includeDeleted
+    ? listWebAnnotationsForTransfer()
+    : listWebAnnotations(null);
+}
+
+async function readAllLegacyRaw(): Promise<Annotation[]> {
   const db = await openRaw();
   try {
     const tx = db.transaction(STORE_NAME, "readonly");
@@ -110,7 +119,7 @@ beforeEach(() => {
 });
 
 describe("v1 → v2 upgrade", () => {
-  it("backfills deletedAt and derived sortIndex onto legacy records", async () => {
+  it("backfills during the chain then v7 wipe clears legacy content", async () => {
     // Hand-build a v1 database: no sortIndex, no deletedAt, physical shape.
     const legacy = [
       {
@@ -204,28 +213,12 @@ describe("v1 → v2 upgrade", () => {
     await seedRecords(seed, legacy);
     seed.close();
 
-    // First use of the store triggers the upgrade.
-    const listed = await listWebAnnotations(null);
-    expect(listed).toHaveLength(5);
-
-    const raw = await readAllRaw();
-    const byId = new Map(raw.map((record) => [record.id, record]));
-    expect(byId.get("ann-markdown")?.sortIndex).toBe("M|00000|00000000");
-    expect(byId.get("ann-pdf")?.sortIndex).toBe("P|00003|00002500");
-    expect(byId.get("ann-epub")?.sortIndex).toBe("E|00000|00020015");
-    expect(byId.get("ann-bookmark")?.sortIndex).toBe("M|00000|50000000");
-    // Uninterpretable locators fall back to the broken key, matching Rust.
-    expect(byId.get("ann-corrupt")?.sortIndex).toBe("Z|99999|00000000");
-    for (const record of raw) {
-      expect(record.deletedAt).toBeNull();
-    }
-    // Legacy fields survive untouched.
-    expect(byId.get("ann-markdown")?.note).toBe("remember");
-    expect(byId.get("ann-markdown")?.locator).toEqual(legacy[0].locator);
+    // Full upgrade to current: v2 backfill runs, then v7 wipe clears content.
+    expect(await listWebAnnotations(null)).toEqual([]);
+    expect(await readAllLegacyRaw()).toEqual([]);
 
     const db = await openRaw();
-    // The chain continues to the current version (v6 adds excerpt stores).
-    expect(db.version).toBe(6);
+    expect(db.version).toBe(CURRENT_DB_VERSION);
     expect([...db.objectStoreNames].sort()).toEqual(
       [
         STORE_NAME,
@@ -240,19 +233,30 @@ describe("v1 → v2 upgrade", () => {
         "reviewEnrollments",
       ].sort(),
     );
+    const meta = await requestToPromise(
+      db.transaction("annotationV6Meta", "readonly").objectStore("annotationV6Meta").get(
+        "annotationV6",
+      ),
+    );
+    expect(meta).toMatchObject({
+      status: "ready",
+      excerptCount: 0,
+      placeCount: 0,
+      reflectionCount: 0,
+    });
     db.close();
   });
 
-  it("keeps records already carrying v2 fields verbatim", async () => {
+  it("keeps records already carrying v2 fields through the v2 step before wipe", async () => {
     const seed = await openRaw(1, createStore);
     await seedRecords(seed, [
       makeAnnotation("ann-kept", "notes/a.md", { sortIndex: "M|00000|00000007" }),
     ]);
     seed.close();
 
-    await listWebAnnotations(null);
-    const raw = await readAllRaw();
-    expect(raw[0].sortIndex).toBe("M|00000|00000007");
+    // Opening via the app upgrades through v7 wipe — legacy rows are gone.
+    expect(await listWebAnnotations(null)).toEqual([]);
+    expect(await readAllLegacyRaw()).toEqual([]);
   });
 });
 
@@ -268,11 +272,13 @@ describe("tombstone semantics", () => {
     expect((await listWebAnnotations(null)).map((item) => item.id)).toEqual(["ann-2"]);
     expect(await listWebAnnotations("notes/a.md")).toEqual([]);
 
-    const raw = await readAllRaw();
-    const tombstone = raw.find((record) => record.id === "ann-1");
+    const projected = await readAllProjected(true);
+    const tombstone = projected.find((record) => record.id === "ann-1");
     expect(typeof tombstone?.deletedAt).toBe("number");
     expect(tombstone!.deletedAt!).toBeGreaterThanOrEqual(before);
     expect(tombstone!.updatedAt).toBe(tombstone!.deletedAt);
+    // Legacy annotations store stays empty after v7.
+    expect(await readAllLegacyRaw()).toEqual([]);
 
     // A tombstoned id behaves as missing, like the desktop command.
     await expect(deleteWebAnnotation("ann-1")).rejects.toThrow("not found");
@@ -291,32 +297,33 @@ describe("tombstone semantics", () => {
 
     await clearWebDocumentAnnotations("a.md");
 
-    const raw = await readAllRaw();
-    expect(raw.map((record) => record.id)).toEqual(["ann-b"]);
+    const projected = await readAllProjected(true);
+    expect(projected.map((record) => record.id)).toEqual(["ann-b"]);
     expect((await listWebAnnotations("b.md")).map((item) => item.id)).toEqual(["ann-b"]);
   });
 
   it("purges only expired tombstones on open", async () => {
     const now = Date.now();
-    const seed = await openRaw(2, createStore);
-    await seedRecords(seed, [
-      makeAnnotation("ann-live", "a.md"),
+    await upsertWebAnnotation(makeAnnotation("ann-live", "a.md"));
+    await upsertWebAnnotation(
       makeAnnotation("ann-old", "a.md", {
         deletedAt: now - 91 * DAY_MS,
         updatedAt: now - 91 * DAY_MS,
       }),
+    );
+    await upsertWebAnnotation(
       makeAnnotation("ann-fresh", "a.md", {
         deletedAt: now - DAY_MS,
         updatedAt: now - DAY_MS,
       }),
-    ]);
-    seed.close();
+    );
 
+    resetWebAnnotationStoreForTests();
     const listed = await listWebAnnotations(null);
     expect(listed.map((item) => item.id)).toEqual(["ann-live"]);
 
-    const raw = await readAllRaw();
-    const ids = raw.map((record) => record.id).sort();
+    const projected = await readAllProjected(true);
+    const ids = projected.map((record) => record.id).sort();
     expect(ids).toEqual(["ann-fresh", "ann-live"]);
   });
 });
@@ -327,8 +334,9 @@ describe("upsert sort index fallback", () => {
       makeAnnotation("ann-derive", "notes/a.md", { sortIndex: "" }),
     );
     expect(saved.sortIndex).toBe("M|00000|00001024");
-    const raw = await readAllRaw();
-    expect(raw[0].sortIndex).toBe("M|00000|00001024");
+    const listed = await listWebAnnotations("notes/a.md");
+    expect(listed[0].sortIndex).toBe("M|00000|00001024");
+    expect(await readAllLegacyRaw()).toEqual([]);
   });
 
   it("rejects malformed sort keys", async () => {
@@ -342,8 +350,8 @@ describe("upsert sort index fallback", () => {
     delete (annotation as Partial<Annotation>).deletedAt;
     const saved = await upsertWebAnnotation(annotation);
     expect(saved.deletedAt).toBeNull();
-    const raw = await readAllRaw();
-    expect(raw[0].deletedAt).toBeNull();
+    const listed = await listWebAnnotations("notes/a.md");
+    expect(listed[0].deletedAt).toBeNull();
   });
 });
 
@@ -437,11 +445,11 @@ describe("document fingerprints and the move rebind chain", () => {
 
     expect(await listWebAnnotations("old.md")).toEqual([]);
     expect((await listWebAnnotations("moved/new.md")).map((item) => item.id)).toEqual(["ann-1"]);
-    const raw = await readAllRaw();
-    const tombstone = raw.find((record) => record.id === "ann-2");
+    const projected = await readAllProjected(true);
+    const tombstone = projected.find((record) => record.id === "ann-2");
     expect(tombstone?.relativePath).toBe("moved/new.md");
     expect(typeof tombstone?.deletedAt).toBe("number");
-    expect(raw.find((record) => record.id === "ann-other")?.relativePath).toBe("other.md");
+    expect(projected.find((record) => record.id === "ann-other")?.relativePath).toBe("other.md");
 
     const fingerprints = await readAllFingerprints();
     expect(fingerprints.map((row) => row.relativePath)).toEqual(["moved/new.md"]);
@@ -470,6 +478,18 @@ interface RawReviewRecord {
   updatedAt: number;
 }
 
+interface RawEnrollmentRecord {
+  excerptId: string;
+  enrolledAt: number;
+  box: number;
+  dueAt: number;
+  lastReviewedAt: number | null;
+  totalReviews: number;
+  suspended: boolean;
+  updatedAt: number;
+  deletedAt: number | null;
+}
+
 async function readAllReviews(): Promise<RawReviewRecord[]> {
   const db = await openRaw();
   try {
@@ -482,15 +502,27 @@ async function readAllReviews(): Promise<RawReviewRecord[]> {
   }
 }
 
-/** Writes raw review rows (the store must already exist at v4). */
-async function seedReviewRecords(records: RawReviewRecord[]): Promise<void> {
+async function readAllEnrollments(): Promise<RawEnrollmentRecord[]> {
+  const db = await openRaw();
+  try {
+    const tx = db.transaction(REVIEW_ENROLLMENTS_STORE, "readonly");
+    return await requestToPromise(
+      tx.objectStore(REVIEW_ENROLLMENTS_STORE).getAll() as IDBRequest<RawEnrollmentRecord[]>,
+    );
+  } finally {
+    db.close();
+  }
+}
+
+/** Writes enrollment rows (the store must already exist at v6+). */
+async function seedEnrollmentRecords(records: RawEnrollmentRecord[]): Promise<void> {
   const db = await openRaw();
   try {
     await new Promise<void>((resolve, reject) => {
-      const tx = db.transaction(REVIEWS_STORE, "readwrite");
+      const tx = db.transaction(REVIEW_ENROLLMENTS_STORE, "readwrite");
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error ?? new Error("seed reviews failed"));
-      const store = tx.objectStore(REVIEWS_STORE);
+      tx.onerror = () => reject(tx.error ?? new Error("seed enrollments failed"));
+      const store = tx.objectStore(REVIEW_ENROLLMENTS_STORE);
       for (const record of records) store.put(record);
     });
   } finally {
@@ -498,18 +530,20 @@ async function seedReviewRecords(records: RawReviewRecord[]): Promise<void> {
   }
 }
 
-function reviewRecord(
-  annotationId: string,
-  overrides: Partial<RawReviewRecord> = {},
-): RawReviewRecord {
+function enrollmentRecord(
+  excerptId: string,
+  overrides: Partial<RawEnrollmentRecord> = {},
+): RawEnrollmentRecord {
   return {
-    annotationId,
+    excerptId,
+    enrolledAt: 1,
     box: 1,
     dueAt: 0,
     lastReviewedAt: null,
     totalReviews: 1,
     suspended: false,
     updatedAt: 1,
+    deletedAt: null,
     ...overrides,
   };
 }
@@ -540,7 +574,7 @@ function bookmarkAnnotation(id: string, relativePath: string, title: string): An
 }
 
 describe("v3 → v4 upgrade", () => {
-  it("keeps old data readable and adds the annotationReviews store", async () => {
+  it("keeps schema stores through the chain; v7 wipe clears seeded rows", async () => {
     const seed = await openRaw(3, (db) => {
       createStore(db);
       db.createObjectStore(DOCUMENTS_STORE, { keyPath: "relativePath" });
@@ -548,13 +582,11 @@ describe("v3 → v4 upgrade", () => {
     await seedRecords(seed, [makeAnnotation("ann-v3", "notes/a.md")]);
     seed.close();
 
-    // First use triggers the upgrade; the v3 record stays readable.
-    const listed = await listWebAnnotations(null);
-    expect(listed.map((item) => item.id)).toEqual(["ann-v3"]);
+    // First use triggers the upgrade; v7 wipe clears the seeded legacy row.
+    expect(await listWebAnnotations(null)).toEqual([]);
 
     const db = await openRaw();
-    // The chain continues to the current version (v6 adds excerpt stores).
-    expect(db.version).toBe(6);
+    expect(db.version).toBe(CURRENT_DB_VERSION);
     expect([...db.objectStoreNames].sort()).toEqual(
       [
         STORE_NAME,
@@ -570,13 +602,12 @@ describe("v3 → v4 upgrade", () => {
       ].sort(),
     );
     db.close();
-    // No backfill: the reviews store starts empty (lazy initial state).
     expect(await readAllReviews()).toEqual([]);
   });
 });
 
-describe("v5 → v6 upgrade", () => {
-  it("projects live rows, marks the ledger ready, and keeps a readable v5 backup", async () => {
+describe("v6 → v7 wipe", () => {
+  it("clears annotation content, keeps shells, and marks the ledger ready empty", async () => {
     const seed = await openRaw(5, (db) => {
       createStore(db);
       db.createObjectStore(DOCUMENTS_STORE, { keyPath: "relativePath" });
@@ -590,46 +621,38 @@ describe("v5 → v6 upgrade", () => {
     await seedRecords(seed, [
       makeAnnotation("ann-v5", "notes/a.md", { note: "keep me", color: "pink" }),
     ]);
+    await new Promise<void>((resolve, reject) => {
+      const tx = seed.transaction("collections", "readwrite");
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error ?? new Error("seed collection failed"));
+      tx.objectStore("collections").put({
+        id: "col-1",
+        name: "shell",
+        createdAt: 1,
+        updatedAt: 1,
+      });
+    });
     seed.close();
 
-    const listed = await listWebAnnotations("notes/a.md");
-    expect(listed).toEqual([
-      expect.objectContaining({ id: "ann-v5", color: "pink", note: "keep me" }),
-    ]);
+    expect(await listWebAnnotations("notes/a.md")).toEqual([]);
+    expect(await readAllLegacyRaw()).toEqual([]);
 
-    const { listDocumentAnnotations } = await import("./webAnnotationRepository");
     const { openWebUserDatabase } = await import("./webAnnotations");
     const { readAnnotationV6Meta } = await import("./webAnnotationV6");
-    const bundle = await listDocumentAnnotations("notes/a.md");
-    expect(bundle.excerpts).toHaveLength(1);
-    expect(bundle.excerpts[0]?.appearance.tone).toBe("sand");
-    expect(bundle.excerpts[0]?.legacyColor).toBe("pink");
-    expect(bundle.reflections).toEqual([
-      expect.objectContaining({ entryId: "ann-v5", body: "keep me" }),
-    ]);
-
     const db = await openWebUserDatabase();
     const meta = await readAnnotationV6Meta(db);
     expect(meta?.status).toBe("ready");
-    expect(meta?.excerptCount).toBe(1);
-    expect(meta?.reflectionCount).toBe(1);
-    expect(meta?.backupName).toMatch(/^reade-annotations-backup-v5-/);
+    expect(meta?.excerptCount).toBe(0);
+    expect(meta?.placeCount).toBe(0);
+    expect(meta?.reflectionCount).toBe(0);
+    expect(db.version).toBe(CURRENT_DB_VERSION);
 
-    const backupDb = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = indexedDB.open(meta!.backupName!);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error ?? new Error("cannot open v5 backup"));
-    });
-    try {
-      const rows = await requestToPromise(
-        backupDb.transaction(STORE_NAME, "readonly").objectStore(STORE_NAME).getAll() as IDBRequest<
-          Annotation[]
-        >,
-      );
-      expect(rows).toEqual([expect.objectContaining({ id: "ann-v5", color: "pink" })]);
-    } finally {
-      backupDb.close();
-    }
+    const collections = await requestToPromise(
+      db.transaction("collections", "readonly").objectStore("collections").getAll(),
+    );
+    expect(collections).toEqual([
+      expect.objectContaining({ id: "col-1", name: "shell" }),
+    ]);
   });
 });
 
@@ -637,14 +660,14 @@ describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", (
   const created = 1_700_000_000_000;
 
   it("keeps unenrolled marks out of the queue and filters the pool (Q1..Q6)", async () => {
-    // Q1: no review row → not enrolled, never due.
+    // Q1: no enrollment → not enrolled, never due.
     await upsertWebAnnotation(
       makeAnnotation("ann-implicit", "a.md", { createdAt: created, updatedAt: created }),
     );
-    // Q2: explicit rows order by dueAt ascending.
+    // Q2: explicit enrollments order by dueAt ascending.
     await upsertWebAnnotation(makeAnnotation("ann-early", "b.md", { createdAt: created }));
     await upsertWebAnnotation(makeAnnotation("ann-late", "b.md", { createdAt: created }));
-    // Q3: suspended rows never enter the queue.
+    // Q3: suspended enrollments never enter the queue.
     await upsertWebAnnotation(makeAnnotation("ann-susp", "c.md", { createdAt: created }));
     // Q4: tombstones are excluded.
     await upsertWebAnnotation(makeAnnotation("ann-dead", "c.md", { createdAt: created }));
@@ -655,10 +678,14 @@ describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", (
     await upsertWebAnnotation(
       makeAnnotation("ann-blank", "c.md", { selectedText: "   ", createdAt: created }),
     );
-    await seedReviewRecords([
-      reviewRecord("ann-early", { box: 1, dueAt: created + 1_000, lastReviewedAt: created }),
-      reviewRecord("ann-late", { box: 2, dueAt: created + 2 * DAY_MS, lastReviewedAt: created }),
-      reviewRecord("ann-susp", { box: 0, dueAt: created, suspended: true }),
+    await seedEnrollmentRecords([
+      enrollmentRecord("ann-early", { box: 1, dueAt: created + 1_000, lastReviewedAt: created }),
+      enrollmentRecord("ann-late", {
+        box: 2,
+        dueAt: created + 2 * DAY_MS,
+        lastReviewedAt: created,
+      }),
+      enrollmentRecord("ann-susp", { box: 0, dueAt: created, suspended: true }),
     ]);
 
     const now = created + DAY_MS;
@@ -678,9 +705,9 @@ describe("review queue (contract fixture Q1..Q7, mirrored by the Rust tests)", (
         makeAnnotation(`ann-${index}`, `doc-${index}.md`, { createdAt: created }),
       );
     }
-    await seedReviewRecords(
+    await seedEnrollmentRecords(
       Array.from({ length: 7 }, (_, index) =>
-        reviewRecord(`ann-${index}`, { box: 0, dueAt: created, totalReviews: 0 }),
+        enrollmentRecord(`ann-${index}`, { box: 0, dueAt: created, totalReviews: 0 }),
       ),
     );
     const now = created + 2 * DAY_MS;
@@ -695,12 +722,17 @@ describe("recordWebReviewOutcome", () => {
     await upsertWebAnnotation(makeAnnotation("ann-live", "a.md"));
     await upsertWebAnnotation(makeAnnotation("ann-gone", "a.md"));
     await deleteWebAnnotation("ann-gone");
+    await seedEnrollmentRecords([
+      enrollmentRecord("ann-live", { box: 0, dueAt: now + DAY_MS, totalReviews: 0 }),
+    ]);
 
     const valid = reviewState({ box: 1, dueAt: now + 3 * DAY_MS, lastReviewedAt: now });
-    // Rejection matrix: unknown id, tombstoned id, box outside 0..=5,
-    // due date outside [now − 1h, now + 180d], future lastReviewedAt.
+    // Rejection matrix: unknown id, tombstoned id, unenrolled id, box outside
+    // 0..=5, due date outside [now − 1h, now + 180d], future lastReviewedAt.
     await expect(recordWebReviewOutcome("ann-unknown", valid)).rejects.toThrow("not found");
     await expect(recordWebReviewOutcome("ann-gone", valid)).rejects.toThrow("not found");
+    await upsertWebAnnotation(makeAnnotation("ann-unenrolled", "a.md"));
+    await expect(recordWebReviewOutcome("ann-unenrolled", valid)).rejects.toThrow("not enrolled");
     await expect(
       recordWebReviewOutcome("ann-live", reviewState({ box: -1, dueAt: now + DAY_MS })),
     ).rejects.toThrow("box");
@@ -726,10 +758,10 @@ describe("recordWebReviewOutcome", () => {
       "ann-live",
       reviewState({ box: 1, dueAt: now + 3 * DAY_MS, lastReviewedAt: now, totalReviews: 99 }),
     );
-    let rows = await readAllReviews();
+    let rows = await readAllEnrollments();
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({
-      annotationId: "ann-live",
+      excerptId: "ann-live",
       box: 1,
       totalReviews: 1,
       suspended: false,
@@ -740,7 +772,7 @@ describe("recordWebReviewOutcome", () => {
       "ann-live",
       reviewState({ box: 0, dueAt: now + DAY_MS, lastReviewedAt: now }),
     );
-    rows = await readAllReviews();
+    rows = await readAllEnrollments();
     expect(rows[0]).toMatchObject({ box: 0, totalReviews: 2 });
 
     // suspend flips the flag without counting a review.
@@ -748,7 +780,7 @@ describe("recordWebReviewOutcome", () => {
       "ann-live",
       reviewState({ box: 0, dueAt: now + DAY_MS, lastReviewedAt: now, suspended: true }),
     );
-    rows = await readAllReviews();
+    rows = await readAllEnrollments();
     expect(rows[0]).toMatchObject({ totalReviews: 2, suspended: true });
   });
 });
@@ -761,9 +793,13 @@ describe("webReviewSummary", () => {
     await upsertWebAnnotation(makeAnnotation("ann-a", "a.md", { createdAt: created }));
     await upsertWebAnnotation(makeAnnotation("ann-b", "b.md", { createdAt: created }));
     await upsertWebAnnotation(makeAnnotation("ann-c", "c.md", { createdAt: created }));
-    await seedReviewRecords([
-      reviewRecord("ann-b", { dueAt: now - 1_000, lastReviewedAt: dayStart + 500 }),
-      reviewRecord("ann-c", { box: 2, dueAt: now + DAY_MS, lastReviewedAt: dayStart - 5_000 }),
+    await seedEnrollmentRecords([
+      enrollmentRecord("ann-b", { dueAt: now - 1_000, lastReviewedAt: dayStart + 500 }),
+      enrollmentRecord("ann-c", {
+        box: 2,
+        dueAt: now + DAY_MS,
+        lastReviewedAt: dayStart - 5_000,
+      }),
     ]);
     await expect(webReviewSummary(dayStart, now)).resolves.toEqual({
       dueCount: 1,
@@ -773,38 +809,32 @@ describe("webReviewSummary", () => {
   });
 });
 
-describe("orphan review purge on open", () => {
-  it("drops rows without an annotation, keeps rows of live tombstones", async () => {
+describe("orphan enrollment purge on open", () => {
+  it("drops enrollments without a surviving excerpt, keeps rows of live tombstones", async () => {
     const now = Date.now();
-    const seed = await openRaw(4, (db) => {
-      createStore(db);
-      db.createObjectStore(DOCUMENTS_STORE, { keyPath: "relativePath" });
-      db.createObjectStore(REVIEWS_STORE, { keyPath: "annotationId" });
-    });
-    await seedRecords(seed, [
-      makeAnnotation("ann-live", "a.md"),
+    await upsertWebAnnotation(makeAnnotation("ann-live", "a.md"));
+    await upsertWebAnnotation(
       makeAnnotation("ann-old", "a.md", {
         deletedAt: now - 91 * DAY_MS,
         updatedAt: now - 91 * DAY_MS,
       }),
+    );
+    await upsertWebAnnotation(
       makeAnnotation("ann-fresh", "a.md", {
         deletedAt: now - DAY_MS,
         updatedAt: now - DAY_MS,
       }),
-    ]);
-    seed.close();
-    await seedReviewRecords([
-      reviewRecord("ann-live", { dueAt: now }),
-      reviewRecord("ann-old", { dueAt: now }),
-      reviewRecord("ann-fresh", { dueAt: now }),
-      // Simulates a physically cleared document: no annotation at all.
-      reviewRecord("ann-ghost", { dueAt: now }),
+    );
+    await seedEnrollmentRecords([
+      enrollmentRecord("ann-live", { dueAt: now }),
+      enrollmentRecord("ann-old", { dueAt: now }),
+      enrollmentRecord("ann-fresh", { dueAt: now }),
+      enrollmentRecord("ann-ghost", { dueAt: now }),
     ]);
 
-    // Opening the store purges the expired tombstone and the orphans; the
-    // fresh tombstone keeps its review row so undo restores progress.
+    resetWebAnnotationStoreForTests();
     await listWebAnnotations(null);
-    const remaining = (await readAllReviews()).map((row) => row.annotationId).sort();
+    const remaining = (await readAllEnrollments()).map((row) => row.excerptId).sort();
     expect(remaining).toEqual(["ann-fresh", "ann-live"]);
   });
 });
@@ -926,9 +956,10 @@ describe("annotation transfer (export/import, §5.7)", () => {
     );
     expect(written).toBe(2);
 
-    const records = await readAllRaw();
+    const records = await listWebAnnotationsForTransfer();
     expect(records.map((record) => record.id).sort()).toEqual(["imp-dead", "imp-live"]);
     expect(records.find((record) => record.id === "imp-dead")?.deletedAt).toBe(900);
+    expect(await readAllLegacyRaw()).toEqual([]);
 
     const fingerprints = await listWebDocumentFingerprints();
     // present.md keeps its manifest-synced hash; moved/away.md is seeded
@@ -950,13 +981,13 @@ describe("annotation transfer (export/import, §5.7)", () => {
         new Set(),
       ),
     ).rejects.toThrow();
-    await expect(readAllRaw()).resolves.toEqual([]);
+    await expect(readAllLegacyRaw()).resolves.toEqual([]);
 
     const oversized = Array.from({ length: 10_001 }, (_, index) =>
       makeAnnotation(`imp-${index}`, "a.md"),
     );
     await expect(importWebAnnotations(oversized, [], new Set())).rejects.toThrow(/limit/);
-    await expect(readAllRaw()).resolves.toEqual([]);
+    await expect(readAllLegacyRaw()).resolves.toEqual([]);
   });
 
   it("seeded fingerprints feed the move-detection chain", async () => {

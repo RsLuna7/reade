@@ -1,5 +1,5 @@
 import type { Annotation, AnnotationSearchHit, ReviewQueueItem, ReviewSummary } from "./backend";
-import type { Excerpt, ReviewEnrollment } from "./annotationModel";
+import type { Excerpt, ReadingPlace, Reflection, ReviewEnrollment } from "./annotationModel";
 import { annotationMatchesQuery, normalizeAnnotationQuery } from "./annotationSearch";
 import { deriveAnnotationSortIndex, isValidSortIndex } from "./annotations";
 import {
@@ -12,19 +12,23 @@ import { validateLibraryRelativePath } from "./webLibrary";
 import {
   createAnnotationV6Stores,
   ensureAnnotationV6Migrated,
+  EXCERPTS_STORE,
   projectAnnotationIntoV6,
+  READING_PLACES_STORE,
   rebindV6Paths,
-  removeV6EntriesForPath,
   REFLECTIONS_STORE,
+  removeV6EntriesForPath,
   REVIEW_ENROLLMENTS_STORE,
+  reverseProjectV6Annotations,
   V6_WRITE_STORES,
+  wipeAnnotationContentForV7,
 } from "./webAnnotationV6";
 
 const DB_NAME = "reade-annotations";
 const STORE_NAME = "annotations";
 /** Fingerprints of previously seen documents (`user_store.rs` `documents`). */
 const DOCUMENTS_STORE = "documents";
-/** Review state rows (`user_store.rs` `annotation_reviews`). */
+/** Review state rows (`user_store.rs` `annotation_reviews`) — empty shell after v7. */
 const REVIEWS_STORE = "annotationReviews";
 /** Collection rows (`user_store.rs` `collections`), used by `webCollections.ts`. */
 export const COLLECTIONS_STORE = "collections";
@@ -46,10 +50,13 @@ export const COLLECTION_ITEMS_STORE = "collectionItems";
  * store (keyPath `id`) plus a `collectionItems` store (composite keyPath
  * `[collectionId, relativePath]`, `collectionId` index; if the composite
  * keyPath ever misbehaves in a real browser, the documented fallback is a
- * `${collectionId}\u001f${relativePath}` string key). The upgrade steps
- * run sequentially like the desktop migration chain.
+ * `${collectionId}\u001f${relativePath}` string key). Version 6 adds the
+ * excerpt / reading-place / reflection / enrollment stores. Version 7
+ * mirrors desktop USER_SCHEMA 7: wipe annotation content to v6-only (legacy
+ * stores stay as empty shells; list/search/review/transfer reverse-project).
+ * The upgrade steps run sequentially like the desktop migration chain.
  */
-const DB_VERSION = 6;
+const DB_VERSION = 7;
 /** Tombstoned annotations are physically purged 90 days after deletion. */
 const TOMBSTONE_RETENTION_MS = 90 * 24 * 60 * 60 * 1000;
 
@@ -108,8 +115,11 @@ function openDatabase(): Promise<IDBDatabase> {
         store.createIndex("relativePath", "relativePath", { unique: false });
       }
       // Step 2: backfill sortIndex/deletedAt onto pre-v2 records (a no-op on
-      // the store step 1 just created).
-      if (event.oldVersion < 2) {
+      // the store step 1 just created). Skip when this same upgrade also runs
+      // the v7 wipe — an async cursor.update after clear() would resurrect rows.
+      const upgradingThroughV7 =
+        event.oldVersion < 7 && (event.newVersion ?? 0) >= 7;
+      if (event.oldVersion < 2 && !upgradingThroughV7) {
         backfillV2Records(request.transaction!.objectStore(STORE_NAME));
       }
       // Step 3: the document fingerprint store (desktop `documents` table).
@@ -130,9 +140,14 @@ function openDatabase(): Promise<IDBDatabase> {
         items.createIndex("collectionId", "collectionId", { unique: false });
       }
       // Step 6: v6 excerpt / reading-place / reflection stores plus a
-      // migration ledger. Legacy stores stay; dual-write keeps them current.
+      // migration ledger. Legacy stores stay as shells after the v7 wipe.
       if (event.oldVersion < 6) {
         createAnnotationV6Stores(db);
+      }
+      // Step 7: desktop USER_SCHEMA 7 twin — wipe annotation content to
+      // v6-only; keep documents + collections shells; ledger ready/empty.
+      if (event.oldVersion < 7) {
+        wipeAnnotationContentForV7(request.transaction!);
       }
     };
     request.onsuccess = () => resolve(request.result);
@@ -141,44 +156,93 @@ function openDatabase(): Promise<IDBDatabase> {
 }
 
 /**
- * Deletes tombstones older than the retention window and, mirroring the
- * desktop `purge_expired_tombstones`, drops review rows whose annotation no
- * longer exists. A live tombstone keeps its review row so undoing a
- * deletion restores the progress. Callback-driven so the single readwrite
- * transaction stays open across both passes.
+ * Deletes tombstones older than the retention window from v6 stores,
+ * mirroring desktop `purge_expired_tombstones` after USER_SCHEMA 7.
  */
-function purgeExpiredTombstones(db: IDBDatabase, now: number): Promise<void> {
-  return new Promise((resolve, reject) => {
-    const cutoff = now - TOMBSTONE_RETENTION_MS;
-    const tx = db.transaction([STORE_NAME, REVIEWS_STORE], "readwrite");
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error ?? new Error("Cannot clean up annotation tombstones"));
-    tx.onabort = () => reject(tx.error ?? new Error("Cannot clean up annotation tombstones"));
-    const survivors = new Set<string>();
-    const cursorRequest = tx.objectStore(STORE_NAME).openCursor();
-    cursorRequest.onsuccess = () => {
-      const cursor = cursorRequest.result;
-      if (!cursor) {
-        // The annotation pass is done; orphaned review rows go next.
-        const reviewCursorRequest = tx.objectStore(REVIEWS_STORE).openCursor();
-        reviewCursorRequest.onsuccess = () => {
-          const reviewCursor = reviewCursorRequest.result;
-          if (!reviewCursor) return;
-          const review = reviewCursor.value as WebReviewRecord;
-          if (!survivors.has(review.annotationId)) reviewCursor.delete();
-          reviewCursor.continue();
-        };
-        return;
+async function purgeExpiredTombstones(db: IDBDatabase, now: number): Promise<void> {
+  if (!db.objectStoreNames.contains(EXCERPTS_STORE)) return;
+  const cutoff = now - TOMBSTONE_RETENTION_MS;
+  const storeNames = [
+    EXCERPTS_STORE,
+    READING_PLACES_STORE,
+    REFLECTIONS_STORE,
+    REVIEW_ENROLLMENTS_STORE,
+    STORE_NAME,
+    REVIEWS_STORE,
+  ].filter((name) => db.objectStoreNames.contains(name));
+  const tx = db.transaction(storeNames, "readwrite");
+  const excerpts = (await requestToPromise(
+    tx.objectStore(EXCERPTS_STORE).getAll(),
+  )) as Excerpt[];
+  const places = (await requestToPromise(
+    tx.objectStore(READING_PLACES_STORE).getAll(),
+  )) as ReadingPlace[];
+  const survivorExcerptIds = new Set<string>();
+  const survivorPlaceIds = new Set<string>();
+  for (const excerpt of excerpts) {
+    if (typeof excerpt.deletedAt === "number" && excerpt.deletedAt < cutoff) {
+      tx.objectStore(EXCERPTS_STORE).delete(excerpt.id);
+    } else {
+      survivorExcerptIds.add(excerpt.id);
+    }
+  }
+  for (const place of places) {
+    if (typeof place.deletedAt === "number" && place.deletedAt < cutoff) {
+      tx.objectStore(READING_PLACES_STORE).delete(place.id);
+    } else {
+      survivorPlaceIds.add(place.id);
+    }
+  }
+  if (tx.objectStoreNames.contains(REFLECTIONS_STORE)) {
+    const reflections = (await requestToPromise(
+      tx.objectStore(REFLECTIONS_STORE).getAll(),
+    )) as Reflection[];
+    for (const reflection of reflections) {
+      const live =
+        reflection.entryKind === "excerpt"
+          ? survivorExcerptIds.has(reflection.entryId)
+          : survivorPlaceIds.has(reflection.entryId);
+      if (
+        (typeof reflection.deletedAt === "number" && reflection.deletedAt < cutoff) ||
+        !live
+      ) {
+        tx.objectStore(REFLECTIONS_STORE).delete(reflection.entryId);
       }
-      const record = cursor.value as Annotation;
+    }
+  }
+  if (tx.objectStoreNames.contains(REVIEW_ENROLLMENTS_STORE)) {
+    const enrollments = (await requestToPromise(
+      tx.objectStore(REVIEW_ENROLLMENTS_STORE).getAll(),
+    )) as ReviewEnrollment[];
+    for (const enrollment of enrollments) {
+      if (
+        (typeof enrollment.deletedAt === "number" && enrollment.deletedAt < cutoff) ||
+        !survivorExcerptIds.has(enrollment.excerptId)
+      ) {
+        tx.objectStore(REVIEW_ENROLLMENTS_STORE).delete(enrollment.excerptId);
+      }
+    }
+  }
+  // Legacy shells stay empty after v7; drop any leftover expired rows.
+  if (tx.objectStoreNames.contains(STORE_NAME)) {
+    const legacy = (await requestToPromise(
+      tx.objectStore(STORE_NAME).getAll(),
+    )) as Annotation[];
+    for (const record of legacy) {
       if (typeof record.deletedAt === "number" && record.deletedAt < cutoff) {
-        cursor.delete();
-      } else {
-        survivors.add(record.id);
+        tx.objectStore(STORE_NAME).delete(record.id);
       }
-      cursor.continue();
-    };
-  });
+    }
+  }
+  if (tx.objectStoreNames.contains(REVIEWS_STORE)) {
+    const reviews = (await requestToPromise(
+      tx.objectStore(REVIEWS_STORE).getAll(),
+    )) as WebReviewRecord[];
+    for (const review of reviews) {
+      tx.objectStore(REVIEWS_STORE).delete(review.annotationId);
+    }
+  }
+  await transactionDone(tx);
 }
 
 function openDb(): Promise<IDBDatabase> {
@@ -212,7 +276,7 @@ export function openWebUserDatabase(): Promise<IDBDatabase> {
 }
 
 function v6WriteStores(db: IDBDatabase): string[] {
-  const names = new Set<string>([STORE_NAME, DOCUMENTS_STORE]);
+  const names = new Set<string>([DOCUMENTS_STORE]);
   for (const name of V6_WRITE_STORES) {
     if (db.objectStoreNames.contains(name)) names.add(name);
   }
@@ -220,28 +284,20 @@ function v6WriteStores(db: IDBDatabase): string[] {
 }
 
 async function projectLegacyIntoV6(tx: IDBTransaction, record: Annotation): Promise<void> {
-  if (!tx.objectStoreNames.contains("excerpts")) return;
+  if (!tx.objectStoreNames.contains(EXCERPTS_STORE)) return;
   const fingerprint = (await requestToPromise(
     tx.objectStore(DOCUMENTS_STORE).get(record.relativePath),
   )) as WebDocumentFingerprint | undefined;
   const existingExcerpt = (await requestToPromise(
-    tx.objectStore("excerpts").get(record.id),
+    tx.objectStore(EXCERPTS_STORE).get(record.id),
   )) as Excerpt | undefined;
   projectAnnotationIntoV6(tx, record, fingerprint, "capture", existingExcerpt);
 }
 
 export async function listWebAnnotations(relativePath: string | null): Promise<Annotation[]> {
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readonly");
-  const store = tx.objectStore(STORE_NAME);
-  const matches = relativePath
-    ? await requestToPromise(
-        store.index("relativePath").getAll(relativePath) as IDBRequest<Annotation[]>,
-      )
-    : await requestToPromise(store.getAll() as IDBRequest<Annotation[]>);
-  return matches
-    .filter((annotation) => annotation.deletedAt == null)
-    .sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
+  const matches = await reverseProjectV6Annotations(db, relativePath, false);
+  return matches.sort((a, b) => b.updatedAt - a.updatedAt || a.id.localeCompare(b.id));
 }
 
 export async function upsertWebAnnotation(annotation: Annotation): Promise<Annotation> {
@@ -257,41 +313,64 @@ export async function upsertWebAnnotation(annotation: Annotation): Promise<Annot
   }
   const db = await openDb();
   const tx = db.transaction(v6WriteStores(db), "readwrite");
-  await requestToPromise(tx.objectStore(STORE_NAME).put(record));
   await projectLegacyIntoV6(tx, record);
   await transactionDone(tx);
   return record;
 }
 
 /**
- * Deleting writes a tombstone (mirroring the desktop semantics) so the
+ * Deleting writes a v6 tombstone (mirroring the desktop semantics) so the
  * record survives until the retention purge; an already tombstoned or
  * missing id is an error, like on the desktop.
  */
 export async function deleteWebAnnotation(id: string): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(v6WriteStores(db), "readwrite");
-  const store = tx.objectStore(STORE_NAME);
-  const existing = (await requestToPromise(store.get(id))) as Annotation | undefined;
-  if (!existing || existing.deletedAt != null) {
-    throw new Error("Annotation was not found");
-  }
   const now = Date.now();
-  const tombstone: Annotation = { ...existing, deletedAt: now, updatedAt: now };
-  await requestToPromise(store.put(tombstone));
-  await projectLegacyIntoV6(tx, tombstone);
-  await transactionDone(tx);
+  const excerpt = (await requestToPromise(tx.objectStore(EXCERPTS_STORE).get(id))) as
+    | Excerpt
+    | undefined;
+  const place = (await requestToPromise(tx.objectStore(READING_PLACES_STORE).get(id))) as
+    | ReadingPlace
+    | undefined;
+  if (excerpt && excerpt.deletedAt == null) {
+    excerpt.deletedAt = now;
+    excerpt.updatedAt = now;
+    const reflection = (await requestToPromise(tx.objectStore(REFLECTIONS_STORE).get(id))) as
+      | Reflection
+      | undefined;
+    if (reflection && reflection.deletedAt == null) {
+      reflection.deletedAt = now;
+      reflection.updatedAt = now;
+      tx.objectStore(REFLECTIONS_STORE).put(reflection);
+    }
+    tx.objectStore(EXCERPTS_STORE).put(excerpt);
+    await transactionDone(tx);
+    return;
+  }
+  if (place && place.deletedAt == null) {
+    place.deletedAt = now;
+    place.updatedAt = now;
+    const reflection = (await requestToPromise(tx.objectStore(REFLECTIONS_STORE).get(id))) as
+      | Reflection
+      | undefined;
+    if (reflection && reflection.deletedAt == null) {
+      reflection.deletedAt = now;
+      reflection.updatedAt = now;
+      tx.objectStore(REFLECTIONS_STORE).put(reflection);
+    }
+    tx.objectStore(READING_PLACES_STORE).put(place);
+    await transactionDone(tx);
+    return;
+  }
+  throw new Error("Annotation was not found");
 }
 
 /** Explicitly clearing a document purges its rows physically, tombstones included. */
 export async function clearWebDocumentAnnotations(relativePath: string): Promise<void> {
   const db = await openDb();
   const tx = db.transaction(v6WriteStores(db), "readwrite");
-  const store = tx.objectStore(STORE_NAME);
-  const index = store.index("relativePath");
-  const matches = await requestToPromise(index.getAllKeys(relativePath) as IDBRequest<IDBValidKey[]>);
-  await Promise.all(matches.map((key) => requestToPromise(store.delete(key))));
-  if (tx.objectStoreNames.contains("excerpts")) {
+  if (tx.objectStoreNames.contains(EXCERPTS_STORE)) {
     removeV6EntriesForPath(tx, relativePath);
   }
   await transactionDone(tx);
@@ -318,10 +397,7 @@ function compareTransferOrder(a: Annotation, b: Annotation): number {
  */
 export async function listWebAnnotationsForTransfer(): Promise<Annotation[]> {
   const db = await openDb();
-  const tx = db.transaction(STORE_NAME, "readonly");
-  const records = await requestToPromise(
-    tx.objectStore(STORE_NAME).getAll() as IDBRequest<Annotation[]>,
-  );
+  const records = await reverseProjectV6Annotations(db, null, true);
   return records.sort(compareTransferOrder);
 }
 
@@ -379,9 +455,8 @@ export async function importWebAnnotations(
   }
   const db = await openDb();
   const tx = db.transaction(v6WriteStores(db), "readwrite");
-  const store = tx.objectStore(STORE_NAME);
   for (const record of prepared) {
-    store.put(record);
+    await projectLegacyIntoV6(tx, record);
   }
   const documents = tx.objectStore(DOCUMENTS_STORE);
   for (const entry of fingerprints) {
@@ -398,21 +473,12 @@ export async function importWebAnnotations(
     };
     documents.put(row);
   }
-  for (const record of prepared) {
-    await projectLegacyIntoV6(tx, record);
-  }
   for (const reflection of extras?.reflections ?? []) {
     if (reflection.deletedAt != null || !reflection.body.trim()) continue;
     tx.objectStore(REFLECTIONS_STORE).put({
       ...reflection,
       body: reflection.body.trim(),
     });
-    const legacy = (await requestToPromise(store.get(reflection.entryId))) as
-      | Annotation
-      | undefined;
-    if (legacy) {
-      store.put({ ...legacy, note: reflection.body.trim(), updatedAt: reflection.updatedAt });
-    }
   }
   for (const enrollment of extras?.reviewEnrollments ?? []) {
     if (enrollment.deletedAt != null) continue;
@@ -420,15 +486,6 @@ export async function importWebAnnotations(
     const max = now + 180 * 24 * 60 * 60 * 1000;
     const dueAt = Math.min(max, Math.max(min, enrollment.dueAt));
     tx.objectStore(REVIEW_ENROLLMENTS_STORE).put({ ...enrollment, dueAt });
-    tx.objectStore(REVIEWS_STORE).put({
-      annotationId: enrollment.excerptId,
-      box: enrollment.box,
-      dueAt,
-      lastReviewedAt: enrollment.lastReviewedAt,
-      totalReviews: enrollment.totalReviews,
-      suspended: enrollment.suspended,
-      updatedAt: enrollment.updatedAt,
-    });
   }
   await transactionDone(tx);
   return prepared.length;
@@ -493,17 +550,14 @@ export async function detectWebMovedDocuments(
   documents: ReadonlyArray<WebFingerprintSource>,
 ): Promise<MovedDocumentCandidate[]> {
   const db = await openDb();
-  const tx = db.transaction([STORE_NAME, DOCUMENTS_STORE], "readonly");
-  const annotations = await requestToPromise(
-    tx.objectStore(STORE_NAME).getAll() as IDBRequest<Annotation[]>,
-  );
+  const annotations = await reverseProjectV6Annotations(db, null, false);
+  const tx = db.transaction(DOCUMENTS_STORE, "readonly");
   const stored = await requestToPromise(
     tx.objectStore(DOCUMENTS_STORE).getAll() as IDBRequest<WebDocumentFingerprint[]>,
   );
 
   const liveAnnotationCounts = new Map<string, number>();
   for (const annotation of annotations) {
-    if (annotation.deletedAt != null) continue;
     liveAnnotationCounts.set(
       annotation.relativePath,
       (liveAnnotationCounts.get(annotation.relativePath) ?? 0) + 1,
@@ -544,14 +598,14 @@ export async function rebindWebDocumentAnnotations(
     [...v6WriteStores(db), COLLECTION_ITEMS_STORE],
     "readwrite",
   );
-  const store = tx.objectStore(STORE_NAME);
-  const matches = await requestToPromise(
-    store.index("relativePath").getAll(oldPath) as IDBRequest<Annotation[]>,
-  );
-  for (const record of matches) {
-    store.put({ ...record, relativePath: newPath });
-  }
-  if (tx.objectStoreNames.contains("excerpts")) {
+  const excerpts = (await requestToPromise(
+    tx.objectStore(EXCERPTS_STORE).index("relativePath").getAll(oldPath),
+  )) as Excerpt[];
+  const places = (await requestToPromise(
+    tx.objectStore(READING_PLACES_STORE).index("relativePath").getAll(oldPath),
+  )) as ReadingPlace[];
+  const matchCount = excerpts.length + places.length;
+  if (tx.objectStoreNames.contains(EXCERPTS_STORE)) {
     rebindV6Paths(tx, oldPath, newPath);
   }
   const items = tx.objectStore(COLLECTION_ITEMS_STORE);
@@ -568,7 +622,7 @@ export async function rebindWebDocumentAnnotations(
   }
   tx.objectStore(DOCUMENTS_STORE).delete(oldPath);
   await transactionDone(tx);
-  return matches.length;
+  return matchCount;
 }
 
 // ---- Spaced-repetition review state (plan-annotation-review §3.3) ----
@@ -588,37 +642,35 @@ function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
-async function readAnnotationsAndReviews(db: IDBDatabase): Promise<{
+async function readAnnotationsAndEnrollments(db: IDBDatabase): Promise<{
   annotations: Annotation[];
-  reviews: Map<string, WebReviewRecord>;
+  enrollments: Map<string, ReviewEnrollment>;
 }> {
-  const tx = db.transaction([STORE_NAME, REVIEWS_STORE], "readonly");
-  const annotations = await requestToPromise(
-    tx.objectStore(STORE_NAME).getAll() as IDBRequest<Annotation[]>,
-  );
-  const reviewRows = await requestToPromise(
-    tx.objectStore(REVIEWS_STORE).getAll() as IDBRequest<WebReviewRecord[]>,
-  );
+  const annotations = await reverseProjectV6Annotations(db, null, true);
+  const tx = db.transaction(REVIEW_ENROLLMENTS_STORE, "readonly");
+  const enrollmentRows = (await requestToPromise(
+    tx.objectStore(REVIEW_ENROLLMENTS_STORE).getAll(),
+  )) as ReviewEnrollment[];
   return {
     annotations,
-    reviews: new Map(reviewRows.map((record) => [record.annotationId, record])),
+    enrollments: new Map(enrollmentRows.map((record) => [record.excerptId, record])),
   };
 }
 
 /**
  * Enrollment-only pool: live mark annotations with a non-blank excerpt and
- * a stored, unsuspended review row. Missing rows stay out of the queue.
+ * a stored, unsuspended enrollment. Missing enrollments stay out of the queue.
  */
 function reviewCandidates(
   annotations: Annotation[],
-  reviews: Map<string, WebReviewRecord>,
+  enrollments: Map<string, ReviewEnrollment>,
 ): ReviewQueueItem[] {
   const items: ReviewQueueItem[] = [];
   for (const annotation of annotations) {
     if (annotation.deletedAt != null) continue;
     if (!isReviewableAnnotation(annotation)) continue;
-    const record = reviews.get(annotation.id);
-    if (!record || record.suspended) continue;
+    const record = enrollments.get(annotation.id);
+    if (!record || record.deletedAt != null || record.suspended) continue;
     items.push({
       annotation,
       review: {
@@ -644,8 +696,8 @@ export async function listWebReviewQueue(
 ): Promise<ReviewQueueItem[]> {
   const capped = Math.min(Math.max(Math.floor(limit), 1), MAX_REVIEW_QUEUE_LIMIT);
   const db = await openDb();
-  const { annotations, reviews } = await readAnnotationsAndReviews(db);
-  return reviewCandidates(annotations, reviews)
+  const { annotations, enrollments } = await readAnnotationsAndEnrollments(db);
+  return reviewCandidates(annotations, enrollments)
     .filter((item) => !item.review.suspended && item.review.dueAt <= nowMs)
     .sort(
       (a, b) =>
@@ -656,10 +708,10 @@ export async function listWebReviewQueue(
 
 /**
  * Persists a client-derived review state with the same validation as the
- * desktop `record_review_outcome`: the annotation must exist and be live,
- * the box must sit on the ladder, the due date inside the skew window.
- * `totalReviews` is counted here, not taken from the caller; suspending
- * does not count as a review.
+ * desktop `record_excerpt_review_outcome`: the excerpt must be live and
+ * enrolled, the box must sit on the ladder, the due date inside the skew
+ * window. `totalReviews` is counted here, not taken from the caller;
+ * suspending does not count as a review.
  */
 export async function recordWebReviewOutcome(
   annotationId: string,
@@ -679,54 +731,37 @@ export async function recordWebReviewOutcome(
     throw new Error("Review timestamp is in the future");
   }
   const db = await openDb();
-  const storeNames = db.objectStoreNames.contains("reviewEnrollments")
-    ? [STORE_NAME, REVIEWS_STORE, "reviewEnrollments"]
-    : [STORE_NAME, REVIEWS_STORE];
-  const tx = db.transaction(storeNames, "readwrite");
-  const annotation = (await requestToPromise(tx.objectStore(STORE_NAME).get(annotationId))) as
-    | Annotation
+  const tx = db.transaction([EXCERPTS_STORE, REVIEW_ENROLLMENTS_STORE], "readwrite");
+  const excerpt = (await requestToPromise(tx.objectStore(EXCERPTS_STORE).get(annotationId))) as
+    | Excerpt
     | undefined;
-  if (!annotation || annotation.deletedAt != null) {
+  if (!excerpt || excerpt.deletedAt != null) {
     throw new Error("Annotation was not found");
   }
-  const store = tx.objectStore(REVIEWS_STORE);
-  const existing = (await requestToPromise(store.get(annotationId))) as
-    | WebReviewRecord
+  const enrollmentStore = tx.objectStore(REVIEW_ENROLLMENTS_STORE);
+  const enrollment = (await requestToPromise(enrollmentStore.get(annotationId))) as
+    | ReviewEnrollment
     | undefined;
-  const record: WebReviewRecord = {
-    annotationId,
-    box: state.box,
-    dueAt: state.dueAt,
-    lastReviewedAt: state.lastReviewedAt,
-    totalReviews: (existing?.totalReviews ?? 0) + (state.suspended ? 0 : 1),
-    suspended: state.suspended,
-    updatedAt: now,
-  };
-  await requestToPromise(store.put(record));
-  if (db.objectStoreNames.contains("reviewEnrollments")) {
-    const enrollmentStore = tx.objectStore("reviewEnrollments");
-    const enrollment = (await requestToPromise(enrollmentStore.get(annotationId))) as
-      | ReviewEnrollment
-      | undefined;
-    if (enrollment && enrollment.deletedAt == null) {
-      await requestToPromise(
-        enrollmentStore.put({
-          ...enrollment,
-          box: record.box,
-          dueAt: record.dueAt,
-          lastReviewedAt: record.lastReviewedAt,
-          totalReviews: record.totalReviews,
-          suspended: record.suspended,
-          updatedAt: now,
-        }),
-      );
-    }
+  if (!enrollment || enrollment.deletedAt != null) {
+    throw new Error("Excerpt is not enrolled in spaced review");
   }
+  await requestToPromise(
+    enrollmentStore.put({
+      ...enrollment,
+      box: state.box,
+      dueAt: state.dueAt,
+      lastReviewedAt: state.lastReviewedAt,
+      totalReviews: enrollment.totalReviews + (state.suspended ? 0 : 1),
+      suspended: state.suspended,
+      updatedAt: now,
+    }),
+  );
+  await transactionDone(tx);
 }
 
 /**
  * Review card numbers, mirroring the desktop `review_summary`: due
- * candidates at `nowMs` plus review rows whose `lastReviewedAt` falls into
+ * candidates at `nowMs` plus enrollments whose `lastReviewedAt` falls into
  * `[dayStartMs, nowMs]` (the caller computes the local day boundary).
  */
 export async function webReviewSummary(
@@ -737,12 +772,13 @@ export async function webReviewSummary(
     throw new Error("The review summary range start must not exceed its end");
   }
   const db = await openDb();
-  const { annotations, reviews } = await readAnnotationsAndReviews(db);
-  const dueCount = reviewCandidates(annotations, reviews).filter(
+  const { annotations, enrollments } = await readAnnotationsAndEnrollments(db);
+  const dueCount = reviewCandidates(annotations, enrollments).filter(
     (item) => !item.review.suspended && item.review.dueAt <= nowMs,
   ).length;
   let reviewedToday = 0;
-  for (const record of reviews.values()) {
+  for (const record of enrollments.values()) {
+    if (record.deletedAt != null) continue;
     if (
       record.lastReviewedAt != null &&
       record.lastReviewedAt >= dayStartMs &&
@@ -789,10 +825,11 @@ export async function searchWebAnnotationEntries(
 ): Promise<AnnotationSearchHit[]> {
   const annotations = await searchWebAnnotations(query, limit);
   const db = await openDb();
-  const { reviews } = await readAnnotationsAndReviews(db);
+  const { enrollments } = await readAnnotationsAndEnrollments(db);
   return annotations.map((annotation) => ({
     annotation,
     hasReflection: Boolean(annotation.note?.trim()),
-    enrolled: reviews.get(annotation.id)?.suspended === false,
+    enrolled: enrollments.get(annotation.id)?.suspended === false &&
+      enrollments.get(annotation.id)?.deletedAt == null,
   }));
 }

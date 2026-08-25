@@ -1,8 +1,8 @@
 # Handoff：Reade 标注系统重设计
 
-- 日期：2026-08-25（晚间；D-007/D-008 收口）
+- 日期：2026-08-25（晚间；D-014 v6-only）
 - 分支：`main`
-- 状态：**D-007/D-008 已落地并推送；停双写按 D-013 仍禁止。D-012 真机已确认 PDF 划选不抢目录 tab**
+- 状态：**D-014 已落地：升级清空全部标注并只读写 v6；旧表壳保留、不再双写**
 - 规格真源：`docs/plan-annotation-system-redesign.md`
 - 实施账本：`docs/annotation-redesign-implementation-notes.md`
 - 视觉证据：`output/playwright/annotation-redesign-2026-08-25/`（含 `VISUAL-REPORT.md`）
@@ -15,7 +15,7 @@
    - vertical writing 下 `margin-inline: 0`；
    - 对应 “centers a measured article” 测试。
 3. 不提交、不发布，除非用户另行授权。
-4. D-007/D-008 已收口。**停双写 / 删旧表仍须 parity 证据 + 单独授权（D-013）**。
+4. **D-014**：用户库升级到 schema/IDB 7 会清空标注；读写只走 v6。不要再恢复双写，除非用户明确要求。
 5. `.cursor/`、`skills/`、`skills-lock.json` 是用户已有未跟踪内容，不纳入本任务。
 
 ## 2. 已确认的产品方向

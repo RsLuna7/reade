@@ -35,7 +35,6 @@ import {
 } from "./webAnnotationV6";
 
 const DOCUMENTS_STORE = "documents";
-const REVIEWS_STORE = "annotationReviews";
 const REVIEW_IMPLICIT_DUE_OFFSET_MS = 24 * 60 * 60 * 1000;
 
 function compareSort<T extends { sortIndex: string; id: string }>(left: T, right: T): number {
@@ -89,16 +88,9 @@ async function readReflection(
   );
 }
 
-function putSuspendedReview(tx: IDBTransaction, annotationId: string, now: number): void {
-  tx.objectStore(REVIEWS_STORE).put({
-    annotationId,
-    box: 0,
-    dueAt: now + REVIEW_IMPLICIT_DUE_OFFSET_MS,
-    lastReviewedAt: null,
-    totalReviews: 0,
-    suspended: true,
-    updatedAt: now,
-  });
+function liveReflection(reflection: Reflection | undefined): Reflection | null {
+  if (!reflection || reflection.deletedAt != null) return null;
+  return reflection;
 }
 
 export async function listDocumentAnnotations(
@@ -163,7 +155,6 @@ export async function createExcerpt(draft: ExcerptDraft): Promise<Excerpt> {
     legacySelectedText: sanitized.sourceText,
   };
   putExcerptProjection(tx, excerpt, null);
-  putSuspendedReview(tx, excerpt.id, now);
   await transactionDone(tx);
   return excerpt;
 }
@@ -289,18 +280,6 @@ export async function setReviewEnrollment(
           deletedAt: null,
         };
     tx.objectStore(REVIEW_ENROLLMENTS_STORE).put(enrollment);
-    const review = (await requestToPromise(tx.objectStore(REVIEWS_STORE).get(excerptId))) as
-      | { annotationId: string; box: number; dueAt: number; lastReviewedAt: number | null; totalReviews: number; suspended: boolean; updatedAt: number }
-      | undefined;
-    tx.objectStore(REVIEWS_STORE).put({
-      annotationId: excerptId,
-      box: review?.box ?? enrollment.box,
-      dueAt: review?.dueAt ?? enrollment.dueAt,
-      lastReviewedAt: review?.lastReviewedAt ?? enrollment.lastReviewedAt,
-      totalReviews: review?.totalReviews ?? enrollment.totalReviews,
-      suspended: false,
-      updatedAt: now,
-    });
     await transactionDone(tx);
     return enrollment;
   }
@@ -312,14 +291,8 @@ export async function setReviewEnrollment(
       updatedAt: now,
     });
   }
-  putSuspendedReview(tx, excerptId, now);
   await transactionDone(tx);
   return null;
-}
-
-function liveReflection(reflection: Reflection | undefined): Reflection | null {
-  if (!reflection || reflection.deletedAt != null) return null;
-  return reflection;
 }
 
 async function assertLiveEntry(

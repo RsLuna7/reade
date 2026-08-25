@@ -2,7 +2,7 @@
 
 - 开始日期：2026-08-25
 - 规格：`docs/plan-annotation-system-redesign.md`
-- 状态：**D-007/D-008 已落地；停双写按规格仍禁止（D-013）。D-012 真机已确认**
+- 状态：**D-014 已落地：升级清空标注并切到 v6-only（用户选 B）。旧表壳保留、不再双写**
 
 ## 冻结基线
 
@@ -39,12 +39,11 @@
 - [x] 阶段 5：间隔回顾改为 enrollment-only；主页去掉今日回顾卡；命令面板 / 全库摘录入口；ArchiveV2 导出与 v1 导入兼容
 - [x] 阶段 6：README / USER_GUIDE / 旧计划文档取代声明（Web + Tauri Markdown 明暗抽检已做；完整 §12 矩阵与 PDF/EPUB 真机仍未做）
 
-## 暂停点（2026-08-25；D-007/D-008 已收口，停双写按 D-013 搁置）
+## 暂停点（2026-08-25；D-014 v6-only 清空已落地）
 
-- **D-007**：全库定位状态 chip（会话态；未检查不升格为失效）已接线。
-- **D-008**：ArchiveV2 extras 同事务导入 + dueAt 钳制；偏好客户端套用。
-- **D-013**：**不停双写、不删旧表**（规格要求 parity 观测期；需另行批准）。
+- **D-014**：用户明确选 B —— 升级到 user schema / IDB 7 时清空全部标注内容，之后只读写 v6；旧表壳保留。
 - HomeView/StatsView 跨午夜测试仍是基线失败，不要改。
+- 阅读统计与文档指纹保留；合集 membership（collection_items）随 wipe 清空。
 
 ## 偏差记录
 
@@ -96,11 +95,16 @@
 - 保守取舍：`import_annotations` 增加可选 `extras`；v6 ledger ready 时在同一 SQLite/IDB 事务内：legacy upsert → mirror v6 → reflections → enrollments（dueAt 钳到 `[now−1h, now+180d]`）→ 一次 ledger refresh。失败整批回滚。偏好在确认成功后客户端套用；合集仍后续。
 - 影响：Desktop/Web ArchiveV2 往返可保留感悟与间隔回顾阶梯；未 ready 的 root 仍只写 legacy。
 
-### D-013：停双写仍不可执行
+### D-013：停双写曾按规格搁置
 
-- 发现：用户要求「全开」延期项，但规格要求「一个稳定发布周期内 parity 零差异」且「停止双写须另行批准；仍不得自动删除旧表」。
-- 保守取舍：**本轮不关闭双写、不删旧表**。D-008 使导入也走 mirror，减少 ledger 分叉；继续依赖写时 `refresh_v6_migration_ledger`。
-- 影响：兼容回退路径保留；真正停双写需后续观测期 + 单独授权。
+- 发现：规格要求 parity 观测期才停双写。
+- 保守取舍：当时不关双写。**已被用户明确授权的 D-014 取代。**
+
+### D-014：清空标注并切到 v6-only（用户选 B）
+
+- 发现：用户要求删除旧体系与新体系全部标注内容，之后完全只用新体系。
+- 保守取舍：Desktop `USER_SCHEMA_VERSION=7` / Web `DB_VERSION=7` 破坏性 wipe（annotations、annotation_reviews、excerpts、reading_places、reflections、review_enrollments、collection_items）；保留 documents/collections 壳与阅读统计。停止双写；list/search/review/transfer 从 v6 反向投影。不物理 DROP 旧表。
+- 影响：升级后现有高亮/书签/感悟/回顾进度不可恢复（除非用户事先导出 ArchiveV2）；此后新建只进 v6。
 
 ### D-009：IndexedDB v5 备份先读后写
 

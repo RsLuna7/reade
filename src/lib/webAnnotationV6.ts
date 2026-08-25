@@ -39,12 +39,8 @@ export const V6_BACKUP_SOURCE_STORES = [
   COLLECTION_ITEMS_STORE,
 ] as const;
 
-export const V6_WRITE_STORES = [
-  ANNOTATIONS_STORE,
-  DOCUMENTS_STORE,
-  REVIEWS_STORE,
-  ...V6_STORE_NAMES,
-] as const;
+/** Stores writers touch after the v7 wipe — legacy annotations/reviews stay empty shells. */
+export const V6_WRITE_STORES = [DOCUMENTS_STORE, ...V6_STORE_NAMES] as const;
 
 const META_KEY = "annotationV6";
 
@@ -396,7 +392,6 @@ export function putExcerptProjection(
   reflection: Reflection | null,
 ): void {
   tx.objectStore(EXCERPTS_STORE).put(excerpt);
-  tx.objectStore(ANNOTATIONS_STORE).put(excerptToLegacyAnnotation(excerpt, reflection));
   if (reflection) tx.objectStore(REFLECTIONS_STORE).put(reflection);
 }
 
@@ -406,6 +401,77 @@ export function putReadingPlaceProjection(
   reflection: Reflection | null,
 ): void {
   tx.objectStore(READING_PLACES_STORE).put(place);
-  tx.objectStore(ANNOTATIONS_STORE).put(readingPlaceToLegacyAnnotation(place, reflection));
   if (reflection) tx.objectStore(REFLECTIONS_STORE).put(reflection);
+}
+
+/**
+ * Rebuilds the legacy `Annotation` DTO from v6 stores — the web twin of
+ * `reverse_project_v6_annotations` in `user_store.rs`.
+ */
+export async function reverseProjectV6Annotations(
+  db: IDBDatabase,
+  relativePath: string | null = null,
+  includeDeleted = false,
+): Promise<Annotation[]> {
+  if (!db.objectStoreNames.contains(EXCERPTS_STORE)) return [];
+  const tx = db.transaction(
+    [EXCERPTS_STORE, READING_PLACES_STORE, REFLECTIONS_STORE],
+    "readonly",
+  );
+  const excerpts = relativePath
+    ? ((await requestToPromise(
+        tx.objectStore(EXCERPTS_STORE).index("relativePath").getAll(relativePath),
+      )) as Excerpt[])
+    : ((await requestToPromise(tx.objectStore(EXCERPTS_STORE).getAll())) as Excerpt[]);
+  const places = relativePath
+    ? ((await requestToPromise(
+        tx.objectStore(READING_PLACES_STORE).index("relativePath").getAll(relativePath),
+      )) as ReadingPlace[])
+    : ((await requestToPromise(tx.objectStore(READING_PLACES_STORE).getAll())) as ReadingPlace[]);
+  const reflections = (await requestToPromise(
+    tx.objectStore(REFLECTIONS_STORE).getAll(),
+  )) as Reflection[];
+  const reflectionById = new Map(reflections.map((item) => [item.entryId, item]));
+  const projected: Annotation[] = [];
+  for (const excerpt of excerpts) {
+    if (!includeDeleted && excerpt.deletedAt != null) continue;
+    projected.push(
+      excerptToLegacyAnnotation(excerpt, reflectionById.get(excerpt.id) ?? null),
+    );
+  }
+  for (const place of places) {
+    if (!includeDeleted && place.deletedAt != null) continue;
+    projected.push(
+      readingPlaceToLegacyAnnotation(place, reflectionById.get(place.id) ?? null),
+    );
+  }
+  return projected;
+}
+
+/** Clears annotation content stores for the v7 wipe; keeps documents + collections shells. */
+export function wipeAnnotationContentForV7(tx: IDBTransaction): void {
+  for (const name of [
+    ANNOTATIONS_STORE,
+    REVIEWS_STORE,
+    EXCERPTS_STORE,
+    READING_PLACES_STORE,
+    REFLECTIONS_STORE,
+    REVIEW_ENROLLMENTS_STORE,
+    COLLECTION_ITEMS_STORE,
+  ] as const) {
+    if (tx.objectStoreNames.contains(name)) tx.objectStore(name).clear();
+  }
+  if (tx.objectStoreNames.contains(ANNOTATION_V6_META_STORE)) {
+    const meta: AnnotationV6Meta = {
+      key: META_KEY,
+      status: "ready",
+      backupName: null,
+      error: null,
+      excerptCount: 0,
+      placeCount: 0,
+      reflectionCount: 0,
+      migratedAt: Date.now(),
+    };
+    tx.objectStore(ANNOTATION_V6_META_STORE).put(meta);
+  }
 }
