@@ -129,6 +129,19 @@ describe("collectReferencedImages / paneImageAssetPaths", () => {
     expect(collectReferencedImages(markdown)).toEqual(["./a.png", "b-file.png"]);
   });
 
+  it("collects angle-bracket destinations that contain spaces", () => {
+    const markdown = "![diagram](<./assets/my diagram.png>)";
+    expect(collectReferencedImages(markdown)).toEqual([
+      "./assets/my%20diagram.png",
+    ]);
+    expect(paneImageAssetPaths(markdown, "notes/doc.md")).toEqual([
+      {
+        source: "./assets/my%20diagram.png",
+        relativePath: "notes/assets/my diagram.png",
+      },
+    ]);
+  });
+
   it("resolves local sources and drops data/external/out-of-library ones", () => {
     const markdown = [
       "![ok](./img/ok.png)",

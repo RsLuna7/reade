@@ -21,6 +21,7 @@ import {
   countMermaidEdges,
   safeUrlTransform,
 } from "../lib/markdown";
+import { isRemoteHttpUrl } from "../lib/markdownImages";
 import { sanitizeMermaidSvg } from "../lib/mermaidSvg";
 
 export interface MarkdownRendererProps {
@@ -29,6 +30,11 @@ export interface MarkdownRendererProps {
   resolveImageSrc?: (source: string) => string | null;
   resolveLinkHref?: (href: string) => string | null;
   onNavigate?: (href: string, event: MouseEvent<HTMLAnchorElement>) => void;
+  /**
+   * Called when the reader opts in from a blocked remote-image placeholder.
+   * When omitted, remote blocks stay informational only.
+   */
+  onAllowRemoteImages?: () => void;
   /**
    * 悬停/聚焦意图上报(plan-hover-preview §3.2):分类与计时都在上层,
    * 渲染器只转发事件;不挂时零行为变化。
@@ -439,6 +445,7 @@ export function MarkdownRenderer({
   resolveImageSrc,
   resolveLinkHref,
   onNavigate,
+  onAllowRemoteImages,
   onLinkPreview,
   onLinkPreviewCancel,
 }: MarkdownRendererProps) {
@@ -507,7 +514,21 @@ export function MarkdownRenderer({
       void node;
       const resolved = typeof src === "string" ? resolvedUrl(src, resolveImageSrc) : null;
       if (resolved === null) {
-        return <span className="markdown-image-blocked">{alt || "图片已拦截"}</span>;
+        const remote = typeof src === "string" && isRemoteHttpUrl(src);
+        return (
+          <span className="markdown-image-blocked">
+            <span>{alt || (remote ? "远程图片已拦截" : "图片已拦截")}</span>
+            {remote && onAllowRemoteImages ? (
+              <button
+                type="button"
+                className="markdown-image-blocked-action"
+                onClick={onAllowRemoteImages}
+              >
+                允许加载
+              </button>
+            ) : null}
+          </span>
+        );
       }
 
       return <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" decoding="async" />;

@@ -49,17 +49,45 @@ describe("MarkdownRenderer", () => {
       />,
     );
 
-    expect(screen.getByText("script").closest("a")).toBeNull();
-    expect(screen.getByText("file").closest("a")).toBeNull();
-    expect(screen.getByRole("link", { name: "web" })).toHaveAttribute("href", "https://example.com");
-    expect(screen.getByRole("link", { name: "local" })).toHaveAttribute("href", "./next.md");
+    expect(screen.getByText("script")).toHaveClass("markdown-link-blocked");
+    expect(screen.getByText("file")).toHaveClass("markdown-link-blocked");
+    expect(container.querySelector('a[href="https://example.com"]')).toBeInTheDocument();
+    expect(container.querySelector('a[href="./next.md"]')).toBeInTheDocument();
     expect(container.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,iVBORw0KGgo=");
-
     expect(safeUrlTransform("java\nscript:alert(1)")).toBeNull();
     expect(safeUrlTransform("//example.com/path")).toBeNull();
     expect(safeUrlTransform("data:image/svg+xml,<svg onload=alert(1) />")).toBeNull();
     expect(safeUrlTransform("mailto:reader@example.com")).toBe("mailto:reader@example.com");
     expect(safeUrlTransform("#section")).toBe("#section");
+  });
+
+  it("labels remote image blocks and offers an allow action", () => {
+    const onAllowRemoteImages = vi.fn();
+    render(
+      <MarkdownRenderer
+        content={"![](https://cdn.example/diagram.png)"}
+        resolveImageSrc={() => null}
+        onAllowRemoteImages={onAllowRemoteImages}
+      />,
+    );
+
+    expect(screen.getByText("远程图片已拦截")).toBeInTheDocument();
+    screen.getByRole("button", { name: "允许加载" }).click();
+    expect(onAllowRemoteImages).toHaveBeenCalledTimes(1);
+  });
+
+  it("renders remote https images when the resolver allows them", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={"![](https://cdn.example/diagram.png)"}
+        resolveImageSrc={(source) => source}
+      />,
+    );
+
+    expect(container.querySelector("img")).toHaveAttribute(
+      "src",
+      "https://cdn.example/diagram.png",
+    );
   });
 
   it("adds stable unique heading ids and exposes source lines for TOC extraction", () => {

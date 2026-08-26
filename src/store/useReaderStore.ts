@@ -248,6 +248,7 @@ type PersistedReaderPreferences = Partial<
     | "annotationColorNames"
     | "dailyGoalMinutes"
     | "fuzzyAnnotationAnchoring"
+    | "allowRemoteImages"
     | "showHighlightCaret"
     | "showScrollMap"
     | "focusSpotlight"
@@ -309,6 +310,9 @@ export function migrateReaderPreferences(
       : {}),
     ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
       ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
+      : {}),
+    ...(typeof state.allowRemoteImages === "boolean"
+      ? { allowRemoteImages: state.allowRemoteImages }
       : {}),
     // 高亮角标:缺键/坏值回默认关(按需启用)。
     ...(typeof state.showHighlightCaret === "boolean"
@@ -383,6 +387,11 @@ interface ReaderState {
    * default: fuzzy may anchor a mark to similar but different text. Persisted.
    */
   fuzzyAnnotationAnchoring: boolean;
+  /**
+   * Load HTTPS images referenced by Markdown from the network. Off by default
+   * (local-first / no drive-by requests); persisted. CSP still forbids http:.
+   */
+  allowRemoteImages: boolean;
   /**
    * 高亮角标:在高亮标注首段左上角画红色倒三角,便于扫视定位。
    * 默认关(按需启用);持久化、双端同构。仅影响高亮,不影响下划线。
@@ -471,6 +480,7 @@ interface ReaderState {
   setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
   resetAnnotationColorNames: () => void;
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
+  setAllowRemoteImages: (enabled: boolean) => void;
   setShowHighlightCaret: (enabled: boolean) => void;
   setShowScrollMap: (enabled: boolean) => void;
   setFocusSpotlight: (enabled: boolean) => void;
@@ -584,6 +594,7 @@ export const useReaderStore = create<ReaderState>()(
         excerptTone: "sand",
         annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
         fuzzyAnnotationAnchoring: false,
+        allowRemoteImages: false,
         showHighlightCaret: false,
         showScrollMap: true,
         focusSpotlight: false,
@@ -829,6 +840,10 @@ export const useReaderStore = create<ReaderState>()(
           set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
         },
 
+        setAllowRemoteImages: (enabled) => {
+          set({ allowRemoteImages: enabled === true });
+        },
+
         setShowHighlightCaret: (enabled) => {
           set({ showHighlightCaret: enabled === true });
         },
@@ -926,6 +941,7 @@ export const useReaderStore = create<ReaderState>()(
             excerptTone: "sand",
             annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
             fuzzyAnnotationAnchoring: false,
+            allowRemoteImages: false,
             showHighlightCaret: false,
             showScrollMap: true,
             focusSpotlight: false,
@@ -989,6 +1005,7 @@ export const useReaderStore = create<ReaderState>()(
         annotationColorNames: state.annotationColorNames,
         dailyGoalMinutes: state.dailyGoalMinutes,
         fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
+        allowRemoteImages: state.allowRemoteImages,
         showHighlightCaret: state.showHighlightCaret,
         showScrollMap: state.showScrollMap,
         focusSpotlight: state.focusSpotlight,
@@ -1056,6 +1073,10 @@ export const useReaderStore = create<ReaderState>()(
             preferences.fuzzyAnnotationAnchoring,
             current.fuzzyAnnotationAnchoring,
           ),
+          allowRemoteImages:
+            typeof preferences.allowRemoteImages === "boolean"
+              ? preferences.allowRemoteImages
+              : current.allowRemoteImages,
           showHighlightCaret:
             typeof preferences.showHighlightCaret === "boolean"
               ? preferences.showHighlightCaret

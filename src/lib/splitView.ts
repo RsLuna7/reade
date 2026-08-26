@@ -18,6 +18,7 @@
 
 import type { DocumentContent } from "./backend";
 import { resolveLibraryPath } from "./documentLinks";
+import { normalizeMarkdownUrlKey } from "./markdownImages";
 
 // ---------------------------------------------------------------------------
 // Divider position (SP-D5) and narrow-window breakpoint (SP-D6)
@@ -116,12 +117,18 @@ export const resolveLibraryRelativePath: (
   documentPath: string,
 ) => string | null = resolveLibraryPath;
 
-/** Image sources referenced by a markdown body (dedup, declaration order). */
+/**
+ * Image sources referenced by a markdown body (dedup, declaration order).
+ * Angle-bracket destinations may contain spaces; bare destinations may not.
+ * Keys are normalised to match remark / react-markdown `img` src values.
+ */
 export function collectReferencedImages(markdown: string): string[] {
   const sources = new Set<string>();
-  const imagePattern = /!\[[^\]]*]\(\s*<?([^\s)>]+)>?(?:\s+["'][^"']*["'])?\s*\)/g;
+  const imagePattern =
+    /!\[[^\]]*]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
   for (const match of markdown.matchAll(imagePattern)) {
-    if (match[1]) sources.add(match[1]);
+    const raw = (match[1] ?? match[2] ?? "").trim();
+    if (raw) sources.add(normalizeMarkdownUrlKey(raw));
   }
   return [...sources];
 }
@@ -138,7 +145,9 @@ export function paneImageAssetPaths(
   for (const source of collectReferencedImages(markdown)) {
     if (source.startsWith("data:") || EXTERNAL_PROTOCOL.test(source)) continue;
     const relativePath = resolveLibraryRelativePath(source, documentPath);
-    if (relativePath) entries.push({ source, relativePath });
+    if (relativePath) {
+      entries.push({ source: normalizeMarkdownUrlKey(source), relativePath });
+    }
   }
   return entries;
 }

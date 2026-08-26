@@ -2557,11 +2557,30 @@ a:focus-visible {
 .markdown-link-blocked,
 .markdown-image-blocked {
   display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
   padding: 0.12em 0.38em;
   border-radius: 4px;
   color: var(--muted);
   background: var(--chrome);
   font-size: 0.86em;
+}
+
+.markdown-image-blocked-action {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, var(--ink));
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.markdown-image-blocked-action:hover,
+.markdown-image-blocked-action:focus-visible {
+  color: var(--ink);
 }
 
 .toc-panel {

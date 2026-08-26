@@ -50,6 +50,7 @@ import {
   paneImageAssetPaths,
   reducePaneContent,
 } from "../lib/splitView";
+import { resolveMarkdownImageSrc } from "../lib/markdownImages";
 import { EpubReader } from "./EpubReader";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { PdfPagePosition, PdfReaderHandle } from "./PdfReader";
@@ -64,7 +65,6 @@ const EMPTY_ANNOTATIONS: Annotation[] = [];
 const NOOP_TOC_CHANGE = () => undefined;
 const NOOP_ACTIVE_CHANGE = () => undefined;
 const NOTICE_TIMEOUT_MS = 4000;
-const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
 
 function paneFileName(path: string): string {
   return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
@@ -78,6 +78,9 @@ export interface SecondaryPaneProps {
   motionLevel: ReaderMotionLevel;
   /** Library root so a PDF in the pane shares printed-page calibration. */
   libraryRoot?: string;
+  /** When true, HTTPS markdown images load from the network (main-pane preference). */
+  allowRemoteImages?: boolean;
+  onAllowRemoteImages?: () => void;
   onClose: () => void;
   /** Fired when the pane self-navigates, so the owner can keep its state in sync. */
   onPathChange?: (path: string) => void;
@@ -95,6 +98,8 @@ export function SecondaryPane({
   documents,
   motionLevel,
   libraryRoot,
+  allowRemoteImages = false,
+  onAllowRemoteImages,
   onClose,
   onPathChange,
   scrollMemory: scrollMemoryProp,
@@ -266,12 +271,8 @@ export function SecondaryPane({
   }, [activePath, paneIsPdf, pdfPositionMemory, scrollMemory]);
 
   const resolveImageSrc = useCallback(
-    (source: string) => {
-      if (source.startsWith("data:image/")) return source;
-      if (EXTERNAL_PROTOCOL.test(source)) return null;
-      return assetUrls[source] ?? null;
-    },
-    [assetUrls],
+    (source: string) => resolveMarkdownImageSrc(source, assetUrls, allowRemoteImages),
+    [allowRemoteImages, assetUrls],
   );
 
   const handleNavigate = useCallback(
@@ -348,6 +349,7 @@ export function SecondaryPane({
         <MarkdownRenderer
           content={paneDisplayMarkdown(loaded.markdown)}
           resolveImageSrc={resolveImageSrc}
+          onAllowRemoteImages={onAllowRemoteImages}
           onNavigate={(href) => handleNavigate(href)}
         />
       );

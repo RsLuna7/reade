@@ -134,6 +134,10 @@ import {
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
 import { resolveLibraryPath } from "./lib/documentLinks";
 import {
+  normalizeMarkdownUrlKey,
+  resolveMarkdownImageSrc,
+} from "./lib/markdownImages";
+import {
   clampSplitPos,
   collectReferencedImages as referencedImages,
   paneDisplayMarkdown as displayMarkdown,
@@ -803,6 +807,8 @@ export function ReadingSettingsPanel({
   const setFuzzyAnnotationAnchoring = useReaderStore(
     (state) => state.setFuzzyAnnotationAnchoring,
   );
+  const allowRemoteImages = useReaderStore((state) => state.allowRemoteImages);
+  const setAllowRemoteImages = useReaderStore((state) => state.setAllowRemoteImages);
   const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
   const setShowHighlightCaret = useReaderStore((state) => state.setShowHighlightCaret);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
@@ -975,6 +981,29 @@ export function ReadingSettingsPanel({
         </div>
         <p className="setting-hint">
           文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
+        </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">远程图片</legend>
+        <div className="motion-level-control" role="group" aria-label="远程图片开关">
+          {([
+            [false, "拦截"],
+            [true, "加载"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={allowRemoteImages === enabled}
+              className={allowRemoteImages === enabled ? "active" : undefined}
+              onClick={() => setAllowRemoteImages(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          默认不联网请求 Markdown 中的 HTTPS 图片；开启后仅加载 https 地址，仍拒绝 http 与危险协议。
         </p>
       </fieldset>
 
@@ -1535,6 +1564,8 @@ function App() {
   const underlineColor = useReaderStore((state) => state.underlineColor);
   const excerptTone = useReaderStore((state) => state.excerptTone);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
+  const allowRemoteImages = useReaderStore((state) => state.allowRemoteImages);
+  const setAllowRemoteImages = useReaderStore((state) => state.setAllowRemoteImages);
   const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
@@ -5093,7 +5124,10 @@ function App() {
       void readAsset(relativePath)
         .then((asset) => {
           if (!cancelled) {
-            setAssetUrls((current) => ({ ...current, [source]: assetDataUrl(asset) }));
+            setAssetUrls((current) => ({
+              ...current,
+              [normalizeMarkdownUrlKey(source)]: assetDataUrl(asset),
+            }));
           }
         })
         .catch(() => {
@@ -5365,13 +5399,14 @@ function App() {
   }, [currentContent, syncTopbarElevation]);
 
   const resolveImageSrc = useCallback(
-    (source: string) => {
-      if (source.startsWith("data:image/")) return source;
-      if (EXTERNAL_PROTOCOL.test(source)) return null;
-      return assetUrls[source] ?? null;
-    },
-    [assetUrls],
+    (source: string) => resolveMarkdownImageSrc(source, assetUrls, allowRemoteImages),
+    [allowRemoteImages, assetUrls],
   );
+
+  const handleAllowRemoteImages = useCallback(() => {
+    setAllowRemoteImages(true);
+    showNotice("已允许加载远程 HTTPS 图片");
+  }, [setAllowRemoteImages, showNotice]);
 
   const handleNavigate = useCallback(
     async (href: string) => {
@@ -5965,6 +6000,7 @@ function App() {
                     annotations={annotations}
                     fuzzyAnchoring={fuzzyAnchoring}
                     resolveImageSrc={resolveImageSrc}
+                    onAllowRemoteImages={handleAllowRemoteImages}
                     onNavigate={handleMarkdownNavigate}
                     onLinkPreview={hoverPreview.previewLink}
                     onLinkPreviewCancel={hoverPreviewCancel}
@@ -6089,6 +6125,8 @@ function App() {
                     documents={documents}
                     motionLevel={motionLevel}
                     libraryRoot={snapshot?.rootPath}
+                    allowRemoteImages={allowRemoteImages}
+                    onAllowRemoteImages={handleAllowRemoteImages}
                     scrollMemory={paneScrollMemory.current}
                     pdfPositionMemory={panePdfMemory.current}
                     onClose={() => setSplitState(null)}
