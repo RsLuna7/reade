@@ -31,9 +31,28 @@ export interface HourlyTotal {
   seconds: number;
 }
 
-export interface FormatTotal {
-  format: DocumentFormat;
+/** One sitting: glance / sit / immerse / long, by engaged seconds. */
+export const SESSION_DEPTH_ORDER = ["glance", "sit", "immerse", "long"] as const;
+export type SessionDepthId = (typeof SESSION_DEPTH_ORDER)[number];
+
+export const SESSION_DEPTH_LABELS: Record<SessionDepthId, string> = {
+  glance: "短读",
+  sit: "中读",
+  immerse: "沉浸",
+  long: "长读",
+};
+
+export const SESSION_DEPTH_RANGES: Record<SessionDepthId, string> = {
+  glance: "不足 5 分钟",
+  sit: "5–25 分钟",
+  immerse: "25–60 分钟",
+  long: "1 小时以上",
+};
+
+export interface SessionDepthTotal {
+  id: SessionDepthId;
   seconds: number;
+  count: number;
 }
 
 export interface ReadingSummary {
@@ -90,17 +109,37 @@ export interface DocumentDetail {
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
-/** Slash-normalize a library root so Windows `\\` and trailing slashes still match. */
+/**
+ * Strip the Windows extended-length / device prefix that
+ * `std::fs::canonicalize` stamps onto stored `library_root` values
+ * (`\\?\C:\foo` → `//?/C:/foo` after slash conversion). The folder picker
+ * and `snapshot.rootPath` never carry that prefix, so a naive string
+ * compare would treat every Windows session as a foreign library.
+ */
+function stripWindowsVerbatimPrefix(path: string): string {
+  const head = path.slice(0, 8).toLowerCase();
+  if (head === "//?/unc/" || head === "//./unc/") {
+    return `//${path.slice(8)}`;
+  }
+  const short = path.slice(0, 4);
+  if (short === "//?/" || short === "//./") {
+    return path.slice(4);
+  }
+  return path;
+}
+
+/** Slash-normalize a library root so Windows `\\`, trailing slashes, and the verbatim prefix still match. */
 export function normalizeLibraryRoot(root: string | undefined | null): string {
   if (!root) return "";
-  return root.replace(/\\/g, "/").replace(/\/+$/, "");
+  return stripWindowsVerbatimPrefix(root.replace(/\\/g, "/").replace(/\/+$/, ""));
 }
 
 export function sameLibraryRoot(
   a: string | undefined | null,
   b: string | undefined | null,
 ): boolean {
-  return normalizeLibraryRoot(a) === normalizeLibraryRoot(b);
+  // Windows paths are case-insensitive; canonicalize may also rewrite casing.
+  return normalizeLibraryRoot(a).toLowerCase() === normalizeLibraryRoot(b).toLowerCase();
 }
 
 /** Last path segment of a library root, used as a source-folder label. */
@@ -115,7 +154,7 @@ export function sessionDocumentKey(session: {
   libraryRoot?: string;
   relativePath: string;
 }): string {
-  return `${normalizeLibraryRoot(session.libraryRoot)}\n${session.relativePath}`;
+  return `${normalizeLibraryRoot(session.libraryRoot).toLowerCase()}\n${session.relativePath}`;
 }
 
 /**
@@ -261,14 +300,42 @@ export function aggregateByDocument(sessions: ReadingSession[]): DocumentTotal[]
     .sort((a, b) => b.seconds - a.seconds || b.lastReadAt - a.lastReadAt);
 }
 
-export function aggregateByFormat(sessions: ReadingSession[]): FormatTotal[] {
-  const byFormat = new Map<DocumentFormat, number>();
+export function sessionDepthId(activeSeconds: number): SessionDepthId {
+  if (activeSeconds < 5 * 60) return "glance";
+  if (activeSeconds < 25 * 60) return "sit";
+  if (activeSeconds < 60 * 60) return "immerse";
+  return "long";
+}
+
+/** Time and sitting counts in four depth bins, always in display order. */
+export function aggregateBySessionDepth(sessions: ReadingSession[]): SessionDepthTotal[] {
+  const buckets: Record<SessionDepthId, SessionDepthTotal> = {
+    glance: { id: "glance", seconds: 0, count: 0 },
+    sit: { id: "sit", seconds: 0, count: 0 },
+    immerse: { id: "immerse", seconds: 0, count: 0 },
+    long: { id: "long", seconds: 0, count: 0 },
+  };
   for (const session of sessions) {
-    byFormat.set(session.format, (byFormat.get(session.format) ?? 0) + session.activeSeconds);
+    if (session.activeSeconds <= 0) continue;
+    const id = sessionDepthId(session.activeSeconds);
+    buckets[id].seconds += session.activeSeconds;
+    buckets[id].count += 1;
   }
-  return [...byFormat.entries()]
-    .map(([format, seconds]) => ({ format, seconds }))
-    .sort((a, b) => b.seconds - a.seconds);
+  return SESSION_DEPTH_ORDER.map((id) => buckets[id]);
+}
+
+/** Median engaged seconds across sittings; 0 when there are none. */
+export function medianSessionSeconds(sessions: ReadingSession[]): number {
+  const values = sessions
+    .map((session) => session.activeSeconds)
+    .filter((seconds) => seconds > 0)
+    .sort((a, b) => a - b);
+  if (values.length === 0) return 0;
+  const mid = Math.floor(values.length / 2);
+  if (values.length % 2 === 0) {
+    return Math.round((values[mid - 1] + values[mid]) / 2);
+  }
+  return values[mid];
 }
 
 export function buildSummary(sessions: ReadingSession[], nowMs: number): ReadingSummary {
@@ -438,6 +505,127 @@ export function weekdayHourMatrix(sessions: ReadingSession[]): number[][] {
     });
   }
   return matrix.map((row) => row.map((seconds) => Math.round(seconds)));
+}
+
+/** One contiguous reading window on a weekday lane. Hours are local 0–24. */
+export interface HabitSpan {
+  weekday: number;
+  startHour: number;
+  endHour: number;
+  seconds: number;
+  peakSeconds: number;
+}
+
+const WEEKDAY_SPAN_NAMES = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
+
+/** Merges adjacent active hours into Gantt spans. Rows are Monday-first. */
+export function weekdayHourSpans(matrix: number[][]): HabitSpan[] {
+  const spans: HabitSpan[] = [];
+  for (let weekday = 0; weekday < 7; weekday += 1) {
+    const row = matrix[weekday] ?? [];
+    let start: number | null = null;
+    let seconds = 0;
+    let peakSeconds = 0;
+    const flush = (endHour: number) => {
+      if (start === null) return;
+      spans.push({ weekday, startHour: start, endHour, seconds, peakSeconds });
+      start = null;
+      seconds = 0;
+      peakSeconds = 0;
+    };
+    for (let hour = 0; hour < 24; hour += 1) {
+      const value = row[hour] ?? 0;
+      if (value > 0) {
+        if (start === null) start = hour;
+        seconds += value;
+        peakSeconds = Math.max(peakSeconds, value);
+        continue;
+      }
+      flush(hour);
+    }
+    flush(24);
+  }
+  return spans;
+}
+
+function formatWeekdayPhrase(days: number[]): string {
+  const unique = [...new Set(days)].sort((a, b) => a - b);
+  if (unique.length === 7) return "每天";
+  const asSet = new Set(unique);
+  if (unique.length === 5 && [0, 1, 2, 3, 4].every((day) => asSet.has(day))) return "工作日";
+  if (unique.length === 2 && asSet.has(5) && asSet.has(6)) return "周末";
+  const runs: string[] = [];
+  let runStart = unique[0];
+  let runEnd = unique[0];
+  const name = (day: number) => WEEKDAY_SPAN_NAMES[day];
+  const pushRun = () => {
+    runs.push(runStart === runEnd ? name(runStart) : `${name(runStart)}至${name(runEnd)}`);
+  };
+  for (let index = 1; index < unique.length; index += 1) {
+    const day = unique[index];
+    if (day === runEnd + 1) {
+      runEnd = day;
+      continue;
+    }
+    pushRun();
+    runStart = day;
+    runEnd = day;
+  }
+  pushRun();
+  return runs.join("、");
+}
+
+function formatHourWindow(startHour: number, endHour: number): string {
+  if (endHour - startHour <= 1) return `${startHour} 点`;
+  return `${startHour}–${endHour} 点`;
+}
+
+/**
+ * One-line reading of the weekly habit matrix: the densest hour window
+ * and the weekdays that actually show up in it.
+ */
+export function describeHabitPeak(matrix: number[][]): string | null {
+  const hourly = new Array<number>(24).fill(0);
+  for (const row of matrix) {
+    for (let hour = 0; hour < 24; hour += 1) {
+      hourly[hour] += row[hour] ?? 0;
+    }
+  }
+  const maxHourSeconds = hourly.reduce((max, seconds) => Math.max(max, seconds), 0);
+  if (maxHourSeconds <= 0) return null;
+
+  const threshold = maxHourSeconds * 0.45;
+  let bestStart = 0;
+  let bestEnd = 1;
+  let bestSum = 0;
+  let cursor = 0;
+  while (cursor < 24) {
+    if (hourly[cursor] < threshold) {
+      cursor += 1;
+      continue;
+    }
+    const start = cursor;
+    let sum = 0;
+    while (cursor < 24 && hourly[cursor] >= threshold) {
+      sum += hourly[cursor];
+      cursor += 1;
+    }
+    if (sum > bestSum) {
+      bestStart = start;
+      bestEnd = cursor;
+      bestSum = sum;
+    }
+  }
+
+  const weekdaySeconds = matrix.map((row) =>
+    (row ?? []).slice(bestStart, bestEnd).reduce((sum, seconds) => sum + seconds, 0),
+  );
+  const maxWeekdaySeconds = weekdaySeconds.reduce((max, seconds) => Math.max(max, seconds), 0);
+  const weekdays = weekdaySeconds.flatMap((seconds, weekday) =>
+    seconds > 0 && seconds >= maxWeekdaySeconds * 0.35 ? [weekday] : [],
+  );
+  if (weekdays.length === 0) return null;
+  return `高峰在${formatWeekdayPhrase(weekdays)} ${formatHourWindow(bestStart, bestEnd)}`;
 }
 
 /** Gap-filled recent series with a trailing moving average and weekend flags. */

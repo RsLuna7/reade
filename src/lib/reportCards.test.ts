@@ -42,9 +42,11 @@ function reportData(overrides: Partial<ReadingReportData> = {}): ReadingReportDa
     totalDeltaPercent: 23,
     peakSlot: { weekday: 2, hour: 21, seconds: 7200 },
     longestDay: { date: "2026-03-14", seconds: 11520 },
-    formatShares: [
-      { format: "markdown", seconds: 72000, ratio: 0.66 },
-      { format: "pdf", seconds: 36000, ratio: 0.34 },
+    depthShares: [
+      { id: "glance", seconds: 1200, ratio: 0.05 },
+      { id: "sit", seconds: 3600, ratio: 0.29 },
+      { id: "immerse", seconds: 7200, ratio: 0.66 },
+      { id: "long", seconds: 0, ratio: 0 },
     ],
     topByTime: [
       { relativePath: "a.md", title: "文档甲", seconds: 7200 },
@@ -111,20 +113,23 @@ describe("layoutReportCards", () => {
     expect(lines).toContain("上一月无记录");
   });
 
-  it("draws format share bars clamped to the content width", () => {
+  it("draws sitting-depth bars clamped to the content width", () => {
     const habit = layoutReportCards(reportData(), measure, "2026年8月13日")[1];
     expect(habit.id).toBe("habit");
     const lines = habit.layout.blocks.flatMap((block) => block.lines);
     expect(lines).toContain("周三 21:00");
+    expect(lines).toContain("阅读节奏");
+    expect(lines).toContain("沉浸");
     expect(lines).toContain("66%");
-    // 每个格式一条轨道 + 一条数值条。
-    expect(habit.layout.bars).toHaveLength(4);
+    // 四个档位各一条轨道 + 一条数值条；零占比的数值条宽度为 0。
+    expect(habit.layout.bars).toHaveLength(8);
     for (const bar of habit.layout.bars) {
       expect(bar.width).toBeLessThanOrEqual(REPORT_CARD_WIDTH - 2 * 64);
     }
-    const markdownValueBar = habit.layout.bars[1];
-    expect(markdownValueBar.color).toBe("accent");
-    expect(markdownValueBar.width).toBe(Math.round((REPORT_CARD_WIDTH - 128) * 0.66));
+    const immerseValueBar = habit.layout.bars[5];
+    expect(immerseValueBar.color).toBe("accent");
+    expect(immerseValueBar.width).toBe(Math.round((REPORT_CARD_WIDTH - 128) * 0.66));
+    expect(habit.layout.bars[7].width).toBe(0);
   });
 
   it("keeps every block inside the horizontal card bounds", () => {
