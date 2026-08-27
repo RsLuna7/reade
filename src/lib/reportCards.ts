@@ -1,4 +1,3 @@
-import type { DocumentFormat } from "./backend";
 import {
   CARD_EXPORT_SCALE,
   cardFontCss,
@@ -15,7 +14,7 @@ import {
   type CardMeasure,
   type CardTextBlock,
 } from "./quoteCardLayout";
-import { formatDuration } from "./readingStats";
+import { formatDuration, SESSION_DEPTH_LABELS } from "./readingStats";
 import type { ReadingReportData } from "./readingReport";
 
 /**
@@ -61,12 +60,6 @@ export interface ReportCardSpec {
 }
 
 const WEEKDAY_LABELS = ["周一", "周二", "周三", "周四", "周五", "周六", "周日"];
-const FORMAT_LABELS: Record<DocumentFormat, string> = {
-  markdown: "Markdown",
-  mdx: "MDX",
-  pdf: "PDF",
-  epub: "EPUB",
-};
 
 const EYEBROW_FONT: CardFont = { sizePx: 14, family: "sans" };
 const TITLE_FONT: CardFont = { sizePx: 30, family: "serif", weight: 700 };
@@ -222,12 +215,12 @@ function layoutHabitCard(
   }
 
   const sharesY = longestY + 130;
-  blocks.push(textBlock(["格式占比"], PADDING_X, sharesY, LABEL_FONT, "muted", "left", 18));
-  data.formatShares.slice(0, 4).forEach((share, index) => {
+  blocks.push(textBlock(["阅读节奏"], PADDING_X, sharesY, LABEL_FONT, "muted", "left", 18));
+  data.depthShares.forEach((share, index) => {
     const rowY = sharesY + 34 + index * 56;
     const percent = Math.round(share.ratio * 100);
     blocks.push(
-      textBlock([FORMAT_LABELS[share.format]], PADDING_X, rowY, ROW_FONT, "ink", "left", 24),
+      textBlock([SESSION_DEPTH_LABELS[share.id]], PADDING_X, rowY, ROW_FONT, "ink", "left", 24),
     );
     blocks.push(rightAlignedBlock(`${percent}%`, rowY, ROW_FONT, "inkSoft", measure, 24));
     const trackY = rowY + 30;
@@ -235,7 +228,7 @@ function layoutHabitCard(
     bars.push({
       x: PADDING_X,
       y: trackY,
-      width: Math.max(4, Math.round(CONTENT_WIDTH * share.ratio)),
+      width: share.ratio > 0 ? Math.max(4, Math.round(CONTENT_WIDTH * share.ratio)) : 0,
       height: 6,
       color: "accent",
     });

@@ -2,8 +2,8 @@ import { describe, expect, it } from "vitest";
 import type { ReadingSession } from "./backend";
 import {
   aggregateByDocument,
-  aggregateByFormat,
   aggregateByHour,
+  aggregateBySessionDepth,
   aggregateDaily,
   aggregateDayDocuments,
   buildDayTimeline,
@@ -14,12 +14,17 @@ import {
   cumulativeSeries,
   fillDailyRange,
   formatDuration,
+  isCurrentLibrarySession,
   isWeekendDay,
   libraryFolderName,
   localDayKey,
   sameLibraryRoot,
   sessionsInLibrary,
   weekdayHourMatrix,
+  weekdayHourSpans,
+  describeHabitPeak,
+  medianSessionSeconds,
+  sessionDepthId,
 } from "./readingStats";
 
 let sequence = 0;
@@ -116,16 +121,26 @@ describe("readingStats aggregation", () => {
     expect(summary.documentCount).toBe(2);
   });
 
-  it("totals formats in descending order", () => {
-    const totals = aggregateByFormat([
-      session({ format: "markdown", activeSeconds: 30 }),
-      session({ format: "pdf", activeSeconds: 100 }),
-      session({ format: "markdown", activeSeconds: 20 }),
+  it("bins sittings by engaged length and reports the median", () => {
+    const totals = aggregateBySessionDepth([
+      session({ activeSeconds: 2 * 60 }),
+      session({ activeSeconds: 10 * 60 }),
+      session({ activeSeconds: 40 * 60 }),
+      session({ activeSeconds: 90 * 60 }),
+      session({ activeSeconds: 0 }),
     ]);
-    expect(totals).toEqual([
-      { format: "pdf", seconds: 100 },
-      { format: "markdown", seconds: 50 },
-    ]);
+    expect(totals.map((entry) => entry.id)).toEqual(["glance", "sit", "immerse", "long"]);
+    expect(totals.map((entry) => entry.count)).toEqual([1, 1, 1, 1]);
+    expect(totals.map((entry) => entry.seconds)).toEqual([120, 600, 2400, 5400]);
+    expect(sessionDepthId(5 * 60)).toBe("sit");
+    expect(sessionDepthId(25 * 60)).toBe("immerse");
+    expect(sessionDepthId(60 * 60)).toBe("long");
+    expect(medianSessionSeconds([
+      session({ activeSeconds: 120 }),
+      session({ activeSeconds: 600 }),
+      session({ activeSeconds: 2400 }),
+      session({ activeSeconds: 5400 }),
+    ])).toBe(1500);
   });
 
   it("builds today, rolling-week, and streak numbers", () => {
@@ -289,6 +304,33 @@ describe("readingStats aggregation", () => {
     expect(matrix[3].every((seconds) => seconds === 0)).toBe(true);
   });
 
+  it("merges adjacent weekday hours into Gantt spans", () => {
+    const matrix = [
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 300, 300, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+      [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 240, 0, 0],
+    ];
+    expect(weekdayHourSpans(matrix)).toEqual([
+      { weekday: 0, startHour: 9, endHour: 11, seconds: 600, peakSeconds: 300 },
+      { weekday: 6, startHour: 21, endHour: 22, seconds: 240, peakSeconds: 240 },
+    ]);
+  });
+
+  it("describes the densest weekday-hour window in plain Chinese", () => {
+    const matrix = Array.from({ length: 7 }, () => new Array<number>(24).fill(0));
+    for (const day of [0, 1, 2, 3]) {
+      for (let hour = 15; hour < 21; hour += 1) matrix[day][hour] = 1_200;
+    }
+    matrix[1][12] = 200;
+    matrix[6][20] = 180;
+    expect(describeHabitPeak(matrix)).toBe("高峰在周一至周四 15–21 点");
+    expect(describeHabitPeak(Array.from({ length: 7 }, () => new Array<number>(24).fill(0)))).toBeNull();
+  });
+
   it("builds a trend series with trailing averages and weekend flags", () => {
     const day = (offset: number, seconds: number) =>
       session({
@@ -392,5 +434,39 @@ describe("readingStats aggregation", () => {
       "D:/one",
     );
     expect(scoped.map((entry) => entry.relativePath)).toEqual(["a.md", "b.md"]);
+  });
+
+  it("treats Windows canonicalize verbatim prefixes as the same library", () => {
+    expect(sameLibraryRoot("//?/D:/E-Libaray/.New", "D:\\E-Libaray\\.New")).toBe(true);
+    expect(sameLibraryRoot("\\\\?\\D:\\books", "D:/books")).toBe(true);
+    expect(sameLibraryRoot("//?/D:/books", "d:/BOOKS")).toBe(true);
+    expect(sameLibraryRoot("//?/UNC/server/share/lib", "\\\\server\\share\\lib")).toBe(true);
+    expect(sameLibraryRoot("//?/D:/books", "D:/other")).toBe(false);
+    expect(sameLibraryRoot("\\\\.\\D:\\books", "D:/books")).toBe(true);
+    expect(sameLibraryRoot("//./D:/books", "d:/BOOKS")).toBe(true);
+    expect(sameLibraryRoot("//./UNC/server/share/lib", "\\\\server\\share\\lib")).toBe(true);
+    expect(libraryFolderName("\\\\?\\D:\\books\\papers")).toBe("papers");
+    expect(isCurrentLibrarySession("//?/D:/books", "D:\\books")).toBe(true);
+    expect(isCurrentLibrarySession("\\\\.\\D:\\books", "D:/books")).toBe(true);
+    expect(isCurrentLibrarySession("D:/other", "D:/books")).toBe(false);
+    expect(isCurrentLibrarySession(undefined, "D:/books")).toBe(true);
+    const scoped = sessionsInLibrary(
+      [
+        session({ relativePath: "kept.md", libraryRoot: "//?/D:/books" }),
+        session({ relativePath: "device.md", libraryRoot: "//./D:/books" }),
+        session({ relativePath: "foreign.md", libraryRoot: "//?/D:/other" }),
+      ],
+      "D:\\books",
+    );
+    expect(scoped.map((entry) => entry.relativePath)).toEqual(["kept.md", "device.md"]);
+  });
+
+  it("merges the same document when library-root casing differs", () => {
+    const totals = aggregateByDocument([
+      session({ relativePath: "a.md", libraryRoot: "D:/Books", activeSeconds: 100 }),
+      session({ relativePath: "a.md", libraryRoot: "d:/books", activeSeconds: 50 }),
+    ]);
+    expect(totals).toHaveLength(1);
+    expect(totals[0].seconds).toBe(150);
   });
 });

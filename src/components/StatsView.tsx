@@ -54,8 +54,8 @@ import { CoverageTreemap } from "./CoverageTreemap";
 import { listLibraryReadingPositions } from "../lib/readingPositions";
 import {
   aggregateByDocument,
-  aggregateByFormat,
   aggregateByHour,
+  aggregateBySessionDepth,
   aggregateDaily,
   aggregateDayDocuments,
   buildDayTimeline,
@@ -65,16 +65,22 @@ import {
   calendarLevel,
   cumulativeSeries,
   dayKeyToDate,
+  describeHabitPeak,
   fillDailyRange,
   formatDuration,
   isCurrentLibrarySession,
   libraryFolderName,
   localDayKey,
+  medianSessionSeconds,
   sessionDocumentKey,
+  SESSION_DEPTH_LABELS,
+  SESSION_DEPTH_RANGES,
   weekdayHourMatrix,
+  weekdayHourSpans,
   type DocumentTotal,
   type HourlyTotal,
   type ReadingSummary,
+  type SessionDepthId,
 } from "../lib/readingStats";
 import { chartMotionProps, useCountUp, useEntranceFlag } from "../lib/statsMotion";
 import { runMotion, type ReaderMotionLevel } from "../lib/motion";
@@ -103,6 +109,13 @@ const FORMAT_COLORS: Record<DocumentFormat, string> = {
   mdx: "var(--accent-ink)",
   pdf: "var(--teal)",
   epub: "var(--muted)",
+};
+
+const DEPTH_COLORS: Record<SessionDepthId, string> = {
+  glance: "color-mix(in srgb, var(--accent) 28%, var(--muted))",
+  sit: "color-mix(in srgb, var(--accent) 55%, var(--paper-raised))",
+  immerse: "var(--accent)",
+  long: "var(--teal)",
 };
 
 const HEATMAP_SCALE = [
@@ -383,37 +396,78 @@ function FootprintCard({
   );
 }
 
-/* ------------------------------- Punch card ------------------------------ */
+/* ------------------------------- Habit Gantt ----------------------------- */
 
-function PunchCard({ matrix }: { matrix: number[][] }) {
-  const max = matrix.reduce(
-    (result, row) => row.reduce((inner, seconds) => Math.max(inner, seconds), result),
-    0,
-  );
+const GANTT_HOUR_TICKS = [0, 6, 12, 18, 24];
+
+function habitBarTitle(label: string, span: { startHour: number; endHour: number; seconds: number }): string {
+  const range =
+    span.endHour - span.startHour <= 1
+      ? `${span.startHour}:00–${span.startHour}:59`
+      : `${span.startHour}:00–${span.endHour}:00`;
+  return `周${label} ${range} · ${formatDuration(span.seconds)}`;
+}
+
+function HabitGantt({ matrix }: { matrix: number[][] }) {
+  const spans = useMemo(() => weekdayHourSpans(matrix), [matrix]);
+  const peak = useMemo(() => describeHabitPeak(matrix), [matrix]);
+  const maxPeak = spans.reduce((result, span) => Math.max(result, span.peakSeconds), 0);
+  const ariaLabel = peak ?? (spans.length > 0 ? "按星期排布的阅读时段" : "还没有形成固定阅读时段");
+
   return (
-    <div className="stats-punch" role="img" aria-label="按星期与小时分布的阅读习惯网格">
-      {matrix.map((row, rowIndex) => (
-        <div className="stats-punch-row stats-enter" style={staggerStyle(rowIndex)} key={PUNCH_ROW_LABELS[rowIndex]}>
-          <span className="stats-punch-label">{PUNCH_ROW_LABELS[rowIndex]}</span>
-          {row.map((seconds, hour) => (
-            <span
-              key={hour}
-              className="stats-punch-cell"
-              style={{ background: `var(--stats-scale-${calendarLevel(seconds, max)})` }}
-              title={`周${PUNCH_ROW_LABELS[rowIndex]} ${hour}:00–${hour}:59 · ${
-                seconds > 0 ? formatDuration(seconds) : "无阅读"
-              }`}
-            />
-          ))}
-        </div>
-      ))}
-      <div className="stats-punch-row stats-punch-axis" aria-hidden="true">
-        <span className="stats-punch-label" />
-        {Array.from({ length: 24 }, (_, hour) => (
-          <span key={hour} className="stats-punch-hour">
-            {hour % 6 === 0 || hour === 23 ? hour : ""}
-          </span>
+    <div className="stats-gantt">
+      {peak && <p className="stats-gantt-peak">{peak}</p>}
+      <div className="stats-gantt-chart" role="img" aria-label={ariaLabel}>
+        {PUNCH_ROW_LABELS.map((label, rowIndex) => (
+          <div
+            className="stats-gantt-row stats-enter"
+            style={staggerStyle(rowIndex)}
+            key={label}
+          >
+            <span className="stats-gantt-label">{label}</span>
+            <div className="stats-gantt-track">
+              {GANTT_HOUR_TICKS.slice(1, -1).map((hour) => (
+                <span
+                  key={hour}
+                  className="stats-gantt-gridline"
+                  style={{ left: `${(hour / 24) * 100}%` }}
+                  aria-hidden="true"
+                />
+              ))}
+              {spans
+                .filter((span) => span.weekday === rowIndex)
+                .map((span) => {
+                  const level = calendarLevel(span.peakSeconds, maxPeak);
+                  return (
+                    <span
+                      key={`${span.startHour}-${span.endHour}`}
+                      className="stats-gantt-bar"
+                      data-level={level}
+                      style={{
+                        left: `${(span.startHour / 24) * 100}%`,
+                        width: `${Math.max(1.2, ((span.endHour - span.startHour) / 24) * 100)}%`,
+                        background: `var(--stats-scale-${level})`,
+                      }}
+                      title={habitBarTitle(label, span)}
+                    />
+                  );
+                })}
+            </div>
+          </div>
         ))}
+        <div className="stats-gantt-row stats-gantt-axis" aria-hidden="true">
+          <span className="stats-gantt-label" />
+          <div className="stats-gantt-track stats-gantt-track--axis">
+            {GANTT_HOUR_TICKS.map((hour) => (
+              <span
+                key={hour}
+                className="stats-gantt-tick"
+                style={{ left: `${(hour / 24) * 100}%` }}
+                data-label={hour}
+              />
+            ))}
+          </div>
+        </div>
       </div>
     </div>
   );
@@ -862,7 +916,8 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const daily = useMemo(() => aggregateDaily(loaded), [loaded]);
   const documentTotals = useMemo(() => aggregateByDocument(loaded), [loaded]);
   const hourly = useMemo(() => aggregateByHour(loaded), [loaded]);
-  const formats = useMemo(() => aggregateByFormat(loaded), [loaded]);
+  const sessionDepth = useMemo(() => aggregateBySessionDepth(loaded), [loaded]);
+  const medianSitting = useMemo(() => medianSessionSeconds(loaded), [loaded]);
   const punchMatrix = useMemo(() => weekdayHourMatrix(loaded), [loaded]);
 
   const heatmapData = useMemo<Activity[]>(() => {
@@ -916,7 +971,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   }, [documentTotals, rankSort]);
   const ranking = rankExpanded ? rankingAll : rankingAll.slice(0, RANKING_LIMIT);
   const rankingMax = rankingAll.reduce((max, entry) => Math.max(max, entry.seconds), 0);
-  const formatTotal = formats.reduce((sum, entry) => sum + entry.seconds, 0);
+  const depthTotal = sessionDepth.reduce((sum, entry) => sum + entry.seconds, 0);
   const existingPaths = useMemo(
     () => new Set(documents.map((document) => document.relativePath)),
     [documents],
@@ -1390,9 +1445,9 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
           <section className="stats-card stats-section stats-span" aria-label="星期与时段阅读习惯">
             <div className="stats-section-head">
               <h2>阅读习惯</h2>
-              <span className="stats-section-hint">星期 × 时段</span>
+              <span className="stats-section-hint">各日阅读时段</span>
             </div>
-            <PunchCard matrix={punchMatrix} />
+            <HabitGantt matrix={punchMatrix} />
           </section>
 
           {cumulativeData.length >= 2 && (
@@ -1479,35 +1534,41 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
             )}
           </section>
 
-          <section className="stats-card stats-section" aria-label="格式占比">
+          <section className="stats-card stats-section" aria-label="阅读节奏">
             <div className="stats-section-head">
-              <h2>格式占比</h2>
+              <h2>阅读节奏</h2>
+              <span className="stats-section-hint">
+                {medianSitting > 0 ? `中位单次 ${formatDuration(medianSitting)}` : "每次打开的专注时长"}
+              </span>
             </div>
-            <div className="stats-format-bar" aria-hidden="true">
-              {formats.map((entry) => (
+            <div className="stats-share-bar" aria-hidden="true">
+              {sessionDepth.map((entry) => (
                 <span
-                  key={entry.format}
+                  key={entry.id}
                   style={{
                     width: entered
-                      ? `${formatTotal > 0 ? (entry.seconds / formatTotal) * 100 : 0}%`
+                      ? `${depthTotal > 0 ? (entry.seconds / depthTotal) * 100 : 0}%`
                       : "0%",
-                    background: FORMAT_COLORS[entry.format],
+                    background: DEPTH_COLORS[entry.id],
                   }}
                 />
               ))}
             </div>
-            <ul className="stats-format-legend">
-              {formats.map((entry) => (
-                <li key={entry.format}>
+            <ul className="stats-share-legend">
+              {sessionDepth.map((entry) => (
+                <li key={entry.id}>
                   <span
-                    className="stats-format-dot"
-                    style={{ background: FORMAT_COLORS[entry.format] }}
+                    className="stats-share-dot"
+                    style={{ background: DEPTH_COLORS[entry.id] }}
                     aria-hidden="true"
                   />
-                  {FORMAT_LABELS[entry.format]}
-                  <strong>{formatDuration(entry.seconds)}</strong>
-                  <span className="stats-format-share">
-                    {formatTotal > 0 ? Math.round((entry.seconds / formatTotal) * 100) : 0}%
+                  <span className="stats-share-name">
+                    {SESSION_DEPTH_LABELS[entry.id]}
+                    <span className="stats-share-range">{SESSION_DEPTH_RANGES[entry.id]}</span>
+                  </span>
+                  <strong>{entry.seconds > 0 ? formatDuration(entry.seconds) : "—"}</strong>
+                  <span className="stats-share-pct">
+                    {depthTotal > 0 ? Math.round((entry.seconds / depthTotal) * 100) : 0}%
                   </span>
                 </li>
               ))}

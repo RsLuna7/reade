@@ -213,4 +213,64 @@ describe("StatsView footprint card", () => {
     expect(within(ranking).getByText("（papers）")).toBeInTheDocument();
     expect(screen.getByText(/个人累计，跨文档库/)).toBeInTheDocument();
   });
+
+  it("treats Windows canonicalize-prefixed sessions as openable in the current library", async () => {
+    setStatsState([doc("a.md", { title: "当前库" })]);
+    const now = Date.now();
+    const loadSessions = vi.fn(async () => [
+      session("a.md", now - HOUR_MS, {
+        libraryRoot: "//?/D:/books",
+        title: "当前库",
+        id: "verbatim",
+      }),
+    ]);
+
+    render(<StatsView loadSessions={loadSessions} />);
+
+    const ranking = await screen.findByRole("region", { name: "文档时长排行" });
+    expect(within(ranking).getByTitle("打开 a.md")).toBeEnabled();
+    expect(within(ranking).queryByText("（books）")).not.toBeInTheDocument();
+    expect(
+      screen.queryByTitle("来自文档库「books」· 打开该库后可跳转"),
+    ).not.toBeInTheDocument();
+  });
+
+  it("renders weekly reading windows as a Gantt instead of a punch grid", async () => {
+    setStatsState([doc("a.md")]);
+    const monday = new Date(2026, 7, 10, 19, 0, 0, 0).getTime();
+    const loadSessions = vi.fn(async () => [
+      session("a.md", monday, {
+        startedAt: monday - 2 * HOUR_MS,
+        activeSeconds: 4_800,
+      }),
+    ]);
+
+    render(<StatsView loadSessions={loadSessions} />);
+
+    const section = await screen.findByRole("region", { name: "星期与时段阅读习惯" });
+    expect(within(section).getByText("各日阅读时段")).toBeInTheDocument();
+    expect(within(section).getByText(/高峰在/)).toBeInTheDocument();
+    expect(within(section).getByTitle(/周一 .* · /)).toBeInTheDocument();
+    expect(within(section).queryByLabelText("按星期与小时分布的阅读习惯网格")).not.toBeInTheDocument();
+  });
+
+  it("replaces format share with sitting-depth bands", async () => {
+    setStatsState([doc("a.md")]);
+    const now = Date.now();
+    const loadSessions = vi.fn(async () => [
+      session("a.md", now - HOUR_MS, { id: "short", activeSeconds: 120 }),
+      session("a.md", now - 2 * HOUR_MS, { id: "mid", activeSeconds: 12 * 60 }),
+      session("a.md", now - 3 * HOUR_MS, { id: "deep", activeSeconds: 40 * 60 }),
+    ]);
+
+    render(<StatsView loadSessions={loadSessions} />);
+
+    const card = await screen.findByRole("region", { name: "阅读节奏" });
+    expect(within(card).getByText("短读")).toBeInTheDocument();
+    expect(within(card).getByText("中读")).toBeInTheDocument();
+    expect(within(card).getByText("沉浸")).toBeInTheDocument();
+    expect(within(card).getByText("长读")).toBeInTheDocument();
+    expect(within(card).getByText(/中位单次/)).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "格式占比" })).not.toBeInTheDocument();
+  });
 });

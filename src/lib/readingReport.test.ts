@@ -182,8 +182,14 @@ describe("buildReadingReport metrics", () => {
     expect(report?.longestDay).toEqual({ date: "2026-08-09", seconds: 3600 });
     // 峰值时段:21 点档累计 8 段 × 30 分钟,周几取其众数所在行。
     expect(report?.peakSlot?.hour).toBe(21);
-    expect(report?.formatShares.map((share) => share.format)).toEqual(["markdown", "pdf"]);
-    expect(report?.formatShares[0].ratio).toBeCloseTo(8 / 9, 5);
+    expect(report?.depthShares.map((share) => share.id)).toEqual([
+      "glance",
+      "sit",
+      "immerse",
+      "long",
+    ]);
+    expect(report?.depthShares.find((share) => share.id === "immerse")?.ratio).toBe(1);
+    expect(report?.depthShares.find((share) => share.id === "immerse")?.seconds).toBe(9 * 30 * 60);
     expect(report?.topByTime[0]).toMatchObject({ relativePath: "docs/a.md", seconds: 8 * 1800 });
     expect(report?.topByTime[1]).toMatchObject({ title: "书 B" });
   });

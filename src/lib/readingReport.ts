@@ -1,5 +1,12 @@
-import type { Annotation, DocumentFormat, DocumentInfo, ReadingSession } from "./backend";
-import { aggregateByDocument, aggregateByFormat, aggregateDaily, sessionDocumentKey, weekdayHourMatrix } from "./readingStats";
+import type { Annotation, DocumentInfo, ReadingSession } from "./backend";
+import {
+  aggregateByDocument,
+  aggregateBySessionDepth,
+  aggregateDaily,
+  sessionDocumentKey,
+  weekdayHourMatrix,
+  type SessionDepthId,
+} from "./readingStats";
 
 /**
  * 阅读报告数据聚合（docs/plan-reading-report-cards.md §3.1）——纯函数，
@@ -124,8 +131,8 @@ export interface ReportDocumentMarks {
   count: number;
 }
 
-export interface ReportFormatShare {
-  format: DocumentFormat;
+export interface ReportDepthShare {
+  id: SessionDepthId;
   seconds: number;
   /** 0..1，占期内总时长比例。 */
   ratio: number;
@@ -145,7 +152,7 @@ export interface ReadingReportData {
   peakSlot: { weekday: number; hour: number; seconds: number } | null;
   /** 期内读得最多的一天。 */
   longestDay: { date: string; seconds: number } | null;
-  formatShares: ReportFormatShare[];
+  depthShares: ReportDepthShare[];
   /** 读得最久 Top3。 */
   topByTime: ReportDocumentTime[];
   /** 划线最多 Top3。 */
@@ -228,12 +235,12 @@ export function buildReadingReport(input: BuildReadingReportInput): ReadingRepor
     });
   });
 
-  const formatTotals = aggregateByFormat(clipped);
-  const formatTotalSeconds = formatTotals.reduce((sum, entry) => sum + entry.seconds, 0);
-  const formatShares = formatTotals.map((entry) => ({
-    format: entry.format,
+  const depthTotals = aggregateBySessionDepth(clipped);
+  const depthTotalSeconds = depthTotals.reduce((sum, entry) => sum + entry.seconds, 0);
+  const depthShares = depthTotals.map((entry) => ({
+    id: entry.id,
     seconds: Math.round(entry.seconds),
-    ratio: formatTotalSeconds > 0 ? entry.seconds / formatTotalSeconds : 0,
+    ratio: depthTotalSeconds > 0 ? entry.seconds / depthTotalSeconds : 0,
   }));
 
   const documentTotals = aggregateByDocument(clipped);
@@ -304,7 +311,7 @@ export function buildReadingReport(input: BuildReadingReportInput): ReadingRepor
     totalDeltaPercent,
     peakSlot,
     longestDay,
-    formatShares,
+    depthShares,
     topByTime,
     topByMarks,
     quote,

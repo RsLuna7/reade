@@ -6567,7 +6567,7 @@ button.stats-fact:disabled {
   letter-spacing: 0.04em;
 }
 
-.stats-format-bar {
+.stats-share-bar {
   display: flex;
   height: 10px;
   margin-bottom: 12px;
@@ -6576,12 +6576,12 @@ button.stats-fact:disabled {
   overflow: hidden;
 }
 
-.stats-format-bar span {
+.stats-share-bar span {
   display: block;
   height: 100%;
 }
 
-.stats-format-legend {
+.stats-share-legend {
   display: flex;
   margin: 0;
   padding: 0;
@@ -6590,7 +6590,7 @@ button.stats-fact:disabled {
   list-style: none;
 }
 
-.stats-format-legend li {
+.stats-share-legend li {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -6598,14 +6598,30 @@ button.stats-fact:disabled {
   font-size: 12px;
 }
 
-.stats-format-legend strong {
-  margin-left: auto;
-  color: var(--ink);
-  font-weight: 600;
+.stats-share-name {
+  display: flex;
+  min-width: 0;
+  align-items: baseline;
+  gap: 8px;
 }
 
-.stats-format-share {
+.stats-share-range {
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.stats-share-legend strong {
+  margin-left: auto;
+  flex: 0 0 auto;
+  color: var(--ink);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.stats-share-pct {
   min-width: 34px;
+  flex: 0 0 auto;
   color: var(--muted);
   font-variant-numeric: tabular-nums;
   text-align: right;
@@ -6732,7 +6748,7 @@ button.stats-fact:disabled {
   font-size: 13px;
 }
 
-.stats-format-dot {
+.stats-share-dot {
   width: 9px;
   height: 9px;
   flex: 0 0 auto;
@@ -6796,12 +6812,12 @@ button.stats-fact:disabled {
 }
 
 .stats-ranking-bar,
-.stats-format-bar span {
+.stats-share-bar span {
   transition: width 620ms cubic-bezier(0.22, 0.8, 0.36, 1);
 }
 
 [data-motion="off"] .stats-ranking-bar,
-[data-motion="off"] .stats-format-bar span {
+[data-motion="off"] .stats-share-bar span {
   transition: none;
 }
 
@@ -6944,42 +6960,104 @@ button.stats-fact:disabled {
   flex: 0 0 auto;
 }
 
-/* --- Punch card (weekday x hour) ------------------------------------------ */
+/* --- Habit Gantt (weekday reading windows) -------------------------------- */
 
-.stats-punch {
+.stats-gantt {
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  overflow-x: auto;
-  padding-bottom: 4px;
+  gap: 10px;
 }
 
-.stats-punch-row {
+.stats-gantt-peak {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.stats-gantt-chart {
   display: flex;
-  align-items: center;
-  gap: 3px;
+  flex-direction: column;
+  gap: 6px;
+  padding-bottom: 14px;
 }
 
-.stats-punch-label {
-  width: 18px;
-  flex: 0 0 auto;
+.stats-gantt-row {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  gap: 8px;
+  align-items: center;
+}
+
+.stats-gantt-label {
   color: var(--muted);
   font-size: 11px;
   text-align: center;
+  font-variant-numeric: tabular-nums;
 }
 
-.stats-punch-cell {
-  flex: 1 0 14px;
+.stats-gantt-track {
+  position: relative;
+  height: 22px;
+  border-radius: 8px;
+  background: var(--chrome);
+}
+
+.stats-gantt-track--axis {
   height: 14px;
-  min-width: 10px;
-  border-radius: 3px;
+  background: transparent;
 }
 
-.stats-punch-axis .stats-punch-hour {
-  flex: 1 0 14px;
-  min-width: 10px;
+.stats-gantt-gridline {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  width: 1px;
+  background: var(--line);
+  pointer-events: none;
+}
+
+.stats-gantt-bar {
+  position: absolute;
+  top: 4px;
+  bottom: 4px;
+  min-width: 4px;
+  border-radius: 5px;
+}
+
+.stats-gantt-tick {
+  position: absolute;
+  top: 0;
+  width: 1px;
+  height: 4px;
+  background: var(--line-strong);
+}
+
+.stats-gantt-tick::after {
+  content: attr(data-label);
+  position: absolute;
+  top: 6px;
+  left: 0;
   color: var(--muted);
   font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  transform: translateX(-50%);
+}
+
+.stats-gantt-tick[data-label="0"]::after {
+  transform: none;
+}
+
+.stats-gantt-tick[data-label="24"]::after {
+  transform: translateX(-100%);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .stats-gantt-bar:hover {
+    outline: 1px solid var(--line-strong);
+    outline-offset: 1px;
+    z-index: 1;
+  }
 }
 
 /* --- Clock-face hour distribution ----------------------------------------- */
