@@ -1,9 +1,9 @@
 # 实施方案:批注间隔重复回顾
 
-> **已被取代**：产品与实现规格以 [`plan-annotation-system-redesign.md`](./plan-annotation-system-redesign.md) 为准。本文保留为历史设计记录，其中「自动入池 / 主页今日回顾卡」不再成立。
+> **已被代码取代 / 勿按本文施工。** 产品与实现规格以 [`plan-annotation-system-redesign.md`](./plan-annotation-system-redesign.md) 为准。本文保留为历史设计记录，其中「自动入池 / 主页今日回顾卡」不再成立。
 
 - 日期:2026-08-12
-- 状态:**方案定稿,未实施**
+- 状态:**已实施后被 v6 收口**（档案；勿按本文的自动入池方案施工）
 - 定位:Readwise Daily Review 的本地版——每天把一小批旧高亮/笔记重新递到眼前,"记住了"渐行渐远,"再看一次"明天再来。**不是 Anki**:无牌组、无逾期惩罚、无参数调优,回味优先于记忆考核。
 - 关联:入口卡片挂在「今日视图」(`docs/plan-home-view.md` ④卡);存储沿用批注 v2 的用户库迁移链与双端同构约定(`docs/research-annotation-data-models.md` §5.1/§5.2)。
 

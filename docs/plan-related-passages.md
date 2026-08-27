@@ -1,7 +1,7 @@
 # 实施方案:相关段落发现
 
 - 日期:2026-08-13
-- 状态:**方案定稿,未实施**
+- 状态:**已实施**
 - 定位:选中一段文字 → 在全库找出讲同一件事的其他段落。零模型、零网络:完全建立在缓存 sqlite 里已有的 FTS5 trigram 文档索引之上,是"库搜索"的选区驱动形态。
 - 关联:复用 `search_documents` 的索引、返回形状(`SearchResult`/`SearchLocator`)与跳转链;查询预算沿用「全库批注中枢」的 FTS/LIKE 双路径与转义纪律(`docs/plan-annotation-hub.md` §3.1);若「只读双链」(`docs/plan-backlinks.md`)落地,本方案的结果浮层远期可并入其「链接」tab 作"相关"区。
 - 契约红线:FTS MATCH 字符串全部由后端从选区文本构造,用户文本永远包在双写转义的短语引号内,FTS 语法不可注入;不改动 `search_fts` schema 与索引管线。

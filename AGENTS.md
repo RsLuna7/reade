@@ -41,7 +41,7 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 │   ├── App.css                    # 三栏布局、主题和 Markdown 排版
 │   ├── theme-boot.ts              # 首屏前写入 data-theme，避免暗色闪白
 │   ├── components/                # Markdown/PDF/EPUB 渲染、文档树、标注 UI、统计与回顾视图
-│   ├── lib/                       # 后端 facade、安全策略与纯函数（阅读/标注/统计/TTS/Web 运行时）
+│   ├── lib/                       # 后端 facade、安全策略与纯函数（阅读/标注/统计/Web 运行时）
 │   ├── store/                     # Zustand 阅读器状态与持久化偏好
 │   ├── styles/theme-tokens.css    # 各主题系列色板
 │   └── test/setup.ts              # 可选测试补丁，由需要的测试自行 import（无全局 setupFiles）
@@ -59,7 +59,7 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 ├── examples/demo-library/         # 手工验收用文档库
 ├── scripts/                       # Web 静态文档库生成器及测试
 ├── docs/                          # WEB_DEPLOY.md、USER_GUIDE.md、roadmap-innovations.md、plan-*.md
-├── .github/workflows/             # 仅有 Pages 构建部署，不跑测试与 Rust 检查
+├── .github/workflows/             # Pages 构建部署；同一 workflow 在 build 前跑 pnpm test
 ├── output/playwright/             # 已有视觉基线截图
 ├── package.json
 └── README.md                      # 产品能力、环境要求与当前限制
@@ -129,7 +129,7 @@ pnpm tauri build
 
 性能预算以合成用例形式跑在默认 `cargo test` 里（`scan_is_fast_metadata_first_and_cached_search_keeps_locators`、`list_document_links_stays_fast_on_a_synthetic_link_graph`、`related_passages_meet_the_synthetic_performance_budget`）。当前没有 `--ignored` 的大库压测，不要照搬不存在的命令。
 
-CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发布 Web 站点，不跑 `pnpm test`、`cargo test`、`clippy` 或 `fmt`。上面这些验证只能在本地跑，不要指望 CI 兜底。
+CI（`.github/workflows/deploy-pages.yml`）在 push 到 main 时先跑 `pnpm test`，通过后再 `pnpm build:web` 并发布 Pages。Rust 的 `cargo test` / `clippy` / `fmt` 仍只在本地跑，不要指望 CI 兜底。
 
 命令若因环境失败，先诊断 Node.js、pnpm、Rust、WebView2 和 Windows C++ build tools，不要修改产品代码来掩盖环境问题。
 
@@ -197,5 +197,5 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 - 前端 localStorage 只存偏好与轻量位置：`reade-reader-preferences`、`reade-library-mru`、`reade-reading-positions`、`reade-vertical-writing`、`reade-home-baseline`、`reade-device-id`；文档正文和索引不进前端存储。Web 版的标注与合集存 IndexedDB。
 - 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
 - `examples/demo-library/` 用于功能联调，`output/playwright/` 只作为视觉参考，不是源码或自动化测试结果的替代品。
-- `docs/roadmap-innovations.md` 末尾有一份尚未完成的人工验收清单（桌面真机 9 项、Web 真实部署 4 项）。碰到清单里的功能时，别把"测试通过"当成已验收。
+- 功能清单与方案状态以代码和 `git log` 为准；已落地或已下架的 `docs/plan-*.md` / handoff 不得再当施工单。`docs/roadmap-innovations.md` 的「23 项之后」记录后续已落地能力。文末人工验收清单（桌面真机 9 项、Web 真实部署 4 项）仍未完成——碰到清单里的功能时，别把“测试通过”当成已验收。
 - `APP_RUNTIME` 由 Vite mode 决定：默认/production 是 desktop，`--mode web` 是 Web；不得用浏览器特征猜运行时。
