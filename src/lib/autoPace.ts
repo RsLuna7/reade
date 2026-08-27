@@ -10,7 +10,7 @@ export const SESSION_FACTOR_MIN = 0.5;
 export const SESSION_FACTOR_MAX = 1.8;
 export const SESSION_FACTOR_DEFAULT = 1;
 
-/** 持久偏好倍率（整体偏快/偏慢），类似 ttsRate。 */
+/** 持久偏好倍率（整体偏快/偏慢）。 */
 export const AUTO_PACE_BIAS_MIN = 0.5;
 export const AUTO_PACE_BIAS_MAX = 2;
 export const AUTO_PACE_BIAS_DEFAULT = 1;

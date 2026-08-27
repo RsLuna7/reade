@@ -24,6 +24,7 @@ import {
   normalizeReadingSettings,
   useReaderStore,
 } from "./useReaderStore";
+import { createDefaultReaderPreferences } from "../lib/readerPreferences";
 import {
   TREE_LAYOUT_ROOT,
   TREE_LAYOUT_STORAGE_KEY,
@@ -213,6 +214,11 @@ describe("reading settings", () => {
 
     mockReducedMotion(false);
     expect(getSystemMotionLevel()).toBe("subtle");
+  });
+
+  it("defaults first-run preferences to off when the system asks to reduce motion", () => {
+    mockReducedMotion(true);
+    expect(createDefaultReaderPreferences().motionLevel).toBe("off");
   });
 
   it("normalizes corrupt motion values without overriding a valid fallback", () => {
@@ -810,28 +816,6 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().dailyGoalMinutes).toBe(1_440);
     useReaderStore.getState().setDailyGoalMinutes(0);
     expect(useReaderStore.getState().dailyGoalMinutes).toBe(0);
-  });
-
-  it("persists and clamps the read-aloud rate and voice preferences", () => {
-    useReaderStore.getState().setTtsRate(1.4);
-    useReaderStore.getState().setTtsVoiceName("Microsoft Huihui");
-    const stored = JSON.parse(
-      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
-    ) as { state: Record<string, unknown> };
-    expect(stored.state).toMatchObject({
-      ttsRate: 1.4,
-      ttsVoiceName: "Microsoft Huihui",
-    });
-
-    useReaderStore.getState().setTtsRate(9);
-    expect(useReaderStore.getState().ttsRate).toBe(2);
-    useReaderStore.getState().setTtsRate(0.1);
-    expect(useReaderStore.getState().ttsRate).toBe(0.5);
-    useReaderStore.getState().setTtsRate(Number.NaN);
-    expect(useReaderStore.getState().ttsRate).toBe(1);
-    // 空字符串回落为"自动挑选"。
-    useReaderStore.getState().setTtsVoiceName("");
-    expect(useReaderStore.getState().ttsVoiceName).toBeNull();
   });
 
   it("persists the review card mode and defaults it to excerpt (plan-cloze-review CZ-D9)", async () => {

@@ -144,7 +144,7 @@ describe("useFocusMode typewriter (plan-focus-mode §3.2)", () => {
     await waitFor(() => expect(reader.scrollTop).toBe(10), { timeout: 1500 });
   });
 
-  it("does not snap while suspended (TTS 播放让位, §3.4)", async () => {
+  it("does not snap while suspended (自动推进让位)", async () => {
     const view = render(
       <Harness spotlight={false} typewriter suspended kind="markdown" motionLevel="off" />,
     );

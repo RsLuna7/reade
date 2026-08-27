@@ -35,7 +35,6 @@ import {
   type NavHistory,
   type NavLocation,
 } from "../lib/navHistory";
-import { clampTtsRate } from "../lib/ttsPlayer";
 import { clampAutoPaceBias } from "../lib/autoPace";
 import {
   SERIES_FONT_PRESET,
@@ -228,10 +227,6 @@ interface ReaderState {
   activeView: ReaderView;
   /** Daily reading goal in minutes; 0 disables the goal. Persisted. */
   dailyGoalMinutes: number;
-  /** Read-aloud playback rate (0.5–2.0). Persisted. */
-  ttsRate: number;
-  /** Preferred read-aloud voice by name; null = auto pick. Persisted. */
-  ttsVoiceName: string | null;
   /**
    * 每日回顾卡片渲染档(plan-cloze-review §3.2):摘录/挖空/混合。
    * 默认摘录保持现状零惊扰(CZ-D3);持久化、双端同构。
@@ -285,8 +280,6 @@ interface ReaderState {
   setLibraryViewMode: (mode: LibraryViewMode) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
-  setTtsRate: (rate: number) => void;
-  setTtsVoiceName: (name: string | null) => void;
   setReviewCardMode: (mode: ReviewCardMode) => void;
   /** 更新当前文档的竖排开关并写入每文档记忆；无当前文档时忽略。 */
   setVerticalWriting: (enabled: boolean) => void;
@@ -668,14 +661,6 @@ export const useReaderStore = create<ReaderState>()(
           set((state) => ({
             dailyGoalMinutes: normalizeDailyGoalMinutes(minutes, state.dailyGoalMinutes),
           }));
-        },
-
-        setTtsRate: (rate) => {
-          set({ ttsRate: clampTtsRate(rate) });
-        },
-
-        setTtsVoiceName: (name) => {
-          set({ ttsVoiceName: typeof name === "string" && name ? name : null });
         },
 
         setReviewCardMode: (mode) => {

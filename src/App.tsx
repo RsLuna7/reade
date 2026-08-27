@@ -288,7 +288,7 @@ import {
 } from "./lib/tocCoverage";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 // Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
-// 高亮复用朗读同款 CSS Custom Highlight(第二注册名,零 DOM 侵入)。
+// 高亮复用 CSS Custom Highlight(零 DOM 侵入,与标注 mark 分开)。
 import { locateNormalizedText, normalizeShareText } from "./lib/textLocate";
 // Web 移动端阅读手势(plan-web-mobile-gestures):判定纯函数在 lib,
 // App 只在 web + 窄屏粗指针语境挂监听,桌面零回归。
@@ -322,7 +322,7 @@ type AppPaletteEntry = PaletteEntry & { run: () => void };
 /** data-annotation-id of the temporary relocate preview mark (§5.6 B). */
 const RELOCATE_PREVIEW_ID = "reade-relocate-preview";
 const EXTERNAL_PROTOCOL = /^(?:https?:|mailto:)/i;
-/** 深链高亮的 CSS Custom Highlight 注册名(与 TTS 同 API 不同名,DL-D3)。 */
+/** 深链高亮的 CSS Custom Highlight 注册名(DL-D3)。 */
 const DEEPLINK_HIGHLIGHT_NAME = "reade-deeplink";
 /** 深链高亮驻留时长;到时移除注册即消失(一次性强调,不持久化)。 */
 const DEEPLINK_HIGHLIGHT_MS = 2400;
@@ -1030,29 +1030,6 @@ export function ReadingSettingsPanel({
       </fieldset>
 
       <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">文档地图</legend>
-        <div className="motion-level-control" role="group" aria-label="文档地图开关">
-          {([
-            [false, "关闭"],
-            [true, "开启"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={showScrollMap === enabled}
-              className={showScrollMap === enabled ? "active" : undefined}
-              onClick={() => setShowScrollMap(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          正文右缘的刻度层：标出标注三色、书签与搜索命中，点击可跳转。
-        </p>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting">
         <legend className="setting-label">读完接着读</legend>
         <div className="motion-level-control" role="group" aria-label="读完接着读开关">
           {([
@@ -1081,7 +1058,6 @@ export function ReadingSettingsPanel({
           ["段落聚焦", focusSpotlight, setFocusSpotlight, "focus-spotlight"],
           ["打字机滚动", typewriterScroll, setTypewriterScroll, "typewriter-scroll"],
           ["阅读标尺", readingRuler, setReadingRuler, "reading-ruler"],
-          ["自动推进", autoPaceEnabled, setAutoPaceEnabled, "auto-pace"],
         ] as const).map(([label, value, setValue, key]) => (
           <div className="focus-mode-row" key={key}>
             <span className="focus-mode-row-label">{label}</span>
@@ -1110,37 +1086,89 @@ export function ReadingSettingsPanel({
         ))}
         <p className="setting-hint">
           {focusUnavailableReason ??
-            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带；自动推进按段停留后跳到下一段，并根据你的抢滚/回退自感应调速。"}
+            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带。"}
         </p>
       </fieldset>
 
-      {/* 竖排模式(plan-vertical-writing VW-D1):每文档开关,实验档。 */}
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">
-          竖排模式<span className="setting-badge">实验</span>
-        </legend>
-        <div className="motion-level-control" role="group" aria-label="竖排模式开关">
-          {([
-            [false, "关闭"],
-            [true, "开启"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={verticalWriting === enabled}
-              className={verticalWriting === enabled ? "active" : undefined}
-              disabled={verticalUnavailableReason !== null}
-              onClick={() => setVerticalWriting(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          {verticalUnavailableReason ??
-            `当前文档改为竖排（从右往左）阅读，逐文档记忆。竖排下暂停：${VERTICAL_DISABLED_FEATURES}；关闭后完全恢复。`}
-        </p>
-      </fieldset>
+      <details className="settings-advanced">
+        <summary className="settings-advanced-summary">实验 / 进阶</summary>
+
+        <fieldset className="setting-row motion-setting">
+          <legend className="setting-label">文档地图</legend>
+          <div className="motion-level-control" role="group" aria-label="文档地图开关">
+            {([
+              [false, "关闭"],
+              [true, "开启"],
+            ] as const).map(([enabled, label]) => (
+              <button
+                type="button"
+                key={label}
+                aria-pressed={showScrollMap === enabled}
+                className={showScrollMap === enabled ? "active" : undefined}
+                onClick={() => setShowScrollMap(enabled)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="setting-hint">
+            正文右缘的刻度层：标出标注三色、书签与搜索命中，点击可跳转。
+          </p>
+        </fieldset>
+
+        <fieldset className="setting-row motion-setting">
+          <legend className="setting-label">自动推进</legend>
+          <div className="motion-level-control" role="group" aria-label="自动推进开关">
+            {([
+              [false, "关闭"],
+              [true, "开启"],
+            ] as const).map(([enabled, label]) => (
+              <button
+                type="button"
+                key={label}
+                aria-pressed={autoPaceEnabled === enabled}
+                className={autoPaceEnabled === enabled ? "active" : undefined}
+                disabled={focusUnavailableReason !== null}
+                onClick={() => setAutoPaceEnabled(enabled)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="setting-hint">
+            {focusUnavailableReason ??
+              "按段停留后跳到下一段，并根据你的抢滚/回退自感应调速。"}
+          </p>
+        </fieldset>
+
+        {/* 竖排模式(plan-vertical-writing VW-D1):每文档开关,实验档。 */}
+        <fieldset className="setting-row motion-setting">
+          <legend className="setting-label">
+            竖排模式<span className="setting-badge">实验</span>
+          </legend>
+          <div className="motion-level-control" role="group" aria-label="竖排模式开关">
+            {([
+              [false, "关闭"],
+              [true, "开启"],
+            ] as const).map(([enabled, label]) => (
+              <button
+                type="button"
+                key={label}
+                aria-pressed={verticalWriting === enabled}
+                className={verticalWriting === enabled ? "active" : undefined}
+                disabled={verticalUnavailableReason !== null}
+                onClick={() => setVerticalWriting(enabled)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <p className="setting-hint">
+            {verticalUnavailableReason ??
+              `当前文档改为竖排（从右往左）阅读，逐文档记忆。竖排下暂停：${VERTICAL_DISABLED_FEATURES}；关闭后完全恢复。`}
+          </p>
+        </fieldset>
+      </details>
 
       <fieldset className="setting-row color-names-setting">
         <legend className="setting-label">颜色外观名</legend>
@@ -5534,6 +5562,18 @@ function App() {
 
   return (
     <div className="reader-shell" data-motion={motionLevel} style={readerStyle}>
+      <a
+        className="skip-link"
+        href="#article-main"
+        onClick={(event) => {
+          const main = document.getElementById("article-main");
+          if (!main) return;
+          event.preventDefault();
+          main.focus();
+        }}
+      >
+        跳到正文
+      </a>
       <aside
         className="library-sidebar"
         aria-label="文档库"
@@ -5967,7 +6007,13 @@ function App() {
               data-writing={verticalActive ? "vertical" : undefined}
               data-highlight-carets={showHighlightCaret ? "on" : undefined}
             >
-              <div className={`article-shell article-shell--${currentContent.kind}`} ref={articleRef}>
+              <div
+                className={`article-shell article-shell--${currentContent.kind}`}
+                id="article-main"
+                ref={articleRef}
+                role="main"
+                tabIndex={-1}
+              >
                 {/* 文章级 error boundary:单篇渲染错误显示可恢复错误卡,
                     不再把整个应用打成白屏(chrome、面板、侧栏都在边界外)。 */}
                 <ArticleErrorBoundary resetKey={currentPath} onRetry={handleArticleRetry}>
@@ -6076,7 +6122,6 @@ function App() {
             {showScrollMap && !verticalActive && (
               <ScrollMap
                 marks={scrollMapMarks}
-                ttsRatio={null}
                 onSelect={handleScrollMapSelect}
               />
             )}

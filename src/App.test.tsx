@@ -2000,6 +2000,62 @@ describe("split view (SP)", () => {
   });
 });
 
+describe("reading settings information architecture", () => {
+  it("keeps experimental controls in a collapsed advanced group", () => {
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+
+    expect(screen.getByText("正文字号")).toBeInTheDocument();
+    expect(screen.getByText("最大正文宽度")).toBeInTheDocument();
+    expect(screen.queryByRole("group", { name: "自动推进开关" })).not.toBeNull();
+
+    const advanced = screen.getByText("实验 / 进阶").closest("details");
+    expect(advanced).not.toBeNull();
+    expect(advanced).not.toHaveAttribute("open");
+    expect(within(advanced as HTMLElement).getByRole("group", { name: "文档地图开关" })).toBeInTheDocument();
+    expect(within(advanced as HTMLElement).getByRole("group", { name: "自动推进开关" })).toBeInTheDocument();
+    expect(within(advanced as HTMLElement).getByRole("group", { name: "竖排模式开关" })).toBeInTheDocument();
+    expect(screen.getByRole("group", { name: "段落聚焦开关" })).toBeInTheDocument();
+  });
+
+  it("still toggles advanced switches after opening the group", () => {
+    useReaderStore.setState({ showScrollMap: true, autoPaceEnabled: false });
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+    fireEvent.click(screen.getByText("实验 / 进阶"));
+    expect(screen.getByText("实验 / 进阶").closest("details")).toHaveAttribute("open");
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "文档地图开关" })).getByRole("button", {
+        name: "关闭",
+      }),
+    );
+    expect(useReaderStore.getState().showScrollMap).toBe(false);
+
+    fireEvent.click(
+      within(screen.getByRole("group", { name: "自动推进开关" })).getByRole("button", {
+        name: "开启",
+      }),
+    );
+    expect(useReaderStore.getState().autoPaceEnabled).toBe(true);
+  });
+});
+
+describe("reading pane skip link", () => {
+  it("exposes a skip link that focuses the main article shell", async () => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const skip = screen.getByRole("link", { name: "跳到正文" });
+    const main = view.container.querySelector('[role="main"]');
+    expect(main).toHaveClass("article-shell");
+    expect(main).toHaveAttribute("id", "article-main");
+    fireEvent.click(skip);
+    expect(main).toHaveFocus();
+  });
+});
+
 describe("vertical writing mode (plan-vertical-writing)", () => {
   it("toggles per-document vertical writing from the settings panel and persists it", () => {
     setLibraryReadingState();
@@ -2052,8 +2108,8 @@ describe("vertical writing mode (plan-vertical-writing)", () => {
     // 文档地图刻度层在竖排下不渲染(定稿矩阵 ⛔;jsdom 零几何下横排
     // 基线本就无刻度,恢复断言以聚焦提示与轴属性为准)。
     expect(view.container.querySelector(".scroll-map")).toBeNull();
-    // 聚焦模式置灰并提示原因。
-    expect(screen.getByText(/竖排模式下聚焦功能暂停/)).toBeInTheDocument();
+    // 聚焦模式与进阶里的自动推进共用竖排不可用原因。
+    expect(screen.getAllByText(/竖排模式下聚焦功能暂停/).length).toBe(2);
 
     // 退出竖排:轴属性移除、聚焦提示回默认文案。
     useReaderStore.getState().setVerticalWriting(false);

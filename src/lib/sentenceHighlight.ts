@@ -1,25 +1,13 @@
 /**
- * Transient sentence highlight for read-aloud follow, built on the CSS
- * Custom Highlight API (docs/plan-read-aloud.md RA-D3, revised).
+ * Transient range highlight for Web paragraph deeplinks, built on the CSS
+ * Custom Highlight API (zero DOM wrapping).
  *
- * The original mechanism (`wrapRangeWithMark` + `clearAnnotationMarks`)
- * mutated the React-owned reading DOM: fully covered text nodes were moved
- * inside `<mark>` elements and `Node.normalize()` merged React-held text
- * nodes away. The sentence-progress state update that follows every
- * sentence re-renders the app, and `MarkdownRenderer` rebuilds its
- * `components` map per render, so React remounts customized elements
- * (`<a>`, `<code>`, …) via `removeChild` + `insertBefore`. When the
- * insertion reference was one of the text nodes the mark had displaced,
- * `insertBefore` threw `NotFoundError` and React unmounted the whole tree
- * (P1 white-screen crash). Registering a `Highlight` paints the sentence
- * without touching a single DOM node, so React reconciliation cannot
- * conflict with the follow highlight by construction.
- *
- * Feature detection: Chromium/WebView2 ≥ 105 ship the API, covering both
- * Reade runtimes. Where it is missing (older Firefox, jsdom) the caller
- * degrades to scroll-follow without visual highlight — never back to DOM
- * wrapping. Styling lives in `::highlight(reade-tts-active)` (App.css);
- * only text-level properties (background/text color etc.) apply there.
+ * The original TTS follow used `wrapRangeWithMark` + `clearAnnotationMarks`,
+ * which mutated the React-owned reading DOM and could throw `NotFoundError`
+ * on remount. Registering a `Highlight` paints the range without touching
+ * a single DOM node. Styling lives in `::highlight(reade-deeplink)` (App.css);
+ * only text-level properties apply there. Unsupported runtimes skip the
+ * visual flash; scroll-to-range still works.
  */
 
 // ---------------------------------------------------------------------------
@@ -27,8 +15,7 @@
 //
 // The Highlight/HighlightRegistry types live in TS DOM libs newer than the
 // repository's ES2020 baseline, so the API is reached through module-local
-// structural types (same pattern as the Intl.Segmenter declaration in
-// ttsSegments.ts). Delete these once the TS lib target catches up.
+// structural types. Delete these once the TS lib target catches up.
 // ---------------------------------------------------------------------------
 
 type HighlightLike = object;
