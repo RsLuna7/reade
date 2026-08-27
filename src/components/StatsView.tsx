@@ -1193,38 +1193,40 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
               <span className="stats-section-hint">点击色块查看当日详情</span>
             </div>
             <div className="stats-heatmap-scroll">
-              <ActivityCalendar
-                data={heatmapData}
-                colorScheme={THEME_META[theme].mode}
-                theme={{ light: HEATMAP_SCALE, dark: HEATMAP_SCALE }}
-                blockSize={11}
-                blockMargin={3}
-                blockRadius={2}
-                fontSize={12}
-                weekStart={1}
-                maxLevel={4}
-                showTotalCount={false}
-                showWeekdayLabels={["mon", "wed", "fri"]}
-                labels={{
-                  months: MONTH_LABELS,
-                  weekdays: WEEKDAY_LABELS,
-                  legend: { less: "少", more: "多" },
-                }}
-                tooltips={{
-                  activity: {
-                    text: (activity) =>
-                      activity.count > 0
-                        ? `${activity.date} · ${formatDuration(activity.count)}`
-                        : `${activity.date} · 无阅读`,
-                  },
-                }}
-                renderBlock={(block, activity) =>
-                  cloneElement(block, {
-                    onClick: () => setDrillDay(activity.date),
-                    style: { cursor: "pointer" },
-                  })
-                }
-              />
+              <div className="stats-heatmap-scroll-inner">
+                <ActivityCalendar
+                  data={heatmapData}
+                  colorScheme={THEME_META[theme].mode}
+                  theme={{ light: HEATMAP_SCALE, dark: HEATMAP_SCALE }}
+                  blockSize={11}
+                  blockMargin={3}
+                  blockRadius={2}
+                  fontSize={12}
+                  weekStart={1}
+                  maxLevel={4}
+                  showTotalCount={false}
+                  showWeekdayLabels={["mon", "wed", "fri"]}
+                  labels={{
+                    months: MONTH_LABELS,
+                    weekdays: WEEKDAY_LABELS,
+                    legend: { less: "少", more: "多" },
+                  }}
+                  tooltips={{
+                    activity: {
+                      text: (activity) =>
+                        activity.count > 0
+                          ? `${activity.date} · ${formatDuration(activity.count)}`
+                          : `${activity.date} · 无阅读`,
+                    },
+                  }}
+                  renderBlock={(block, activity) =>
+                    cloneElement(block, {
+                      onClick: () => setDrillDay(activity.date),
+                      style: { cursor: "pointer" },
+                    })
+                  }
+                />
+              </div>
             </div>
           </section>
 

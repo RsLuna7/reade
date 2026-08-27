@@ -6467,6 +6467,11 @@ button.stats-fact:disabled {
   font-size: 12px;
 }
 
+.stats-heatmap-scroll-inner {
+  width: max-content;
+  margin-inline: auto;
+}
+
 .stats-chart {
   min-width: 0;
 }
