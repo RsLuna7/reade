@@ -11,13 +11,13 @@ use std::{
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::library::{
-    current_root, normalize_relative_path, normalize_root, validate_relative_library_path,
-    AppState, CommandResult,
+    current_root, normalize_relative_path, normalize_stats_library_root,
+    strip_windows_verbatim_prefix, validate_relative_library_path, AppState, CommandResult,
 };
 
 const STATS_SCHEMA_VERSION: i64 = 1;
@@ -81,7 +81,11 @@ pub fn record_reading_session(
     let root = current_root(&library)?;
     let sanitized = sanitize_session(session)?;
     let connection = lock_stats(&stats)?;
-    upsert_session(&connection, &normalize_root(&root), &sanitized)
+    upsert_session(
+        &connection,
+        &normalize_stats_library_root(&root),
+        &sanitized,
+    )
 }
 
 #[tauri::command]
@@ -152,6 +156,38 @@ fn initialize_stats(connection: &Connection) -> CommandResult<()> {
             .pragma_update(None, "user_version", STATS_SCHEMA_VERSION)
             .map_err(|error| format!("Cannot store statistics schema version: {error}"))?;
     }
+    // Historical rows may still carry `\\?\` from canonicalize; rewrite in
+    // place so later upserts of the same session id keep matching. Idempotent
+    // and not a schema bump — the frontend also treats prefixed roots as the
+    // same library, so unread rows remain visible either way.
+    rewrite_verbatim_prefixed_library_roots(connection)?;
+    Ok(())
+}
+
+fn rewrite_verbatim_prefixed_library_roots(connection: &Connection) -> CommandResult<()> {
+    let mut statement = connection
+        .prepare("SELECT DISTINCT library_root FROM reading_sessions")
+        .map_err(|error| format!("Cannot list statistics library roots: {error}"))?;
+    let mapped = statement
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|error| format!("Cannot read statistics library roots: {error}"))?;
+    let mut roots = Vec::new();
+    for row in mapped {
+        roots.push(row.map_err(|error| format!("Cannot decode statistics library root: {error}"))?);
+    }
+    drop(statement);
+    for root in roots {
+        let stripped = strip_windows_verbatim_prefix(&root);
+        if stripped == root {
+            continue;
+        }
+        connection
+            .execute(
+                "UPDATE reading_sessions SET library_root = ?1 WHERE library_root = ?2",
+                params![stripped, root],
+            )
+            .map_err(|error| format!("Cannot rewrite statistics library root: {error}"))?;
+    }
     Ok(())
 }
 
@@ -220,6 +256,7 @@ fn upsert_session(
     root: &str,
     session: &ReadingSession,
 ) -> CommandResult<()> {
+    let root = strip_windows_verbatim_prefix(root);
     connection
         .execute(
             "INSERT INTO reading_sessions(
@@ -254,6 +291,40 @@ fn upsert_session(
         )
         .map_err(|error| format!("Cannot verify reading session ownership: {error}"))?;
     if owned == 0 {
+        let stored: Option<String> = connection
+            .query_row(
+                "SELECT library_root FROM reading_sessions WHERE id = ?1",
+                params![session.id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(|error| format!("Cannot verify reading session ownership: {error}"))?;
+        if stored.is_some_and(|value| strip_windows_verbatim_prefix(&value) == root) {
+            connection
+                .execute(
+                    "UPDATE reading_sessions SET
+                         library_root = ?1,
+                         relative_path = ?2,
+                         format = ?3,
+                         title = ?4,
+                         started_at = ?5,
+                         ended_at = ?6,
+                         active_seconds = ?7
+                     WHERE id = ?8",
+                    params![
+                        root,
+                        session.relative_path,
+                        session.format,
+                        session.title,
+                        session.started_at as i64,
+                        session.ended_at as i64,
+                        session.active_seconds as i64,
+                        session.id,
+                    ],
+                )
+                .map_err(|error| format!("Cannot save reading session: {error}"))?;
+            return Ok(());
+        }
         return Err("Reading session id belongs to another library".to_owned());
     }
     Ok(())
@@ -518,5 +589,96 @@ mod tests {
             .expect("reopen raw");
         let listed = list_sessions(&connection, 0, u64::MAX).expect("data kept");
         assert_eq!(listed, vec![with_root(session, "C:/one")]);
+    }
+
+    #[test]
+    fn normalize_root_stats_write_strips_windows_verbatim_prefix() {
+        let state = StatsState::in_memory().expect("state");
+        let connection = locked(&state);
+        let session = sample_session("verbatim-1");
+        upsert_session(&connection, r"\\?\D:\books", &session).expect("insert prefixed");
+
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].library_root, "D:/books");
+        assert_eq!(
+            normalize_stats_library_root(Path::new(r"\\?\D:\books")),
+            "D:/books"
+        );
+        assert_eq!(
+            normalize_stats_library_root(Path::new(r"\\.\E:\notes")),
+            "E:/notes"
+        );
+    }
+
+    #[test]
+    fn historical_verbatim_prefixed_rows_rewrite_and_still_upsert() {
+        let state = StatsState::in_memory().expect("state");
+        let connection = locked(&state);
+        let session = sample_session("legacy-prefix");
+        connection
+            .execute(
+                "INSERT INTO reading_sessions(
+                     id, library_root, relative_path, format, title,
+                     started_at, ended_at, active_seconds
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    session.id,
+                    "//?/D:/books",
+                    session.relative_path,
+                    session.format,
+                    session.title,
+                    session.started_at as i64,
+                    session.ended_at as i64,
+                    session.active_seconds as i64,
+                ],
+            )
+            .expect("insert historical prefixed row");
+
+        rewrite_verbatim_prefixed_library_roots(&connection).expect("rewrite");
+        let rewritten = list_sessions(&connection, 0, u64::MAX).expect("list after rewrite");
+        assert_eq!(rewritten[0].library_root, "D:/books");
+
+        let mut extended = session.clone();
+        extended.active_seconds = 90;
+        extended.ended_at += 60_000;
+        upsert_session(&connection, r"\\?\D:\books", &extended).expect("extend rewritten row");
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list after upsert");
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].library_root, "D:/books");
+        assert_eq!(listed[0].active_seconds, 90);
+    }
+
+    #[test]
+    fn upsert_adopts_historical_verbatim_prefix_without_rewrite() {
+        let state = StatsState::in_memory().expect("state");
+        let connection = locked(&state);
+        let session = sample_session("adopt-prefix");
+        connection
+            .execute(
+                "INSERT INTO reading_sessions(
+                     id, library_root, relative_path, format, title,
+                     started_at, ended_at, active_seconds
+                 ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    session.id,
+                    r"\\?\D:\books",
+                    session.relative_path,
+                    session.format,
+                    session.title,
+                    session.started_at as i64,
+                    session.ended_at as i64,
+                    session.active_seconds as i64,
+                ],
+            )
+            .expect("insert raw prefixed spelling");
+
+        let mut extended = session.clone();
+        extended.active_seconds = 80;
+        upsert_session(&connection, "D:/books", &extended)
+            .expect("prefixed historical row is the same library");
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+        assert_eq!(listed[0].library_root, "D:/books");
+        assert_eq!(listed[0].active_seconds, 80);
     }
 }

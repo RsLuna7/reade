@@ -3674,8 +3674,46 @@ pub(crate) fn normalize_relative_path(path: &Path) -> String {
         .join("/")
 }
 
+/// Cache and annotation SQLite key: slash-unify only.
+///
+/// Both write and read go through `canonicalize`, so a Windows `\\?\`
+/// prefix is internally consistent. Stripping it here would orphan existing
+/// `reade-user.sqlite3` / cache rows. Stats persistence that must match the
+/// folder-picker string uses [`normalize_stats_library_root`] instead.
 pub(crate) fn normalize_root(path: &Path) -> String {
     path.to_string_lossy().replace('\\', "/")
+}
+
+/// Persistable stats `library_root`: slash-unify and strip Windows verbatim
+/// prefixes so the value can be compared with `snapshot.rootPath` (the
+/// folder-picker original, which never carries `\\?\` / `\\.\`).
+pub(crate) fn normalize_stats_library_root(path: &Path) -> String {
+    strip_windows_verbatim_prefix(&normalize_root(path))
+}
+
+/// Strip `\\?\` / `\\.\` (including UNC `\\?\UNC\...`) after converting
+/// backslashes. Trailing slashes are dropped so picker and canonical forms
+/// compare equal. Idempotent.
+pub(crate) fn strip_windows_verbatim_prefix(path: &str) -> String {
+    let unified = path.replace('\\', "/");
+    let trimmed = unified.trim_end_matches('/');
+    let value = if trimmed.is_empty() {
+        unified.as_str()
+    } else {
+        trimmed
+    };
+    if let Some(head) = value.get(..8) {
+        let head = head.to_ascii_lowercase();
+        if head == "//?/unc/" || head == "//./unc/" {
+            return format!("//{}", &value[8..]);
+        }
+    }
+    if let Some(short) = value.get(..4) {
+        if short == "//?/" || short == "//./" {
+            return value[4..].to_owned();
+        }
+    }
+    value.to_owned()
 }
 
 fn modified_millis(metadata: &fs::Metadata) -> u64 {
@@ -4356,6 +4394,63 @@ mod tests {
                 .to_string_lossy()
                 .as_ref()
         ));
+    }
+
+    #[test]
+    fn normalize_root_unifies_windows_separators() {
+        assert_eq!(
+            normalize_root(Path::new(r"D:\books\papers")),
+            "D:/books/papers"
+        );
+    }
+
+    #[test]
+    fn normalize_root_keeps_verbatim_prefix_for_cache_keys() {
+        // Cache / user-store keys stay internally consistent with canonicalize.
+        assert_eq!(normalize_root(Path::new(r"\\?\D:\books")), "//?/D:/books");
+    }
+
+    #[test]
+    fn normalize_root_stats_identity_strips_windows_verbatim_prefixes() {
+        assert_eq!(
+            normalize_stats_library_root(Path::new(r"\\?\D:\books")),
+            "D:/books"
+        );
+        assert_eq!(
+            normalize_stats_library_root(Path::new(r"\\.\D:\books")),
+            "D:/books"
+        );
+        assert_eq!(
+            normalize_stats_library_root(Path::new(r"\\?\UNC\server\share\lib")),
+            "//server/share/lib"
+        );
+        assert_eq!(strip_windows_verbatim_prefix(r"\\?\D:\books\"), "D:/books");
+        assert_eq!(strip_windows_verbatim_prefix("//?/D:/books"), "D:/books");
+        assert_eq!(
+            strip_windows_verbatim_prefix("//?/UNC/server/share/lib"),
+            "//server/share/lib"
+        );
+        assert_eq!(strip_windows_verbatim_prefix("D:/books"), "D:/books");
+    }
+
+    #[test]
+    fn normalize_root_stats_identity_strips_real_canonicalize_prefix() {
+        let library = tempdir().expect("temp library");
+        let canonical = canonical_library_root(library.path()).expect("canonical root");
+        let cache_key = normalize_root(&canonical);
+        let stats_key = normalize_stats_library_root(&canonical);
+        assert!(
+            !stats_key.starts_with("//?/") && !stats_key.starts_with("//./"),
+            "stats library_root must not keep a verbatim prefix: {stats_key}"
+        );
+        let display = canonical.to_string_lossy();
+        if display.starts_with(r"\\?\") || display.starts_with(r"\\.\") {
+            assert!(
+                cache_key.starts_with("//?/") || cache_key.starts_with("//./"),
+                "cache keys stay internally consistent with canonicalize: {cache_key}"
+            );
+            assert_eq!(strip_windows_verbatim_prefix(&cache_key), stats_key);
+        }
     }
 
     #[test]
