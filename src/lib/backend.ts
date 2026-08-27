@@ -1,5 +1,10 @@
 import type { DocumentLinks } from "./documentLinks";
 import type { MovedDocumentCandidate } from "./documentMoves";
+import type {
+  DocumentAnnotationBundle,
+  ExcerptCaptureResult,
+  ExcerptDraft,
+} from "./annotationModel";
 import { RELATED_DEFAULT_LIMIT } from "./relatedFragments";
 import { DAILY_REVIEW_LIMIT, type ReviewState } from "./reviewScheduler";
 import { WebLibraryClient, type WebManifestDocument } from "./webLibrary";
@@ -519,12 +524,25 @@ export async function deleteAnnotation(id: string): Promise<void> {
   return (await getTauriBackend()).deleteAnnotation(id);
 }
 
-export async function clearDocumentAnnotations(relativePath: string): Promise<void> {
+export async function clearDocumentAnnotations(
+  relativePath: string,
+): Promise<DocumentAnnotationBundle> {
   if (APP_RUNTIME === "web") {
-    const { clearWebDocumentAnnotations } = await import("./webAnnotations");
-    return clearWebDocumentAnnotations(relativePath);
+    const { clearDocumentAnnotations: clearWeb } = await import("./webAnnotationRepository");
+    return clearWeb(relativePath);
   }
   return (await getTauriBackend()).clearDocumentAnnotations(relativePath);
+}
+
+export async function restoreDocumentAnnotations(
+  relativePath: string,
+  snapshot: DocumentAnnotationBundle,
+): Promise<DocumentAnnotationBundle> {
+  if (APP_RUNTIME === "web") {
+    const { restoreDocumentAnnotations: restoreWeb } = await import("./webAnnotationRepository");
+    return restoreWeb(relativePath, snapshot);
+  }
+  return (await getTauriBackend()).restoreDocumentAnnotations(relativePath, snapshot);
 }
 
 export async function listDocumentAnnotations(relativePath: string) {
@@ -535,12 +553,15 @@ export async function listDocumentAnnotations(relativePath: string) {
   return (await getTauriBackend()).listDocumentAnnotations(relativePath);
 }
 
-export async function createExcerpt(draft: import("./annotationModel").ExcerptDraft) {
+export async function createExcerpt(
+  draft: ExcerptDraft,
+  reflectionBody: string | null,
+): Promise<ExcerptCaptureResult> {
   if (APP_RUNTIME === "web") {
     const { createExcerpt: createWeb } = await import("./webAnnotationRepository");
-    return createWeb(draft);
+    return createWeb(draft, reflectionBody);
   }
-  return (await getTauriBackend()).createExcerpt(draft);
+  return (await getTauriBackend()).createExcerpt(draft, reflectionBody);
 }
 
 export async function updateExcerptAppearance(

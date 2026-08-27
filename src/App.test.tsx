@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import App, { MotionNotice, ReadingSettingsPanel, TocNavigation } from "./App";
 import {
   chooseLibraryDirectory,
+  clearDocumentAnnotations,
   deleteAnnotation,
   detectMovedDocuments,
   findRelatedPassages,
@@ -18,7 +19,10 @@ import {
   probeLibraryPath,
   readDocument,
   rebindDocumentAnnotations,
+  restoreAnnotationEntry,
+  restoreDocumentAnnotations,
   searchAnnotations,
+  setReviewEnrollment,
   createExcerpt,
   listDocumentAnnotations,
   upsertReflection,
@@ -43,17 +47,32 @@ vi.mock("./lib/backend", async () => {
     ...actual,
     listAnnotations: vi.fn(async () => []),
     upsertAnnotation: vi.fn(async (annotation) => annotation),
-    createExcerpt: vi.fn(async (draft) => ({
-      ...draft,
-      sourceRevision: null,
-      createdAt: 1,
-      updatedAt: 1,
-      deletedAt: null,
-      legacyKind: draft.appearance.style,
-      legacyColor: "yellow",
-      legacyTitle: null,
-      legacySelectedText: draft.sourceText,
-    })),
+    createExcerpt: vi.fn(async (draft, reflectionBody) => {
+      const excerpt = {
+        ...draft,
+        sourceRevision: null,
+        createdAt: 1,
+        updatedAt: 1,
+        deletedAt: null,
+        legacyKind: draft.appearance.style,
+        legacyColor: "yellow",
+        legacyTitle: null,
+        legacySelectedText: draft.sourceText,
+      };
+      return {
+        excerpt,
+        reflection: reflectionBody
+          ? {
+              entryId: excerpt.id,
+              entryKind: "excerpt",
+              body: reflectionBody,
+              createdAt: 1,
+              updatedAt: 1,
+              deletedAt: null,
+            }
+          : null,
+      };
+    }),
     listDocumentAnnotations: vi.fn(async () => ({
       excerpts: [],
       places: [],
@@ -70,7 +89,14 @@ vi.mock("./lib/backend", async () => {
     })),
     setReviewEnrollment: vi.fn(async () => null),
     deleteAnnotation: vi.fn(async () => undefined),
-    clearDocumentAnnotations: vi.fn(async () => undefined),
+    clearDocumentAnnotations: vi.fn(async () => ({
+      excerpts: [],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    })),
+    restoreAnnotationEntry: vi.fn(async () => undefined),
+    restoreDocumentAnnotations: vi.fn(async (_relativePath, snapshot) => snapshot),
     detectMovedDocuments: vi.fn(async () => []),
     rebindDocumentAnnotations: vi.fn(async () => 0),
     searchAnnotations: vi.fn(async () => []),
@@ -160,17 +186,32 @@ beforeEach(() => {
   });
   vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(upsertAnnotation).mockReset().mockImplementation(async (annotation) => annotation);
-  vi.mocked(createExcerpt).mockReset().mockImplementation(async (draft) => ({
-    ...draft,
-    sourceRevision: null,
-    createdAt: 1,
-    updatedAt: 1,
-    deletedAt: null,
-    legacyKind: draft.appearance.style,
-    legacyColor: "yellow",
-    legacyTitle: null,
-    legacySelectedText: draft.sourceText,
-  }));
+  vi.mocked(createExcerpt).mockReset().mockImplementation(async (draft, reflectionBody) => {
+    const excerpt = {
+      ...draft,
+      sourceRevision: null,
+      createdAt: 1,
+      updatedAt: 1,
+      deletedAt: null,
+      legacyKind: draft.appearance.style,
+      legacyColor: "yellow" as const,
+      legacyTitle: null,
+      legacySelectedText: draft.sourceText,
+    };
+    return {
+      excerpt,
+      reflection: reflectionBody
+        ? {
+            entryId: excerpt.id,
+            entryKind: "excerpt" as const,
+            body: reflectionBody,
+            createdAt: 1,
+            updatedAt: 1,
+            deletedAt: null,
+          }
+        : null,
+    };
+  });
   vi.mocked(listDocumentAnnotations).mockReset().mockImplementation(async (relativePath) =>
     documentBundleFromAnnotations(await listAnnotations(relativePath)),
   );
@@ -182,7 +223,18 @@ beforeEach(() => {
     updatedAt: 1,
     deletedAt: null,
   }));
+  vi.mocked(setReviewEnrollment).mockReset().mockResolvedValue(null);
   vi.mocked(deleteAnnotation).mockReset().mockImplementation(async () => undefined);
+  vi.mocked(clearDocumentAnnotations).mockReset().mockResolvedValue({
+    excerpts: [],
+    places: [],
+    reflections: [],
+    reviewEnrollments: [],
+  });
+  vi.mocked(restoreAnnotationEntry).mockReset().mockResolvedValue(undefined);
+  vi.mocked(restoreDocumentAnnotations)
+    .mockReset()
+    .mockImplementation(async (_relativePath, snapshot) => snapshot);
   vi.mocked(detectMovedDocuments).mockReset().mockImplementation(async () => []);
   vi.mocked(rebindDocumentAnnotations).mockReset().mockImplementation(async () => 0);
   vi.mocked(searchAnnotations).mockReset().mockImplementation(async () => []);
@@ -594,6 +646,7 @@ describe("selection capture upgrade (B2/B3)", () => {
           sourceText: "Body",
           appearance: expect.objectContaining({ style: "underline" }),
         }),
+        null,
       );
     });
     expect(upsertAnnotation).not.toHaveBeenCalled();
@@ -628,6 +681,7 @@ describe("selection capture upgrade (B2/B3)", () => {
         expect.objectContaining({
           appearance: expect.objectContaining({ style: "highlight", tone: "sage" }),
         }),
+        null,
       );
     });
     expect(upsertAnnotation).not.toHaveBeenCalled();
@@ -693,6 +747,7 @@ describe("selection capture upgrade (B2/B3)", () => {
           sourceText: "Body",
           appearance: expect.objectContaining({ style: "highlight", tone: "sand" }),
         }),
+        null,
       );
     });
     expect(screen.queryByRole("toolbar", { name: "标注工具条" })).not.toBeInTheDocument();
@@ -776,6 +831,7 @@ describe("selection capture upgrade (B2/B3)", () => {
             chapterId: "one",
           }),
         }),
+        null,
       );
     });
     expect(upsertAnnotation).not.toHaveBeenCalled();

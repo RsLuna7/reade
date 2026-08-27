@@ -31,6 +31,7 @@ import type {
   AnnotationEntryKind,
   DocumentAnnotationBundle,
   Excerpt,
+  ExcerptCaptureResult,
   ExcerptAppearance,
   ExcerptDraft,
   ReadingPlace,
@@ -107,14 +108,23 @@ export function upsertAnnotation(annotation: Annotation): Promise<Annotation> {
 export function deleteAnnotation(id: string): Promise<void> {
   return invoke("delete_annotation", { id });
 }
-export function clearDocumentAnnotations(relativePath: string): Promise<void> {
+export function clearDocumentAnnotations(relativePath: string): Promise<DocumentAnnotationBundle> {
   return invoke("clear_document_annotations", { relativePath });
+}
+export function restoreDocumentAnnotations(
+  relativePath: string,
+  snapshot: DocumentAnnotationBundle,
+): Promise<DocumentAnnotationBundle> {
+  return invoke("restore_document_annotations", { relativePath, snapshot });
 }
 export function listDocumentAnnotations(relativePath: string): Promise<DocumentAnnotationBundle> {
   return invoke("list_document_annotations", { relativePath });
 }
-export function createExcerpt(draft: ExcerptDraft): Promise<Excerpt> {
-  return invoke("create_excerpt", { draft });
+export function createExcerpt(
+  draft: ExcerptDraft,
+  reflectionBody: string | null,
+): Promise<ExcerptCaptureResult> {
+  return invoke("create_excerpt", { draft, reflectionBody });
 }
 export function updateExcerptAppearance(
   id: string,

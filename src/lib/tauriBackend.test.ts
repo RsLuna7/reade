@@ -161,15 +161,31 @@ describe("v6 annotation IPC wrappers", () => {
       sortIndex: "M|00000|00000000",
     };
 
-    const { createExcerpt, createReadingPlace, deleteAnnotationEntry, deleteReflection, listDocumentAnnotations, restoreAnnotationEntry, setReviewEnrollment, updateExcerptAppearance, upsertReflection } = await import("./tauriBackend");
+    const { clearDocumentAnnotations, createExcerpt, createReadingPlace, deleteAnnotationEntry, deleteReflection, listDocumentAnnotations, restoreAnnotationEntry, restoreDocumentAnnotations, setReviewEnrollment, updateExcerptAppearance, upsertReflection } = await import("./tauriBackend");
 
     await listDocumentAnnotations("notes/a.md");
     expect(invokeMock).toHaveBeenCalledWith("list_document_annotations", {
       relativePath: "notes/a.md",
     });
 
-    await createExcerpt(draft);
-    expect(invokeMock).toHaveBeenCalledWith("create_excerpt", { draft });
+    await createExcerpt(draft, null);
+    expect(invokeMock).toHaveBeenCalledWith("create_excerpt", { draft, reflectionBody: null });
+
+    const snapshot = {
+      excerpts: [],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    };
+    await clearDocumentAnnotations("notes/a.md");
+    expect(invokeMock).toHaveBeenCalledWith("clear_document_annotations", {
+      relativePath: "notes/a.md",
+    });
+    await restoreDocumentAnnotations("notes/a.md", snapshot);
+    expect(invokeMock).toHaveBeenCalledWith("restore_document_annotations", {
+      relativePath: "notes/a.md",
+      snapshot,
+    });
 
     await updateExcerptAppearance("ex-1", { style: "underline", tone: "sage" });
     expect(invokeMock).toHaveBeenCalledWith("update_excerpt_appearance", {

@@ -4,6 +4,7 @@ import {
   type DocumentAnnotationBundle,
   type Excerpt,
   type ExcerptAppearance,
+  type ExcerptCaptureResult,
   type ExcerptDraft,
   type ReadingPlace,
   type ReadingPlaceDraft,
@@ -19,6 +20,7 @@ import {
 } from "./annotationValidation";
 import { openWebUserDatabase } from "./webAnnotations";
 import type { WebDocumentFingerprint } from "./webAnnotations";
+import { validateLibraryRelativePath } from "./webLibrary";
 import {
   EXCERPTS_STORE,
   READING_PLACES_STORE,
@@ -30,12 +32,15 @@ import {
   putExcerptProjection,
   putReadingPlaceProjection,
   readAnnotationV6Meta,
+  removeV6EntriesForPath,
   requestToPromise,
   transactionDone,
 } from "./webAnnotationV6";
 
 const DOCUMENTS_STORE = "documents";
 const REVIEW_IMPLICIT_DUE_OFFSET_MS = 24 * 60 * 60 * 1000;
+const MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS = 10_000;
+const REVIEW_MAX_BOX = 5;
 
 function compareSort<T extends { sortIndex: string; id: string }>(left: T, right: T): number {
   return left.sortIndex < right.sortIndex
@@ -93,14 +98,10 @@ function liveReflection(reflection: Reflection | undefined): Reflection | null {
   return reflection;
 }
 
-export async function listDocumentAnnotations(
+async function readDocumentAnnotationBundle(
+  tx: IDBTransaction,
   relativePath: string,
 ): Promise<DocumentAnnotationBundle> {
-  const db = await openReadyDb();
-  const tx = db.transaction(
-    [EXCERPTS_STORE, READING_PLACES_STORE, REFLECTIONS_STORE, REVIEW_ENROLLMENTS_STORE],
-    "readonly",
-  );
   const excerpts = (
     (await requestToPromise(
       tx.objectStore(EXCERPTS_STORE).index("relativePath").getAll(relativePath),
@@ -132,8 +133,25 @@ export async function listDocumentAnnotations(
   return { excerpts, places, reflections, reviewEnrollments };
 }
 
-export async function createExcerpt(draft: ExcerptDraft): Promise<Excerpt> {
+export async function listDocumentAnnotations(
+  relativePath: string,
+): Promise<DocumentAnnotationBundle> {
+  validateLibraryRelativePath(relativePath);
+  const db = await openReadyDb();
+  const tx = db.transaction(
+    [EXCERPTS_STORE, READING_PLACES_STORE, REFLECTIONS_STORE, REVIEW_ENROLLMENTS_STORE],
+    "readonly",
+  );
+  return readDocumentAnnotationBundle(tx, relativePath);
+}
+
+export async function createExcerpt(
+  draft: ExcerptDraft,
+  reflectionBody: string | null,
+): Promise<ExcerptCaptureResult> {
   const sanitized = validateExcerptDraft(draft);
+  const normalizedReflection =
+    reflectionBody === null ? null : normalizeReflectionBody(reflectionBody);
   const db = await openReadyDb();
   const now = Date.now();
   const tx = db.transaction([...V6_WRITE_STORES], "readwrite");
@@ -154,9 +172,224 @@ export async function createExcerpt(draft: ExcerptDraft): Promise<Excerpt> {
     legacyTitle: null,
     legacySelectedText: sanitized.sourceText,
   };
-  putExcerptProjection(tx, excerpt, null);
+  const reflection: Reflection | null =
+    normalizedReflection === null
+      ? null
+      : {
+          entryId: excerpt.id,
+          entryKind: "excerpt",
+          body: normalizedReflection,
+          createdAt: now,
+          updatedAt: now,
+          deletedAt: null,
+        };
+  putExcerptProjection(tx, excerpt, reflection);
   await transactionDone(tx);
-  return excerpt;
+  return { excerpt, reflection };
+}
+
+function bundleRowCount(bundle: DocumentAnnotationBundle): number {
+  return (
+    bundle.excerpts.length +
+    bundle.places.length +
+    bundle.reflections.length +
+    bundle.reviewEnrollments.length
+  );
+}
+
+function requireRestoreTimestamp(value: number, label: string): void {
+  if (!Number.isSafeInteger(value) || value < 0) throw new Error(`${label}无效`);
+}
+
+function requireRestoreTimestampOrder(createdAt: number, updatedAt: number): void {
+  requireRestoreTimestamp(createdAt, "标注创建时间");
+  requireRestoreTimestamp(updatedAt, "标注更新时间");
+  if (createdAt > updatedAt) throw new Error("标注时间顺序无效");
+}
+
+function validateRestoreSourceRevision(revision: SourceRevision | null): void {
+  if (revision === null) return;
+  if (
+    typeof revision.contentHash !== "string" ||
+    revision.contentHash.trim().length === 0 ||
+    revision.contentHash.length > 256 ||
+    !Number.isSafeInteger(revision.observedAt) ||
+    revision.observedAt < 0 ||
+    (revision.basis !== "capture" && revision.basis !== "migrationSnapshot")
+  ) {
+    throw new Error("标注来源版本无效");
+  }
+}
+
+function validateDocumentAnnotationBundle(
+  relativePath: string,
+  snapshot: DocumentAnnotationBundle,
+): DocumentAnnotationBundle {
+  validateLibraryRelativePath(relativePath);
+  if (
+    !snapshot ||
+    !Array.isArray(snapshot.excerpts) ||
+    !Array.isArray(snapshot.places) ||
+    !Array.isArray(snapshot.reflections) ||
+    !Array.isArray(snapshot.reviewEnrollments)
+  ) {
+    throw new Error("标注恢复快照格式无效");
+  }
+  if (bundleRowCount(snapshot) > MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS) {
+    throw new Error(`单篇文档标注恢复不能超过 ${MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS} 行`);
+  }
+
+  const parentKinds = new Map<string, AnnotationEntryKind>();
+  for (const excerpt of snapshot.excerpts) {
+    if (excerpt.deletedAt !== null) throw new Error("标注恢复快照不能包含墓碑");
+    if (excerpt.relativePath !== relativePath) throw new Error("标注恢复快照包含其他文档");
+    validateExcerptDraft({
+      id: excerpt.id,
+      relativePath: excerpt.relativePath,
+      sourceText: excerpt.sourceText,
+      anchor: excerpt.anchor,
+      appearance: excerpt.appearance,
+      sortIndex: excerpt.sortIndex,
+    });
+    requireRestoreTimestampOrder(excerpt.createdAt, excerpt.updatedAt);
+    validateRestoreSourceRevision(excerpt.sourceRevision);
+    if (excerpt.legacyTitle !== null && typeof excerpt.legacyTitle !== "string") {
+      throw new Error("旧摘录标题无效");
+    }
+    if (excerpt.legacyTitle !== null && Array.from(excerpt.legacyTitle).length > 200) {
+      throw new Error("旧摘录标题过长");
+    }
+    if (excerpt.legacySelectedText !== null && typeof excerpt.legacySelectedText !== "string") {
+      throw new Error("旧摘录文本无效");
+    }
+    if (excerpt.legacySelectedText !== null && Array.from(excerpt.legacySelectedText).length > 2_000) {
+      throw new Error("旧摘录文本过长");
+    }
+    if (parentKinds.has(excerpt.id)) throw new Error("标注恢复快照包含重复 ID");
+    parentKinds.set(excerpt.id, "excerpt");
+  }
+  for (const place of snapshot.places) {
+    if (place.deletedAt !== null) throw new Error("标注恢复快照不能包含墓碑");
+    if (place.relativePath !== relativePath) throw new Error("标注恢复快照包含其他文档");
+    validateReadingPlaceDraft({
+      id: place.id,
+      relativePath: place.relativePath,
+      title: place.title,
+      target: place.target,
+      sortIndex: place.sortIndex,
+    });
+    requireRestoreTimestampOrder(place.createdAt, place.updatedAt);
+    validateRestoreSourceRevision(place.sourceRevision);
+    if (place.legacySelectedText !== null && typeof place.legacySelectedText !== "string") {
+      throw new Error("旧阅读位置文本无效");
+    }
+    if (place.legacySelectedText !== null && Array.from(place.legacySelectedText).length > 2_000) {
+      throw new Error("旧阅读位置文本过长");
+    }
+    if (parentKinds.has(place.id)) throw new Error("标注恢复快照包含重复 ID");
+    parentKinds.set(place.id, "place");
+  }
+
+  const reflectionIds = new Set<string>();
+  for (const reflection of snapshot.reflections) {
+    if (reflection.deletedAt !== null) throw new Error("感悟恢复快照不能包含墓碑");
+    validateAnnotationId(reflection.entryId);
+    const parentKind = parentKinds.get(reflection.entryId);
+    if (!parentKind) throw new Error("标注恢复快照包含孤立感悟");
+    if (parentKind !== reflection.entryKind) throw new Error("标注恢复快照包含错配感悟");
+    if (normalizeReflectionBody(reflection.body) !== reflection.body) {
+      throw new Error("感悟恢复快照不是规范格式");
+    }
+    requireRestoreTimestampOrder(reflection.createdAt, reflection.updatedAt);
+    if (reflectionIds.has(reflection.entryId)) throw new Error("标注恢复快照包含重复感悟");
+    reflectionIds.add(reflection.entryId);
+  }
+
+  const enrollmentIds = new Set<string>();
+  for (const enrollment of snapshot.reviewEnrollments) {
+    if (enrollment.deletedAt !== null) throw new Error("回顾恢复快照不能包含墓碑");
+    validateAnnotationId(enrollment.excerptId);
+    if (parentKinds.get(enrollment.excerptId) !== "excerpt") {
+      throw new Error("标注恢复快照包含孤立回顾状态");
+    }
+    requireRestoreTimestamp(enrollment.enrolledAt, "加入回顾时间");
+    requireRestoreTimestamp(enrollment.dueAt, "回顾到期时间");
+    requireRestoreTimestamp(enrollment.updatedAt, "回顾更新时间");
+    if (enrollment.lastReviewedAt !== null) {
+      requireRestoreTimestamp(enrollment.lastReviewedAt, "最近回顾时间");
+    }
+    if (!Number.isInteger(enrollment.box) || enrollment.box < 0 || enrollment.box > REVIEW_MAX_BOX) {
+      throw new Error(`回顾箱位必须在 0 到 ${REVIEW_MAX_BOX} 之间`);
+    }
+    if (!Number.isSafeInteger(enrollment.totalReviews) || enrollment.totalReviews < 0) {
+      throw new Error("回顾次数无效");
+    }
+    if (typeof enrollment.suspended !== "boolean") throw new Error("回顾暂停状态无效");
+    if (enrollmentIds.has(enrollment.excerptId)) throw new Error("标注恢复快照包含重复回顾状态");
+    enrollmentIds.add(enrollment.excerptId);
+  }
+  return snapshot;
+}
+
+export async function clearDocumentAnnotations(
+  relativePath: string,
+): Promise<DocumentAnnotationBundle> {
+  validateLibraryRelativePath(relativePath);
+  const db = await openReadyDb();
+  const tx = db.transaction([...V6_WRITE_STORES], "readwrite");
+  const snapshot = await readDocumentAnnotationBundle(tx, relativePath);
+  if (bundleRowCount(snapshot) > MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS) {
+    tx.abort();
+    throw new Error(`单篇文档标注不能超过 ${MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS} 行`);
+  }
+  removeV6EntriesForPath(tx, relativePath);
+  await transactionDone(tx);
+  return snapshot;
+}
+
+async function restoreIdExists(tx: IDBTransaction, id: string): Promise<boolean> {
+  const [excerpt, place, reflection, enrollment] = await Promise.all([
+    requestToPromise(tx.objectStore(EXCERPTS_STORE).get(id)),
+    requestToPromise(tx.objectStore(READING_PLACES_STORE).get(id)),
+    requestToPromise(tx.objectStore(REFLECTIONS_STORE).get(id)),
+    requestToPromise(tx.objectStore(REVIEW_ENROLLMENTS_STORE).get(id)),
+  ]);
+  return [excerpt, place, reflection, enrollment].some((item) => item !== undefined);
+}
+
+export async function restoreDocumentAnnotations(
+  relativePath: string,
+  snapshot: DocumentAnnotationBundle,
+): Promise<DocumentAnnotationBundle> {
+  const validated = validateDocumentAnnotationBundle(relativePath, snapshot);
+  const db = await openReadyDb();
+  const tx = db.transaction([...V6_WRITE_STORES], "readwrite");
+  const current = await readDocumentAnnotationBundle(tx, relativePath);
+  if (current.excerpts.length > 0 || current.places.length > 0) {
+    tx.abort();
+    throw new Error("清空后文档标注已发生变化");
+  }
+  for (const id of [
+    ...validated.excerpts.map((item) => item.id),
+    ...validated.places.map((item) => item.id),
+  ]) {
+    if (await restoreIdExists(tx, id)) {
+      tx.abort();
+      throw new Error("标注恢复与现有 ID 冲突");
+    }
+  }
+  const reflectionById = new Map(validated.reflections.map((item) => [item.entryId, item]));
+  for (const excerpt of validated.excerpts) {
+    putExcerptProjection(tx, excerpt, reflectionById.get(excerpt.id) ?? null);
+  }
+  for (const place of validated.places) {
+    putReadingPlaceProjection(tx, place, reflectionById.get(place.id) ?? null);
+  }
+  for (const enrollment of validated.reviewEnrollments) {
+    tx.objectStore(REVIEW_ENROLLMENTS_STORE).put(enrollment);
+  }
+  await transactionDone(tx);
+  return listDocumentAnnotations(relativePath);
 }
 
 export async function updateExcerptAppearance(

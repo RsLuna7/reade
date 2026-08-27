@@ -92,7 +92,6 @@ import {
   recordReadingSession,
   saveAnnotationExportFile,
   searchAnnotations,
-  setReviewEnrollment,
   type Annotation,
   type AnnotationColor,
   type CollectionSummary,
@@ -218,7 +217,6 @@ import {
   type PendingSelection,
 } from "./lib/annotationCapture";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
-import { useDocumentAnnotationBundle } from "./lib/useDocumentAnnotationBundle";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
 import {
   ANNOTATION_TONES,
@@ -1756,23 +1754,21 @@ function App() {
   const trackerRef = useRef<ReadingTracker | null>(null);
   const {
     annotations,
+    bundle: annotationBundle,
     loading: annotationsLoading,
     canUndo,
     reload: reloadAnnotations,
     save: saveAnnotation,
     saveExcerpt,
+    saveReflection,
+    setEnrollment,
     remove: removeAnnotation,
     clearAll: clearAnnotations,
     undo: undoAnnotation,
     updateNote,
     updateColor,
   } = useDocumentAnnotations(currentPath);
-  const {
-    bundle: annotationBundle,
-    loading: annotationBundleLoading,
-    reload: reloadAnnotationBundle,
-    saveReflection,
-  } = useDocumentAnnotationBundle(currentPath);
+  const annotationBundleLoading = annotationsLoading;
   const activeMarkTone =
     annotationTool === "underline" ? legacyColorToTone(underlineColor) : excerptTone;
   const initialWebRoute = useRef(
@@ -2922,12 +2918,7 @@ function App() {
             style: kind,
             tone,
           });
-          await saveExcerpt(draft);
-          void reloadAnnotationBundle();
-          if (note?.trim()) {
-            await saveReflection(draft.id, "excerpt", note.trim());
-            void reloadAnnotations();
-          }
+          await saveExcerpt(draft, note?.trim() || null);
         } else {
           const annotation = buildMarkFromPending(
             currentPath,
@@ -2959,11 +2950,8 @@ function App() {
       currentPath,
       excerptTone,
       handleUndoAnnotation,
-      reloadAnnotationBundle,
-      reloadAnnotations,
       saveAnnotation,
       saveExcerpt,
-      saveReflection,
       showNotice,
     ],
   );
@@ -3517,11 +3505,9 @@ function App() {
           onJump={jumpToAnnotation}
           onSaveReflection={async (entryId, entryKind, body) => {
             await saveReflection(entryId, entryKind, body);
-            void reloadAnnotations();
           }}
           onSetEnrollment={async (excerptId, enabled) => {
-            await setReviewEnrollment(excerptId, enabled);
-            void reloadAnnotationBundle();
+            await setEnrollment(excerptId, enabled);
           }}
         />
         {markdownFallbackAnnotations.length > 0 ? (

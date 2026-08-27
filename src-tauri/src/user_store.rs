@@ -93,6 +93,10 @@ const MAX_COLLECTION_NAME_CHARS: usize = 100;
 /// Import caps mirroring `MAX_TRANSFER_*` in `src/lib/annotationTransfer.ts`.
 const MAX_IMPORT_ANNOTATIONS: usize = 10_000;
 const MAX_IMPORT_FINGERPRINTS: usize = 2_000;
+/// A clear undo snapshot is kept in renderer memory and crosses IPC twice.
+/// Cap all v6 rows together so a forged restore payload cannot grow without
+/// bound while still matching the existing transfer ceiling.
+const MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS: usize = 10_000;
 
 /// Fallback sort key for rows whose locator cannot be parsed; sorts last.
 const BROKEN_SORT_INDEX: &str = "Z|99999|00000000";
@@ -385,13 +389,20 @@ pub struct ReviewEnrollment {
     pub deleted_at: Option<u64>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentAnnotationBundle {
     pub excerpts: Vec<Excerpt>,
     pub places: Vec<ReadingPlace>,
     pub reflections: Vec<Reflection>,
     pub review_enrollments: Vec<ReviewEnrollment>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ExcerptCaptureResult {
+    pub excerpt: Excerpt,
+    pub reflection: Option<Reflection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -527,12 +538,33 @@ pub fn clear_document_annotations(
     relative_path: String,
     library: State<'_, AppState>,
     user: State<'_, UserState>,
-) -> CommandResult<()> {
+) -> CommandResult<DocumentAnnotationBundle> {
     let root = current_root(&library)?;
     validate_relative_library_path(&relative_path)?;
     let normalized = normalize_relative_path(Path::new(&relative_path));
-    let connection = lock_user(&user)?;
-    clear_annotation_rows(&connection, &normalize_root(&root), &normalized)
+    let mut connection = lock_user(&user)?;
+    clear_annotation_rows(&mut connection, &normalize_root(&root), &normalized)
+}
+
+#[tauri::command]
+pub fn restore_document_annotations(
+    relative_path: String,
+    snapshot: DocumentAnnotationBundle,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<DocumentAnnotationBundle> {
+    let root = current_root(&library)?;
+    validate_relative_library_path(&relative_path)?;
+    let normalized = normalize_relative_path(Path::new(&relative_path));
+    ensure_document_in_open_library(&library, &normalized)?;
+    let snapshot = validate_document_annotation_bundle(&normalized, snapshot)?;
+    let mut connection = lock_user(&user)?;
+    restore_document_annotation_rows(
+        &mut connection,
+        &normalize_root(&root),
+        &normalized,
+        snapshot,
+    )
 }
 
 #[tauri::command]
@@ -551,45 +583,22 @@ pub fn list_document_annotations(
 #[tauri::command]
 pub fn create_excerpt(
     draft: ExcerptDraft,
+    reflection_body: Option<String>,
     library: State<'_, AppState>,
     user: State<'_, UserState>,
-) -> CommandResult<Excerpt> {
+) -> CommandResult<ExcerptCaptureResult> {
     let root = current_root(&library)?;
     let root_key = normalize_root(&root);
     let draft = sanitize_excerpt_draft(draft)?;
     ensure_document_in_open_library(&library, &draft.relative_path)?;
-    let now = now_millis();
     let mut connection = lock_user(&user)?;
-    let transaction = connection
-        .transaction()
-        .map_err(|error| format!("Cannot begin excerpt creation: {error}"))?;
-    ensure_v6_root_writable(&transaction, &root_key)?;
-    let source_revision =
-        source_revision_for_path(&transaction, &root_key, &draft.relative_path, now)?;
-    let source_text = draft.source_text;
-    let appearance = draft.appearance;
-    let excerpt = Excerpt {
-        id: draft.id,
-        relative_path: draft.relative_path,
-        source_text: source_text.clone(),
-        anchor: draft.anchor,
-        source_revision,
-        appearance: appearance.clone(),
-        sort_index: draft.sort_index,
-        created_at: now,
-        updated_at: now,
-        deleted_at: None,
-        legacy_kind: Some(appearance.style.clone()),
-        legacy_color: Some(tone_to_legacy_color(&appearance.tone)),
-        legacy_title: None,
-        legacy_selected_text: Some(source_text),
-    };
-    upsert_excerpt_row(&transaction, &root_key, &excerpt, None)?;
-    refresh_v6_migration_ledger(&transaction, &root_key, now)?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Cannot commit excerpt creation: {error}"))?;
-    Ok(excerpt)
+    create_excerpt_rows(
+        &mut connection,
+        &root_key,
+        draft,
+        reflection_body,
+        now_millis(),
+    )
 }
 
 #[tauri::command]
@@ -4858,18 +4867,332 @@ fn tombstone_annotation(
     refresh_v6_migration_ledger(connection, root, now)
 }
 
-fn clear_annotation_rows(
-    connection: &Connection,
+fn create_excerpt_rows(
+    connection: &mut Connection,
+    root: &str,
+    draft: ExcerptDraft,
+    reflection_body: Option<String>,
+    now: u64,
+) -> CommandResult<ExcerptCaptureResult> {
+    let draft = sanitize_excerpt_draft(draft)?;
+    let reflection_body = reflection_body
+        .map(|body| sanitize_required_text(body, MAX_ANNOTATION_NOTE_CHARS, "reflection"))
+        .transpose()?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin excerpt creation: {error}"))?;
+    ensure_v6_root_writable(&transaction, root)?;
+    let source_revision = source_revision_for_path(&transaction, root, &draft.relative_path, now)?;
+    let source_text = draft.source_text;
+    let appearance = draft.appearance;
+    let excerpt = Excerpt {
+        id: draft.id,
+        relative_path: draft.relative_path,
+        source_text: source_text.clone(),
+        anchor: draft.anchor,
+        source_revision,
+        appearance: appearance.clone(),
+        sort_index: draft.sort_index,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+        legacy_kind: Some(appearance.style.clone()),
+        legacy_color: Some(tone_to_legacy_color(&appearance.tone)),
+        legacy_title: None,
+        legacy_selected_text: Some(source_text),
+    };
+    let reflection = reflection_body.map(|body| Reflection {
+        entry_id: excerpt.id.clone(),
+        entry_kind: AnnotationEntryKind::Excerpt,
+        body,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    });
+    upsert_excerpt_row(
+        &transaction,
+        root,
+        &excerpt,
+        reflection.as_ref().map(|item| item.body.as_str()),
+    )?;
+    if let Some(reflection) = &reflection {
+        upsert_reflection_row(&transaction, root, reflection)?;
+    }
+    refresh_v6_migration_ledger(&transaction, root, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit excerpt creation: {error}"))?;
+    Ok(ExcerptCaptureResult {
+        excerpt,
+        reflection,
+    })
+}
+
+fn validate_restore_timestamp_order(created_at: u64, updated_at: u64) -> CommandResult<()> {
+    if created_at > updated_at {
+        return Err("Annotation timestamps are out of order".to_owned());
+    }
+    Ok(())
+}
+
+fn validate_restore_source_revision(revision: Option<&SourceRevision>) -> CommandResult<()> {
+    if let Some(revision) = revision {
+        require_bounded_text(
+            &revision.content_hash,
+            "annotation source revision hash",
+            256,
+            false,
+        )?;
+    }
+    Ok(())
+}
+
+fn document_annotation_bundle_row_count(snapshot: &DocumentAnnotationBundle) -> usize {
+    snapshot
+        .excerpts
+        .len()
+        .saturating_add(snapshot.places.len())
+        .saturating_add(snapshot.reflections.len())
+        .saturating_add(snapshot.review_enrollments.len())
+}
+
+fn validate_document_annotation_bundle(
+    relative_path: &str,
+    snapshot: DocumentAnnotationBundle,
+) -> CommandResult<DocumentAnnotationBundle> {
+    let total_rows = document_annotation_bundle_row_count(&snapshot);
+    if total_rows > MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS {
+        return Err(format!(
+            "Document annotation bundle exceeds the {MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS}-row limit"
+        ));
+    }
+
+    let mut parent_kinds = HashMap::new();
+    for excerpt in &snapshot.excerpts {
+        if excerpt.deleted_at.is_some() {
+            return Err("Restore payload cannot contain annotation tombstones".to_owned());
+        }
+        if excerpt.relative_path != relative_path {
+            return Err("Restore payload contains an annotation from another document".to_owned());
+        }
+        let sanitized = sanitize_excerpt_draft(ExcerptDraft {
+            id: excerpt.id.clone(),
+            relative_path: excerpt.relative_path.clone(),
+            source_text: excerpt.source_text.clone(),
+            anchor: excerpt.anchor.clone(),
+            appearance: excerpt.appearance.clone(),
+            sort_index: excerpt.sort_index.clone(),
+        })?;
+        if sanitized.relative_path != relative_path {
+            return Err("Restore payload contains a non-canonical document path".to_owned());
+        }
+        validate_restore_timestamp_order(excerpt.created_at, excerpt.updated_at)?;
+        validate_restore_source_revision(excerpt.source_revision.as_ref())?;
+        if let Some(title) = &excerpt.legacy_title {
+            require_bounded_text(
+                title,
+                "legacy excerpt title",
+                MAX_ANNOTATION_TITLE_CHARS,
+                true,
+            )?;
+        }
+        if let Some(text) = &excerpt.legacy_selected_text {
+            require_bounded_text(text, "legacy excerpt text", MAX_ANNOTATION_TEXT_CHARS, true)?;
+        }
+        if parent_kinds
+            .insert(excerpt.id.clone(), AnnotationEntryKind::Excerpt)
+            .is_some()
+        {
+            return Err("Restore payload contains duplicate annotation ids".to_owned());
+        }
+    }
+    for place in &snapshot.places {
+        if place.deleted_at.is_some() {
+            return Err("Restore payload cannot contain annotation tombstones".to_owned());
+        }
+        if place.relative_path != relative_path {
+            return Err("Restore payload contains an annotation from another document".to_owned());
+        }
+        let sanitized = sanitize_reading_place_draft(ReadingPlaceDraft {
+            id: place.id.clone(),
+            relative_path: place.relative_path.clone(),
+            title: place.title.clone(),
+            target: place.target.clone(),
+            sort_index: place.sort_index.clone(),
+        })?;
+        if sanitized.relative_path != relative_path {
+            return Err("Restore payload contains a non-canonical document path".to_owned());
+        }
+        validate_restore_timestamp_order(place.created_at, place.updated_at)?;
+        validate_restore_source_revision(place.source_revision.as_ref())?;
+        if let Some(text) = &place.legacy_selected_text {
+            require_bounded_text(
+                text,
+                "legacy reading-place text",
+                MAX_ANNOTATION_TEXT_CHARS,
+                true,
+            )?;
+        }
+        if parent_kinds
+            .insert(place.id.clone(), AnnotationEntryKind::Place)
+            .is_some()
+        {
+            return Err("Restore payload contains duplicate annotation ids".to_owned());
+        }
+    }
+
+    let mut reflection_ids = HashSet::new();
+    for reflection in &snapshot.reflections {
+        if reflection.deleted_at.is_some() {
+            return Err("Restore payload cannot contain reflection tombstones".to_owned());
+        }
+        validate_annotation_id(&reflection.entry_id)?;
+        let parent_kind = parent_kinds
+            .get(&reflection.entry_id)
+            .ok_or_else(|| "Restore payload contains an orphan reflection".to_owned())?;
+        if parent_kind != &reflection.entry_kind {
+            return Err("Restore payload contains a mismatched reflection".to_owned());
+        }
+        let normalized = sanitize_required_text(
+            reflection.body.clone(),
+            MAX_ANNOTATION_NOTE_CHARS,
+            "reflection",
+        )?;
+        if normalized != reflection.body {
+            return Err("Restore payload contains a non-canonical reflection".to_owned());
+        }
+        validate_restore_timestamp_order(reflection.created_at, reflection.updated_at)?;
+        if !reflection_ids.insert(reflection.entry_id.clone()) {
+            return Err("Restore payload contains duplicate reflections".to_owned());
+        }
+    }
+
+    let mut enrollment_ids = HashSet::new();
+    for enrollment in &snapshot.review_enrollments {
+        if enrollment.deleted_at.is_some() {
+            return Err("Restore payload cannot contain enrollment tombstones".to_owned());
+        }
+        validate_annotation_id(&enrollment.excerpt_id)?;
+        if parent_kinds.get(&enrollment.excerpt_id) != Some(&AnnotationEntryKind::Excerpt) {
+            return Err("Restore payload contains an orphan review enrollment".to_owned());
+        }
+        if !(0..=REVIEW_MAX_BOX).contains(&enrollment.box_level) {
+            return Err(format!("Review box must be between 0 and {REVIEW_MAX_BOX}"));
+        }
+        if !enrollment_ids.insert(enrollment.excerpt_id.clone()) {
+            return Err("Restore payload contains duplicate review enrollments".to_owned());
+        }
+    }
+    Ok(snapshot)
+}
+
+fn restore_id_exists(connection: &Connection, id: &str) -> CommandResult<bool> {
+    connection
+        .query_row(
+            "SELECT EXISTS(
+                 SELECT 1 FROM excerpts WHERE id = ?1
+                 UNION ALL SELECT 1 FROM reading_places WHERE id = ?1
+                 UNION ALL SELECT 1 FROM reflections WHERE entry_id = ?1
+                 UNION ALL SELECT 1 FROM review_enrollments WHERE excerpt_id = ?1
+             )",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|error| format!("Cannot check annotation restore conflicts: {error}"))
+}
+
+fn restore_document_annotation_rows(
+    connection: &mut Connection,
     root: &str,
     relative_path: &str,
-) -> CommandResult<()> {
-    connection
+    snapshot: DocumentAnnotationBundle,
+) -> CommandResult<DocumentAnnotationBundle> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin annotation restore: {error}"))?;
+    ensure_v6_root_writable(&transaction, root)?;
+    let current = list_document_annotation_rows(&transaction, root, relative_path)?;
+    if !current.excerpts.is_empty() || !current.places.is_empty() {
+        return Err("Document annotations changed after they were cleared".to_owned());
+    }
+    for id in snapshot
+        .excerpts
+        .iter()
+        .map(|item| item.id.as_str())
+        .chain(snapshot.places.iter().map(|item| item.id.as_str()))
+    {
+        if restore_id_exists(&transaction, id)? {
+            return Err("Annotation restore conflicts with an existing id".to_owned());
+        }
+    }
+
+    let reflections: HashMap<&str, &Reflection> = snapshot
+        .reflections
+        .iter()
+        .map(|item| (item.entry_id.as_str(), item))
+        .collect();
+    for excerpt in &snapshot.excerpts {
+        upsert_excerpt_row(
+            &transaction,
+            root,
+            excerpt,
+            reflections
+                .get(excerpt.id.as_str())
+                .map(|item| item.body.as_str()),
+        )?;
+    }
+    for place in &snapshot.places {
+        upsert_reading_place_row(&transaction, root, place)?;
+    }
+    for reflection in &snapshot.reflections {
+        upsert_reflection_row(&transaction, root, reflection)?;
+    }
+    for enrollment in &snapshot.review_enrollments {
+        upsert_review_enrollment_row(&transaction, root, enrollment)?;
+    }
+    let refreshed_at = snapshot
+        .excerpts
+        .iter()
+        .map(|item| item.updated_at)
+        .chain(snapshot.places.iter().map(|item| item.updated_at))
+        .chain(snapshot.reflections.iter().map(|item| item.updated_at))
+        .chain(
+            snapshot
+                .review_enrollments
+                .iter()
+                .map(|item| item.updated_at),
+        )
+        .max()
+        .unwrap_or_else(now_millis);
+    refresh_v6_migration_ledger(&transaction, root, refreshed_at)?;
+    let restored = list_document_annotation_rows(&transaction, root, relative_path)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit annotation restore: {error}"))?;
+    Ok(restored)
+}
+
+fn clear_annotation_rows(
+    connection: &mut Connection,
+    root: &str,
+    relative_path: &str,
+) -> CommandResult<DocumentAnnotationBundle> {
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin document annotation clear: {error}"))?;
+    let snapshot = list_document_annotation_rows(&transaction, root, relative_path)?;
+    if document_annotation_bundle_row_count(&snapshot) > MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS {
+        return Err(format!(
+            "Document annotation bundle exceeds the {MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS}-row limit"
+        ));
+    }
+    transaction
         .execute(
             "DELETE FROM annotations WHERE library_root = ?1 AND relative_path = ?2",
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document annotations: {error}"))?;
-    connection
+    transaction
         .execute(
             "DELETE FROM review_enrollments WHERE library_root = ?1 AND excerpt_id IN (
                  SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
@@ -4877,7 +5200,7 @@ fn clear_annotation_rows(
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document enrollments: {error}"))?;
-    connection
+    transaction
         .execute(
             "DELETE FROM reflections WHERE library_root = ?1 AND entry_id IN (
                  SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
@@ -4887,20 +5210,23 @@ fn clear_annotation_rows(
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document reflections: {error}"))?;
-    connection
+    transaction
         .execute(
             "DELETE FROM excerpts WHERE library_root = ?1 AND relative_path = ?2",
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document excerpts: {error}"))?;
-    connection
+    transaction
         .execute(
             "DELETE FROM reading_places WHERE library_root = ?1 AND relative_path = ?2",
             params![root, relative_path],
         )
         .map_err(|error| format!("Cannot clear document reading places: {error}"))?;
-    refresh_v6_migration_ledger(connection, root, now_millis())?;
-    Ok(())
+    refresh_v6_migration_ledger(&transaction, root, now_millis())?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit document annotation clear: {error}"))?;
+    Ok(snapshot)
 }
 
 fn annotation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
@@ -5951,7 +6277,7 @@ mod tests {
     #[test]
     fn clear_document_purges_rows_physically() {
         let state = UserState::in_memory().expect("state");
-        let connection = locked(&state);
+        let mut connection = locked(&state);
         upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-a1", "a.md"))
             .expect("insert a1");
         upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-a2", "a.md"))
@@ -5960,7 +6286,7 @@ mod tests {
             .expect("insert b");
         tombstone_annotation(&connection, ROOT, "ann-a1", 5_000).expect("tombstone a1");
 
-        clear_annotation_rows(&connection, ROOT, "a.md").expect("clear a.md");
+        clear_annotation_rows(&mut connection, ROOT, "a.md").expect("clear a.md");
         assert_eq!(
             count_rows(
                 &connection,
@@ -6116,7 +6442,7 @@ mod tests {
     #[test]
     fn fts_index_follows_annotation_writes() {
         let state = UserState::in_memory().expect("state");
-        let connection = locked(&state);
+        let mut connection = locked(&state);
         let mut annotation = sample_annotation("ann-1", "notes/a.md");
         annotation.selected_text = Some("ｔｒｉｇｒａｍ searchable body".to_owned());
         annotation.note = Some("first note".to_owned());
@@ -6142,8 +6468,17 @@ mod tests {
         assert_eq!(fts_hits("first"), 0);
         assert_eq!(fts_hits("second"), 1);
 
-        clear_annotation_rows(&connection, ROOT, "notes/a.md").expect("clear");
-        assert_eq!(fts_hits("trigram"), 0);
+        clear_annotation_rows(&mut connection, ROOT, "notes/a.md").expect("clear");
+        assert_eq!(
+            connection
+                .query_row(
+                    "SELECT count(*) FROM excerpts_fts WHERE excerpts_fts MATCH 'trigram'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .expect("query cleared fts"),
+            0
+        );
     }
 
     #[test]
@@ -8794,6 +9129,191 @@ mod tests {
             )
             .expect("ledger");
         assert_eq!(source, target);
+    }
+
+    #[test]
+    fn excerpt_capture_writes_reflection_atomically_and_keeps_legacy_shell_empty() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        insert_document_row(&connection, ROOT, "notes/atomic.md", "ntxt:aaaa");
+
+        let result = create_excerpt_rows(
+            &mut connection,
+            ROOT,
+            sample_excerpt_draft("ex-atomic", "notes/atomic.md"),
+            Some("  同一事务  ".to_owned()),
+            1_000,
+        )
+        .expect("capture");
+        assert_eq!(
+            result.reflection.as_ref().map(|item| item.body.as_str()),
+            Some("同一事务")
+        );
+        assert_eq!(
+            result.reflection.as_ref().map(|item| item.created_at),
+            Some(result.excerpt.created_at)
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            0
+        );
+
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_atomic_reflection BEFORE INSERT ON reflections BEGIN
+                     SELECT RAISE(ABORT, 'blocked reflection');
+                 END;",
+            )
+            .expect("failure trigger");
+        let error = create_excerpt_rows(
+            &mut connection,
+            ROOT,
+            sample_excerpt_draft("ex-rollback", "notes/atomic.md"),
+            Some("must roll back".to_owned()),
+            2_000,
+        )
+        .expect_err("reflection failure must abort capture");
+        assert!(error.contains("reflection"), "unexpected error: {error}");
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM excerpts WHERE id = 'ex-rollback'"
+            ),
+            0
+        );
+        assert_eq!(
+            count_rows(
+                &connection,
+                "SELECT count(*) FROM excerpts_fts WHERE searchable_text LIKE '%must roll back%'"
+            ),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_restore_round_trips_all_v6_rows_and_review_state() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        insert_document_row(&connection, ROOT, "notes/roundtrip.md", "ntxt:aaaa");
+        let capture = create_excerpt_rows(
+            &mut connection,
+            ROOT,
+            sample_excerpt_draft("ex-roundtrip", "notes/roundtrip.md"),
+            Some("excerpt reflection".to_owned()),
+            1_000,
+        )
+        .expect("capture");
+        let place = persist_reading_place(
+            &connection,
+            ReadingPlaceDraft {
+                id: "place-roundtrip".to_owned(),
+                relative_path: "notes/roundtrip.md".to_owned(),
+                title: Some("resume here".to_owned()),
+                target: BookmarkTarget::Markdown {
+                    heading_id: Some("review".to_owned()),
+                    scroll_ratio: 0.4,
+                },
+                sort_index: "M|00000|40000000".to_owned(),
+            },
+            1_100,
+        );
+        let place_reflection = Reflection {
+            entry_id: place.id.clone(),
+            entry_kind: AnnotationEntryKind::Place,
+            body: "place reflection".to_owned(),
+            created_at: 1_200,
+            updated_at: 1_200,
+            deleted_at: None,
+        };
+        upsert_reflection_row(&connection, ROOT, &place_reflection).expect("place reflection");
+        let enrollment = ReviewEnrollment {
+            excerpt_id: capture.excerpt.id.clone(),
+            enrolled_at: 1_300,
+            box_level: 4,
+            due_at: 123,
+            last_reviewed_at: Some(99),
+            total_reviews: 7,
+            suspended: true,
+            updated_at: 456,
+            deleted_at: None,
+        };
+        upsert_review_enrollment_row(&connection, ROOT, &enrollment).expect("enrollment");
+        refresh_v6_migration_ledger(&connection, ROOT, 1_300).expect("ledger");
+
+        let before =
+            list_document_annotation_rows(&connection, ROOT, "notes/roundtrip.md").expect("before");
+        let snapshot =
+            clear_annotation_rows(&mut connection, ROOT, "notes/roundtrip.md").expect("clear");
+        assert_eq!(snapshot, before);
+        assert!(
+            list_document_annotation_rows(&connection, ROOT, "notes/roundtrip.md")
+                .expect("cleared")
+                .excerpts
+                .is_empty()
+        );
+
+        let mut invalid = snapshot.clone();
+        invalid.reflections[0].entry_kind = AnnotationEntryKind::Place;
+        let invalid = validate_document_annotation_bundle("notes/roundtrip.md", invalid)
+            .expect_err("mismatched reflection");
+        assert!(invalid.contains("mismatched"));
+        assert!(
+            list_document_annotation_rows(&connection, ROOT, "notes/roundtrip.md")
+                .expect("still empty")
+                .excerpts
+                .is_empty()
+        );
+
+        let validated = validate_document_annotation_bundle("notes/roundtrip.md", snapshot)
+            .expect("valid snapshot");
+        let restored = restore_document_annotation_rows(
+            &mut connection,
+            ROOT,
+            "notes/roundtrip.md",
+            validated,
+        )
+        .expect("restore");
+        assert_eq!(restored, before);
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotations"),
+            0
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM annotation_reviews"),
+            0
+        );
+    }
+
+    #[test]
+    fn clear_is_atomic_when_a_later_delete_fails() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        insert_document_row(&connection, ROOT, "notes/clear.md", "ntxt:aaaa");
+        create_excerpt_rows(
+            &mut connection,
+            ROOT,
+            sample_excerpt_draft("ex-clear", "notes/clear.md"),
+            Some("keep after rollback".to_owned()),
+            1_000,
+        )
+        .expect("capture");
+        let before =
+            list_document_annotation_rows(&connection, ROOT, "notes/clear.md").expect("before");
+        connection
+            .execute_batch(
+                "CREATE TRIGGER fail_clear_reflection BEFORE DELETE ON reflections BEGIN
+                     SELECT RAISE(ABORT, 'blocked clear');
+                 END;",
+            )
+            .expect("failure trigger");
+
+        let error = clear_annotation_rows(&mut connection, ROOT, "notes/clear.md")
+            .expect_err("clear must fail");
+        assert!(error.contains("reflections"), "unexpected error: {error}");
+        assert_eq!(
+            list_document_annotation_rows(&connection, ROOT, "notes/clear.md").expect("after"),
+            before
+        );
     }
 
     #[test]

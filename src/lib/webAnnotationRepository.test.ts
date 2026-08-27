@@ -1,15 +1,23 @@
 import { IDBFactory } from "fake-indexeddb";
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  clearDocumentAnnotations,
   createExcerpt,
   createReadingPlace,
   deleteAnnotationEntry,
   listDocumentAnnotations,
   restoreAnnotationEntry,
+  restoreDocumentAnnotations,
   setReviewEnrollment,
   upsertReflection,
 } from "./webAnnotationRepository";
-import { listWebAnnotations, resetWebAnnotationStoreForTests, upsertWebAnnotation } from "./webAnnotations";
+import {
+  listWebAnnotations,
+  openWebUserDatabase,
+  resetWebAnnotationStoreForTests,
+  upsertWebAnnotation,
+} from "./webAnnotations";
+import { requestToPromise, transactionDone } from "./webAnnotationV6";
 
 beforeEach(() => {
   resetWebAnnotationStoreForTests();
@@ -18,7 +26,7 @@ beforeEach(() => {
 
 describe("web v6 annotation repository", () => {
   it("creates an excerpt without dual-writing the legacy store, and skips review enrollment", async () => {
-    const excerpt = await createExcerpt({
+    const { excerpt, reflection } = await createExcerpt({
       id: "ex-1",
       relativePath: "notes/a.md",
       sourceText: "hello world",
@@ -31,7 +39,8 @@ describe("web v6 annotation repository", () => {
       },
       appearance: { style: "highlight", tone: "sand" },
       sortIndex: "M|00000|00001024",
-    });
+    }, null);
+    expect(reflection).toBeNull();
     expect(excerpt.legacyColor).toBe("yellow");
     expect(excerpt.sourceRevision).toBeNull();
 
@@ -80,7 +89,7 @@ describe("web v6 annotation repository", () => {
       },
       appearance: { style: "highlight", tone: "sage" },
       sortIndex: "M|00000|00001024",
-    });
+    }, null);
     const [legacy] = await listWebAnnotations("notes/a.md");
     await upsertWebAnnotation({
       ...legacy,
@@ -122,7 +131,7 @@ describe("web v6 annotation repository", () => {
       },
       appearance: { style: "highlight", tone: "sand" },
       sortIndex: "M|00000|00001024",
-    });
+    }, null);
     await createReadingPlace({
       id: "pl-2",
       relativePath: "notes/a.md",
@@ -146,5 +155,125 @@ describe("web v6 annotation repository", () => {
 
     await restoreAnnotationEntry("ex-2", "excerpt");
     expect((await listDocumentAnnotations("notes/a.md")).excerpts).toHaveLength(1);
+  });
+
+  it("creates excerpt and optional reflection atomically", async () => {
+    const draft = {
+      id: "ex-atomic",
+      relativePath: "notes/atomic.md",
+      sourceText: "atomic quote",
+      anchor: {
+        format: "markdown" as const,
+        quote: { exact: "atomic quote", prefix: "", suffix: "" },
+        headingId: null,
+      },
+      appearance: { style: "highlight" as const, tone: "sand" as const },
+      sortIndex: "M|00000|00000042",
+    };
+
+    await expect(createExcerpt(draft, "   ")).rejects.toThrow("感悟");
+    expect(await listDocumentAnnotations("notes/atomic.md")).toEqual({
+      excerpts: [],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    });
+
+    const result = await createExcerpt(draft, "  同一事务  ");
+    expect(result.reflection).toMatchObject({
+      entryId: "ex-atomic",
+      body: "同一事务",
+      createdAt: result.excerpt.createdAt,
+      updatedAt: result.excerpt.updatedAt,
+    });
+  });
+
+  it("round-trips a complete clear snapshot without touching legacy shells", async () => {
+    const capture = await createExcerpt(
+      {
+        id: "ex-roundtrip",
+        relativePath: "notes/roundtrip.md",
+        sourceText: "remember this",
+        anchor: {
+          format: "markdown",
+          quote: { exact: "remember this", prefix: "", suffix: "" },
+          headingId: "review",
+        },
+        appearance: { style: "underline", tone: "sage" },
+        sortIndex: "M|00000|00000100",
+      },
+      "excerpt reflection",
+    );
+    await createReadingPlace({
+      id: "place-roundtrip",
+      relativePath: "notes/roundtrip.md",
+      title: "resume here",
+      target: { format: "markdown", headingId: "review", scrollRatio: 0.4 },
+      sortIndex: "M|00000|40000000",
+    });
+    await upsertReflection("place-roundtrip", "place", "place reflection");
+    const enrollment = await setReviewEnrollment(capture.excerpt.id, true);
+    expect(enrollment).not.toBeNull();
+
+    const db = await openWebUserDatabase();
+    const enrollmentTx = db.transaction("reviewEnrollments", "readwrite");
+    enrollmentTx.objectStore("reviewEnrollments").put({
+      ...enrollment!,
+      box: 4,
+      dueAt: 123,
+      lastReviewedAt: 99,
+      totalReviews: 7,
+      suspended: true,
+      updatedAt: 456,
+    });
+    await transactionDone(enrollmentTx);
+
+    const before = await listDocumentAnnotations("notes/roundtrip.md");
+    const snapshot = await clearDocumentAnnotations("notes/roundtrip.md");
+    expect(snapshot).toEqual(before);
+    expect((await listDocumentAnnotations("notes/roundtrip.md")).excerpts).toEqual([]);
+
+    const restored = await restoreDocumentAnnotations("notes/roundtrip.md", snapshot);
+    expect(restored).toEqual(before);
+
+    const legacyTx = db.transaction(["annotations", "annotationReviews"], "readonly");
+    const [legacyAnnotations, legacyReviews] = await Promise.all([
+      requestToPromise(legacyTx.objectStore("annotations").getAll()),
+      requestToPromise(legacyTx.objectStore("annotationReviews").getAll()),
+    ]);
+    expect(legacyAnnotations).toEqual([]);
+    expect(legacyReviews).toEqual([]);
+  });
+
+  it("rejects an invalid restore before writing any rows", async () => {
+    const capture = await createExcerpt(
+      {
+        id: "ex-invalid-restore",
+        relativePath: "notes/invalid.md",
+        sourceText: "payload",
+        anchor: {
+          format: "markdown",
+          quote: { exact: "payload", prefix: "", suffix: "" },
+          headingId: null,
+        },
+        appearance: { style: "highlight", tone: "slate" },
+        sortIndex: "M|00000|00000001",
+      },
+      null,
+    );
+    const snapshot = await clearDocumentAnnotations("notes/invalid.md");
+    snapshot.reflections.push({
+      entryId: capture.excerpt.id,
+      entryKind: "place",
+      body: "mismatched",
+      createdAt: 1,
+      updatedAt: 1,
+      deletedAt: null,
+    });
+
+    await expect(restoreDocumentAnnotations("notes/invalid.md", snapshot)).rejects.toThrow(
+      "错配感悟",
+    );
+    expect((await listDocumentAnnotations("notes/invalid.md")).excerpts).toEqual([]);
   });
 });
