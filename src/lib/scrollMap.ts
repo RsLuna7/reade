@@ -19,7 +19,7 @@ export const SCROLL_MAP_MAX_MARKS = 200;
 export const SCROLL_MAP_MERGE_EPSILON = 0.002;
 export const SCROLL_MAP_LABEL_MAX_CHARS = 24;
 
-export type ScrollMapMarkKind = "annotation" | "bookmark" | "search" | "tts";
+export type ScrollMapMarkKind = "annotation" | "bookmark" | "search";
 
 /** One measured input point in document space (px within the scroller). */
 export interface ScrollMapPoint {
@@ -110,13 +110,13 @@ function safeQuery(root: HTMLElement, selector: string): HTMLElement | null {
   }
 }
 
-const KIND_WORDS: Record<Exclude<ScrollMapMarkKind, "tts">, string> = {
+const KIND_WORDS: Record<ScrollMapMarkKind, string> = {
   annotation: "标注",
   bookmark: "书签",
   search: "命中",
 };
 
-function pointLabel(kind: Exclude<ScrollMapMarkKind, "tts">, excerpt: string): string {
+function pointLabel(kind: ScrollMapMarkKind, excerpt: string): string {
   const text = truncateScrollMapLabel(excerpt);
   return text ? `${KIND_WORDS[kind]} · ${text}` : KIND_WORDS[kind];
 }
@@ -236,15 +236,4 @@ export function collectSearchScrollPoints(
     });
   }
   return points;
-}
-
-/** TTS 当前句刻度的 ratio(单枚,随 sentenceIndex 更新)。 */
-export function ttsRatioFromRect(
-  scroller: HTMLElement,
-  rect: { top: number } | null,
-): number | null {
-  if (!rect) return null;
-  const scrollHeight = scroller.scrollHeight;
-  if (!Number.isFinite(scrollHeight) || scrollHeight <= 0) return null;
-  return Math.min(1, Math.max(0, offsetInScroller(scroller, rect.top) / scrollHeight));
 }

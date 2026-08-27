@@ -76,6 +76,12 @@ describe("application CSS isolation", () => {
     );
   });
 
+  it("keeps the skip link fixed above the three-column chrome", () => {
+    expect(css).toMatch(/\.skip-link\s*\{[^}]*position:\s*fixed/s);
+    expect(css).toMatch(/\.skip-link\s*\{[^}]*z-index:\s*80/s);
+    expect(css).toMatch(/\.skip-link:focus(?:-visible)?[^{]*\{[^}]*outline:\s*2px solid/s);
+  });
+
   it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
     // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
     // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。

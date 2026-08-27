@@ -167,6 +167,45 @@ a:focus-visible {
   background: var(--paper);
 }
 
+/* 跳到正文：position:fixed 不占 reader-shell 的 grid 轨道；焦点环落在
+   中间栏左侧，避免被文档库侧栏盖住。 */
+.skip-link {
+  position: fixed;
+  z-index: 80;
+  top: 10px;
+  left: calc(var(--sidebar-width) + 16px);
+  padding: 8px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--accent-ink);
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  font-size: 13px;
+  font-weight: 650;
+  text-decoration: none;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.skip-link:focus,
+.skip-link:focus-visible {
+  clip-path: none;
+  width: auto;
+  height: auto;
+  overflow: visible;
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.article-shell:focus,
+.article-shell:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 3px;
+}
+
 .library-sidebar {
   position: relative;
   z-index: 4;
@@ -1757,15 +1796,6 @@ a:focus-visible {
 .scroll-map-tick--search {
   border: 2px solid var(--accent);
   background: transparent;
-}
-
-/* 朗读当前句:横线而非圆点(§3.1),随句号实时移动。 */
-.scroll-map-tick--tts {
-  width: 12px;
-  height: 3px;
-  border: none;
-  border-radius: 2px;
-  background: var(--ink);
 }
 
 /* ---- 聚焦模式(plan-focus-mode) ---- */
@@ -3780,18 +3810,8 @@ a:focus-visible {
 .annotation-mark--underline.annotation-mark--green { border-bottom-color: var(--excerpt-sage-line); }
 .annotation-mark--underline.annotation-mark--blue { border-bottom-color: var(--excerpt-slate-line); }
 
-/* 朗读当前句(RA-D3 修订):CSS Custom Highlight,零 DOM 变异——React
-   重渲不可能再与句高亮冲突(P1 insertBefore 崩溃的根修复)。仍是选区色
-   语义的瞬时状态:--selection 从原始元素继承,四主题系列自动适配;与
-   批注 mark 叠加时高亮罩在四色底之上,视觉可辨。highlight 伪元素只支持
-   文字级属性,原 box-shadow 光晕不再保留;不支持该 API 的运行时无视觉
-   高亮,仅保留滚动跟随(useReadAloud 的降级路径)。 */
-::highlight(reade-tts-active) {
-  background-color: var(--selection);
-}
-
-/* 段落分享深链的一次性强调(plan-web-text-deeplink DL-D3):与朗读句
-   高亮同 API 第二注册名,选区色语义,2.4s 后由 App 移除注册即消失。 */
+/* 段落分享深链的一次性强调(plan-web-text-deeplink DL-D3):CSS Custom
+   Highlight,选区色语义,2.4s 后由 App 移除注册即消失。 */
 ::highlight(reade-deeplink) {
   background-color: var(--selection);
 }
@@ -3843,9 +3863,8 @@ a:focus-visible {
   font-size: 12px;
 }
 
-/* 朗读控制条(plan-read-aloud §3.6):阅读区底部浮动,与重定位确认条同位。 */
-/* ---- 读完接着读(plan-read-next):fixed 右下轻卡片,与朗读条同
-   区位但互斥渲染(RN-D3)。 ---- */
+/* ---- 读完接着读(plan-read-next):fixed 右下轻卡片,与自动推进胶囊同
+   区位但互斥渲染。 ---- */
 .read-next-card {
   position: fixed;
   right: 24px;
@@ -3933,21 +3952,6 @@ a:focus-visible {
   border-radius: 5px;
   font-size: 9px;
   letter-spacing: 0.06em;
-}
-
-.read-aloud-bar {
-  position: fixed;
-  right: 24px;
-  bottom: 24px;
-  z-index: 44;
-  display: grid;
-  gap: 8px;
-  width: min(420px, calc(100vw - 48px));
-  padding: 10px 12px;
-  border: 1px solid var(--line-strong);
-  border-radius: 14px;
-  background: var(--paper-raised);
-  box-shadow: var(--shadow);
 }
 
 /* 自动推进(plan-auto-pace 隐式修订):默认角落小胶囊,悬停/聚焦展开。
@@ -4081,93 +4085,6 @@ a:focus-visible {
 :root[data-motion="off"] .auto-pace-bar,
 :root[data-motion="off"] .auto-pace-details {
   transition: none;
-}
-
-.read-aloud-transport {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.read-aloud-transport button {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  min-width: 28px;
-  padding: 5px 7px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink-soft);
-  background: var(--paper);
-  font-size: 12px;
-}
-
-.read-aloud-transport .read-aloud-toggle {
-  border-color: var(--line-strong);
-  color: var(--accent-ink);
-  background: color-mix(in srgb, var(--accent-soft) 80%, transparent);
-}
-
-.read-aloud-transport .read-aloud-restart {
-  white-space: nowrap;
-}
-
-.read-aloud-progress {
-  overflow: hidden;
-  flex: 1;
-  color: var(--muted);
-  font-size: 12px;
-  text-align: center;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.read-aloud-settings {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.read-aloud-rate {
-  display: flex;
-  flex: 1;
-  align-items: center;
-  gap: 8px;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.read-aloud-rate strong {
-  color: var(--ink-soft);
-  font-weight: 600;
-}
-
-.read-aloud-rate input[type="range"] {
-  flex: 1;
-  min-width: 60px;
-}
-
-.read-aloud-voice {
-  display: flex;
-  overflow: hidden;
-  align-items: center;
-  gap: 6px;
-  color: var(--muted);
-  font-size: 12px;
-  white-space: nowrap;
-}
-
-.read-aloud-voice select {
-  overflow: hidden;
-  max-width: 150px;
-  padding: 4px 6px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  color: var(--ink);
-  background: var(--paper);
-  font-size: 12px;
-  text-overflow: ellipsis;
 }
 
 /* 合集分区(CO-D1):文档树上方,搜索时由 App 隐藏。 */
@@ -5397,6 +5314,29 @@ a:focus-visible {
   font-weight: 700;
 }
 
+.settings-advanced {
+  margin-top: 16px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.settings-advanced-summary {
+  cursor: pointer;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
+.settings-advanced-summary:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.settings-advanced[open] .settings-advanced-summary {
+  color: var(--accent-ink);
+}
+
 .setting-row {
   margin-top: 15px;
 }
@@ -6219,11 +6159,6 @@ a:focus-visible {
   /* 正文与浮层为底部工具条让位。 */
   :root[data-runtime="web"] .article-shell {
     padding-bottom: 150px;
-  }
-
-  :root[data-runtime="web"] .read-aloud-bar {
-    right: 12px;
-    bottom: calc(72px + env(safe-area-inset-bottom, 0px));
   }
 
   :root[data-runtime="web"] .auto-pace-bar {

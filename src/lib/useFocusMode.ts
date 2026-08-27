@@ -52,7 +52,7 @@ export function useFocusMode(options: {
   contentKey: string | null;
   spotlight: boolean;
   typewriter: boolean;
-  /** TTS 播放中打字机让位（§3.4）。 */
+  /** 自动推进播放中打字机让位。 */
   typewriterSuspended: boolean;
   motionLevel: ReaderMotionLevel;
 }): void {

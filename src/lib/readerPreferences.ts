@@ -19,7 +19,6 @@ import {
 import { AUTO_PACE_BIAS_DEFAULT, clampAutoPaceBias } from "./autoPace";
 import { normalizeReviewCardMode, type ReviewCardMode } from "./clozeCard";
 import type { ReaderMotionLevel } from "./motion";
-import { clampTtsRate, TTS_DEFAULT_RATE } from "./ttsPlayer";
 import {
   LEGACY_THEME_ID_MAP,
   normalizeReaderTheme,
@@ -166,8 +165,6 @@ export interface ReaderPreferences {
   autoPaceBias: number;
   readNextEnabled: boolean;
   libraryViewMode: LibraryViewMode;
-  ttsRate: number;
-  ttsVoiceName: string | null;
   reviewCardMode: ReviewCardMode;
 }
 
@@ -195,15 +192,13 @@ export function createDefaultReaderPreferences(
     autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
     readNextEnabled: true,
     libraryViewMode: "tree",
-    ttsRate: TTS_DEFAULT_RATE,
-    ttsVoiceName: null,
     reviewCardMode: "excerpt",
   };
 }
 
 /**
  * Fields restored by settings "reset preferences".
- * Theme, library view, TTS, review mode, expanded paths, and daily goal stay.
+ * Theme, library view, review mode, expanded paths, and daily goal stay.
  */
 export function createResettablePreferencePatch(): Omit<
   ReaderPreferences,
@@ -211,8 +206,6 @@ export function createResettablePreferencePatch(): Omit<
   | "expandedPaths"
   | "dailyGoalMinutes"
   | "libraryViewMode"
-  | "ttsRate"
-  | "ttsVoiceName"
   | "reviewCardMode"
 > {
   const defaults = createDefaultReaderPreferences();
@@ -260,8 +253,6 @@ export function pickPersistedPreferences(state: ReaderPreferences): PersistedRea
     autoPaceBias: state.autoPaceBias,
     readNextEnabled: state.readNextEnabled,
     libraryViewMode: state.libraryViewMode,
-    ttsRate: state.ttsRate,
-    ttsVoiceName: state.ttsVoiceName,
     reviewCardMode: state.reviewCardMode,
   };
 }
@@ -332,8 +323,6 @@ export function migrateReaderPreferences(
     ...(typeof state.libraryViewMode === "string"
       ? { libraryViewMode: normalizeLibraryViewMode(state.libraryViewMode) }
       : {}),
-    ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
-    ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
     ...(typeof state.reviewCardMode === "string"
       ? { reviewCardMode: normalizeReviewCardMode(state.reviewCardMode) }
       : {}),
@@ -401,14 +390,6 @@ export function mergeReaderPreferences(
       preferences.libraryViewMode,
       current.libraryViewMode,
     ),
-    ttsRate:
-      typeof preferences.ttsRate === "number"
-        ? clampTtsRate(preferences.ttsRate)
-        : current.ttsRate,
-    ttsVoiceName:
-      typeof preferences.ttsVoiceName === "string" && preferences.ttsVoiceName
-        ? preferences.ttsVoiceName
-        : current.ttsVoiceName,
     reviewCardMode: normalizeReviewCardMode(
       preferences.reviewCardMode,
       current.reviewCardMode,
