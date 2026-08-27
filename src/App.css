@@ -201,24 +201,25 @@ a:focus-visible {
   height: 35px;
   place-items: center;
   flex: 0 0 auto;
+  overflow: hidden;
   border-radius: 10px 10px 10px 3px;
-  color: #fffaf0;
   background: var(--accent);
   box-shadow: 0 7px 17px rgba(143, 59, 42, 0.18);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 19px;
-  font-weight: 700;
 }
 
-.brand-mark::after {
-  position: absolute;
-  right: 5px;
-  bottom: 4px;
-  width: 9px;
-  height: 1px;
-  content: "";
-  background: rgba(255, 255, 255, 0.75);
-  box-shadow: 0 -3px 0 rgba(255, 255, 255, 0.55);
+.brand-companion {
+  display: block;
+  width: 35px;
+  height: 35px;
+}
+
+.brand-companion-eye {
+  fill: #fff6ea;
+}
+
+.brand-companion-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
 }
 
 .brand-copy {
