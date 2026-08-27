@@ -23,8 +23,9 @@ use user_store::{
     list_document_annotations, list_document_fingerprints, list_review_queue,
     rebind_document_annotations, record_excerpt_review_outcome, record_review_outcome,
     remove_collection_item, rename_collection, reorder_collection_items, restore_annotation_entry,
-    review_summary, search_annotation_entries, search_annotations, set_review_enrollment,
-    update_excerpt_appearance, upsert_annotation, upsert_reflection, UserState,
+    restore_document_annotations, review_summary, search_annotation_entries, search_annotations,
+    set_review_enrollment, update_excerpt_appearance, upsert_annotation, upsert_reflection,
+    UserState,
 };
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
@@ -74,6 +75,7 @@ pub fn run() {
             upsert_annotation,
             delete_annotation,
             clear_document_annotations,
+            restore_document_annotations,
             list_document_annotations,
             create_excerpt,
             update_excerpt_appearance,

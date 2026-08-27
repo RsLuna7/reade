@@ -161,15 +161,31 @@ describe("v6 annotation IPC wrappers", () => {
       sortIndex: "M|00000|00000000",
     };
 
-    const { createExcerpt, createReadingPlace, deleteAnnotationEntry, deleteReflection, listDocumentAnnotations, restoreAnnotationEntry, setReviewEnrollment, updateExcerptAppearance, upsertReflection } = await import("./tauriBackend");
+    const { clearDocumentAnnotations, createExcerpt, createReadingPlace, deleteAnnotationEntry, deleteReflection, listDocumentAnnotations, restoreAnnotationEntry, restoreDocumentAnnotations, setReviewEnrollment, updateExcerptAppearance, upsertReflection } = await import("./tauriBackend");
 
     await listDocumentAnnotations("notes/a.md");
     expect(invokeMock).toHaveBeenCalledWith("list_document_annotations", {
       relativePath: "notes/a.md",
     });
 
-    await createExcerpt(draft);
-    expect(invokeMock).toHaveBeenCalledWith("create_excerpt", { draft });
+    await createExcerpt(draft, null);
+    expect(invokeMock).toHaveBeenCalledWith("create_excerpt", { draft, reflectionBody: null });
+
+    const snapshot = {
+      excerpts: [],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+    };
+    await clearDocumentAnnotations("notes/a.md");
+    expect(invokeMock).toHaveBeenCalledWith("clear_document_annotations", {
+      relativePath: "notes/a.md",
+    });
+    await restoreDocumentAnnotations("notes/a.md", snapshot);
+    expect(invokeMock).toHaveBeenCalledWith("restore_document_annotations", {
+      relativePath: "notes/a.md",
+      snapshot,
+    });
 
     await updateExcerptAppearance("ex-1", { style: "underline", tone: "sage" });
     expect(invokeMock).toHaveBeenCalledWith("update_excerpt_appearance", {
@@ -242,5 +258,27 @@ describe("v6 annotation IPC wrappers", () => {
       lastReviewedAt: 1,
       suspended: false,
     });
+  });
+});
+
+describe("IPC command name parity with Rust generate_handler", () => {
+  it("keeps tauriBackend invoke names equal to lib.rs handler names", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const root = resolve(import.meta.dirname, "../..");
+    const rust = await readFile(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const ts = await readFile(resolve(root, "src/lib/tauriBackend.ts"), "utf8");
+
+    const handlerBlock = rust.match(/tauri::generate_handler!\s*\[\s*([\s\S]*?)\]/);
+    expect(handlerBlock).not.toBeNull();
+    const rustCommands = [
+      ...(handlerBlock?.[1].matchAll(/^\s*([a-z][a-z0-9_]*)\s*,?\s*(?:\/\/.*)?$/gm) ?? []),
+    ].map((match) => match[1]);
+    const tsCommands = [...ts.matchAll(/invoke\(\s*"([a-z][a-z0-9_]*)"/g)].map(
+      (match) => match[1],
+    );
+
+    expect([...new Set(tsCommands)].sort()).toEqual([...new Set(rustCommands)].sort());
+    expect(new Set(tsCommands).size).toBe(56);
   });
 });

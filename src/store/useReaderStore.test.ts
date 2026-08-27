@@ -65,6 +65,7 @@ describe("reading settings", () => {
       underlineColor: "blue",
       annotationColorNames: { yellow: "暖砂", green: "青灰", blue: "墨蓝", pink: "旧粉" },
       fuzzyAnnotationAnchoring: false,
+      allowRemoteImages: false,
       showHighlightCaret: false,
       expandedPaths: [],
       treeLayout: {},
@@ -424,6 +425,47 @@ describe("reading settings", () => {
     useReaderStore.getState().setFuzzyAnnotationAnchoring(true);
     useReaderStore.getState().resetReaderPreferences();
     expect(useReaderStore.getState().fuzzyAnnotationAnchoring).toBe(false);
+  });
+
+  it("persists allowRemoteImages and defaults it off", async () => {
+    expect(useReaderStore.getState().allowRemoteImages).toBe(false);
+
+    useReaderStore.getState().setAllowRemoteImages(true);
+    expect(useReaderStore.getState().allowRemoteImages).toBe(true);
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ allowRemoteImages: true });
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { allowRemoteImages: true },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().allowRemoteImages).toBe(true);
+  });
+
+  it("collapses corrupt allowRemoteImages values and resets with preferences", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { allowRemoteImages: "yes" },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().allowRemoteImages).toBe(false);
+
+    expect(
+      migrateReaderPreferences({ theme: "paper-light" }, READER_PREFERENCES_VERSION),
+    ).not.toHaveProperty("allowRemoteImages");
+
+    useReaderStore.getState().setAllowRemoteImages(true);
+    useReaderStore.getState().resetReaderPreferences();
+    expect(useReaderStore.getState().allowRemoteImages).toBe(false);
   });
 
   it("persists the highlight-caret switch and defaults it off", async () => {
@@ -928,6 +970,54 @@ describe("navigation history (plan-nav-history)", () => {
     await useReaderStore.getState().openLibrary("D:/next-library");
     expect(backendMocks.openLibrary).toHaveBeenCalledWith("D:/next-library");
     expect(useReaderStore.getState().navHistory).toEqual({ back: [], forward: [] });
+  });
+
+  it("ignores a slower openLibrary response after a newer open wins", async () => {
+    let resolveSlow: ((snapshot: import("../lib/backend").LibrarySnapshot) => void) | undefined;
+    const slow = new Promise<import("../lib/backend").LibrarySnapshot>((resolve) => {
+      resolveSlow = resolve;
+    });
+    backendMocks.openLibrary
+      .mockReset()
+      .mockImplementationOnce(async () => slow)
+      .mockImplementationOnce(async (rootPath) => ({
+        rootPath,
+        documents: [
+          {
+            relativePath: "fast.md",
+            title: "fast",
+            size: 1,
+            modified: 1,
+            format: "markdown",
+            indexStatus: "ready",
+            indexError: null,
+          },
+        ],
+      }));
+
+    const slowOpen = useReaderStore.getState().openLibrary("D:/slow-library");
+    await useReaderStore.getState().openLibrary("D:/fast-library");
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:/fast-library");
+
+    resolveSlow?.({
+      rootPath: "D:/slow-library",
+      documents: [
+        {
+          relativePath: "slow.md",
+          title: "slow",
+          size: 1,
+          modified: 1,
+          format: "markdown",
+          indexStatus: "ready",
+          indexError: null,
+        },
+      ],
+    });
+    await slowOpen;
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:/fast-library");
+    expect(useReaderStore.getState().documents.map((item) => item.relativePath)).toEqual([
+      "fast.md",
+    ]);
   });
 });
 

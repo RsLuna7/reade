@@ -19,7 +19,6 @@ import {
 import {
   DEFAULT_ANNOTATION_COLOR_NAMES,
   normalizeAnnotationColorName,
-  normalizeAnnotationColorNames,
 } from "../lib/annotations";
 import {
   isAnnotationTone,
@@ -28,7 +27,6 @@ import {
   type AnnotationTone,
 } from "../lib/annotationModel";
 import { normalizeReviewCardMode, type ReviewCardMode } from "../lib/clozeCard";
-import type { ReaderMotionLevel } from "../lib/motion";
 import {
   EMPTY_NAV_HISTORY,
   popNavBack,
@@ -37,18 +35,13 @@ import {
   type NavHistory,
   type NavLocation,
 } from "../lib/navHistory";
-import { clampTtsRate, TTS_DEFAULT_RATE } from "../lib/ttsPlayer";
+import { clampTtsRate } from "../lib/ttsPlayer";
+import { clampAutoPaceBias } from "../lib/autoPace";
 import {
-  AUTO_PACE_BIAS_DEFAULT,
-  clampAutoPaceBias,
-} from "../lib/autoPace";
-import {
-  LEGACY_THEME_ID_MAP,
   SERIES_FONT_PRESET,
   THEME_META,
   type ReaderTheme,
   type ThemeSeriesId,
-  isReaderTheme,
   normalizeReaderTheme,
   setSeries,
   toggleThemeMode,
@@ -68,57 +61,63 @@ import {
 // 竖排模式（plan-vertical-writing VW-D1）：每文档记忆的读写在 lib，
 // store 只持有"当前文档是否竖排"的会话镜像。
 import { readVerticalPreference, writeVerticalPreference } from "../lib/verticalWriting";
+import {
+  CONTENT_WIDTH_MAX,
+  CONTENT_WIDTH_MIN,
+  DEFAULT_READING_SETTINGS,
+  MAX_DAILY_GOAL_MINUTES,
+  READER_PREFERENCES_STORAGE_KEY,
+  READER_PREFERENCES_VERSION,
+  createDefaultReaderPreferences,
+  createResettablePreferencePatch,
+  getSystemMotionLevel,
+  mergeReaderPreferences,
+  migrateReaderPreferences,
+  normalizeAnnotationColor,
+  normalizeDailyGoalMinutes,
+  normalizeFuzzyAnnotationAnchoring,
+  normalizeLibraryViewMode,
+  normalizeMotionLevel,
+  normalizeReadingSettings,
+  pickPersistedPreferences,
+  type AnnotationColorPreference,
+  type LibraryViewMode,
+  type ReaderFontFamily,
+  type ReadingSettings,
+} from "../lib/readerPreferences";
 
 export type { ReaderMotionLevel } from "../lib/motion";
 export type { ReaderTheme, ThemeSeriesId } from "../lib/themes";
 export { THEME_IDS, THEME_META, THEME_SERIES, normalizeReaderTheme } from "../lib/themes";
-
-export type ReaderFontFamily = "system" | "sans" | "serif";
-
-export interface ReadingSettings {
-  fontSize: number;
-  lineHeight: number;
-  /** Max article width in px. At CONTENT_WIDTH_MAX the measure is fluid (no cap). */
-  contentWidth: number;
-  paragraphSpacing: number;
-  fontFamily: ReaderFontFamily;
-}
-
-export const CONTENT_WIDTH_MIN = 560;
-export const CONTENT_WIDTH_MAX = 1600;
-
-export const DEFAULT_READING_SETTINGS: ReadingSettings = {
-  fontSize: 17,
-  lineHeight: 1.9,
-  contentWidth: CONTENT_WIDTH_MAX,
-  paragraphSpacing: 1,
-  fontFamily: "system",
+export {
+  CONTENT_WIDTH_MAX,
+  CONTENT_WIDTH_MIN,
+  DEFAULT_READING_SETTINGS,
+  MAX_DAILY_GOAL_MINUTES,
+  READER_PREFERENCES_STORAGE_KEY,
+  READER_PREFERENCES_VERSION,
+  getSystemMotionLevel,
+  migrateReaderPreferences,
+  normalizeAnnotationColor,
+  normalizeDailyGoalMinutes,
+  normalizeFuzzyAnnotationAnchoring,
+  normalizeLibraryViewMode,
+  normalizeMotionLevel,
+  normalizeReadingSettings,
+  type AnnotationColorPreference,
+  type LibraryViewMode,
+  type ReaderFontFamily,
+  type ReadingSettings,
 };
 
-export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
-export const READER_PREFERENCES_VERSION = 4;
+import type { ReaderMotionLevel } from "../lib/motion";
 
 export type AnnotationToolPreference = "view" | "highlight" | "underline";
-export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
 /**
  * Workspace view: home dashboard, reading surface, reading statistics,
  * daily annotation review or the full-screen annotation hub.
  */
 export type ReaderView = "home" | "reader" | "stats" | "review" | "annotations";
-
-/** 库 tab 的浏览形态（plan-bookshelf-covers BC-D4）：文档树或书架网格。 */
-export type LibraryViewMode = "tree" | "shelf";
-
-const LIBRARY_VIEW_MODES = new Set<LibraryViewMode>(["tree", "shelf"]);
-
-export function normalizeLibraryViewMode(
-  value: unknown,
-  fallback: LibraryViewMode = "tree",
-): LibraryViewMode {
-  return typeof value === "string" && LIBRARY_VIEW_MODES.has(value as LibraryViewMode)
-    ? (value as LibraryViewMode)
-    : fallback;
-}
 
 const READER_VIEWS = new Set<ReaderView>([
   "home",
@@ -129,11 +128,6 @@ const READER_VIEWS = new Set<ReaderView>([
 ]);
 
 const ANNOTATION_TOOLS = new Set<AnnotationToolPreference>(["view", "highlight", "underline"]);
-const ANNOTATION_COLORS = new Set<AnnotationColorPreference>(["yellow", "green", "blue", "pink"]);
-
-function isStoredAnnotationColor(value: unknown): value is AnnotationColorPreference {
-  return typeof value === "string" && ANNOTATION_COLORS.has(value as AnnotationColorPreference);
-}
 
 export function normalizeAnnotationTool(
   value: unknown,
@@ -142,63 +136,6 @@ export function normalizeAnnotationTool(
   return typeof value === "string" && ANNOTATION_TOOLS.has(value as AnnotationToolPreference)
     ? (value as AnnotationToolPreference)
     : fallback;
-}
-
-export function normalizeAnnotationColor(
-  value: unknown,
-  fallback: AnnotationColorPreference = "yellow",
-): AnnotationColorPreference {
-  return typeof value === "string" && ANNOTATION_COLORS.has(value as AnnotationColorPreference)
-    ? (value as AnnotationColorPreference)
-    : fallback;
-}
-
-const FONT_FAMILIES = new Set<ReaderFontFamily>(["system", "sans", "serif"]);
-const MOTION_LEVELS = new Set<ReaderMotionLevel>(["off", "subtle", "full"]);
-export const MAX_DAILY_GOAL_MINUTES = 24 * 60;
-
-/**
- * Fuzzy annotation anchoring is opt-in (report Q2: a fuzzy hit has no score
- * floor and may land on similar-but-different text), so anything that is not
- * an explicit boolean collapses to the fallback.
- */
-export function normalizeFuzzyAnnotationAnchoring(value: unknown, fallback = false): boolean {
-  return typeof value === "boolean" ? value : fallback;
-}
-
-function clamp(value: number, minimum: number, maximum: number): number {
-  if (!Number.isFinite(value)) return minimum;
-  return Math.min(maximum, Math.max(minimum, value));
-}
-
-/** Daily reading goal in minutes; 0 disables the goal. */
-export function normalizeDailyGoalMinutes(value: unknown, fallback = 0): number {
-  if (typeof value !== "number" || !Number.isFinite(value)) return fallback;
-  return Math.round(clamp(value, 0, MAX_DAILY_GOAL_MINUTES));
-}
-
-export function normalizeReadingSettings(
-  settings: Partial<ReadingSettings>,
-  current: ReadingSettings = DEFAULT_READING_SETTINGS,
-): ReadingSettings {
-  return {
-    fontSize: clamp(settings.fontSize ?? current.fontSize, 13, 26),
-    lineHeight: clamp(settings.lineHeight ?? current.lineHeight, 1.4, 2.4),
-    contentWidth: clamp(
-      settings.contentWidth ?? current.contentWidth,
-      CONTENT_WIDTH_MIN,
-      CONTENT_WIDTH_MAX,
-    ),
-    paragraphSpacing: clamp(
-      settings.paragraphSpacing ?? current.paragraphSpacing,
-      0.5,
-      2,
-    ),
-    fontFamily:
-      settings.fontFamily && FONT_FAMILIES.has(settings.fontFamily)
-        ? settings.fontFamily
-        : current.fontFamily,
-  };
 }
 
 function preferredTheme(): ReaderTheme {
@@ -210,151 +147,7 @@ function preferredTheme(): ReaderTheme {
     : "paper-light";
 }
 
-export function getSystemMotionLevel(): ReaderMotionLevel {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
-    return "subtle";
-  }
-
-  try {
-    return window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ? "off"
-      : "subtle";
-  } catch {
-    return "subtle";
-  }
-}
-
 export const preferredMotionLevel = getSystemMotionLevel;
-
-export function normalizeMotionLevel(
-  value: unknown,
-  fallback: ReaderMotionLevel = getSystemMotionLevel(),
-): ReaderMotionLevel {
-  return typeof value === "string" && MOTION_LEVELS.has(value as ReaderMotionLevel)
-    ? (value as ReaderMotionLevel)
-    : fallback;
-}
-
-type PersistedReaderPreferences = Partial<
-  Pick<
-    ReaderState,
-    | "theme"
-    | "readingSettings"
-    | "expandedPaths"
-    | "motionLevel"
-    | "highlightColor"
-    | "underlineColor"
-    | "excerptTone"
-    | "annotationColorNames"
-    | "dailyGoalMinutes"
-    | "fuzzyAnnotationAnchoring"
-    | "allowRemoteImages"
-    | "showHighlightCaret"
-    | "showScrollMap"
-    | "focusSpotlight"
-    | "typewriterScroll"
-    | "readingRuler"
-    | "autoPaceEnabled"
-    | "autoPaceBias"
-    | "readNextEnabled"
-    | "libraryViewMode"
-    | "ttsRate"
-    | "ttsVoiceName"
-    | "reviewCardMode"
-  >
->;
-
-export function migrateReaderPreferences(
-  persistedState: unknown,
-  _version: number,
-): PersistedReaderPreferences {
-  if (!persistedState || typeof persistedState !== "object") return {};
-
-  const state = persistedState as PersistedReaderPreferences;
-  // v3 → v4: single-word theme ids became `${series}-${mode}` (D2 one-time map).
-  const rawTheme: unknown = state.theme;
-  const theme =
-    typeof rawTheme === "string" && rawTheme in LEGACY_THEME_ID_MAP
-      ? LEGACY_THEME_ID_MAP[rawTheme]
-      : rawTheme;
-  return {
-    ...(isReaderTheme(theme) ? { theme } : {}),
-    ...(state.readingSettings && typeof state.readingSettings === "object"
-      ? { readingSettings: state.readingSettings }
-      : {}),
-    ...(Array.isArray(state.expandedPaths)
-      ? { expandedPaths: state.expandedPaths }
-      : {}),
-    ...(MOTION_LEVELS.has(state.motionLevel as ReaderMotionLevel)
-      ? { motionLevel: state.motionLevel as ReaderMotionLevel }
-      : {}),
-    // annotationTool is deliberately not migrated: a leftover value from older
-    // persisted data must not re-arm the annotation mode on launch.
-    ...(ANNOTATION_COLORS.has(state.highlightColor as AnnotationColorPreference)
-      ? { highlightColor: state.highlightColor }
-      : {}),
-    ...(ANNOTATION_COLORS.has(state.underlineColor as AnnotationColorPreference)
-      ? { underlineColor: state.underlineColor }
-      : {}),
-    ...(isAnnotationTone(state.excerptTone)
-      ? { excerptTone: state.excerptTone }
-      : isStoredAnnotationColor(state.highlightColor)
-        ? { excerptTone: legacyColorToTone(state.highlightColor) }
-        : {}),
-    // 颜色语义命名(plan-annotation-color-names):缺键/坏值逐色回落默认。
-    ...(state.annotationColorNames && typeof state.annotationColorNames === "object"
-      ? { annotationColorNames: normalizeAnnotationColorNames(state.annotationColorNames) }
-      : {}),
-    ...(typeof state.dailyGoalMinutes === "number"
-      ? { dailyGoalMinutes: state.dailyGoalMinutes }
-      : {}),
-    ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
-      ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
-      : {}),
-    ...(typeof state.allowRemoteImages === "boolean"
-      ? { allowRemoteImages: state.allowRemoteImages }
-      : {}),
-    // 高亮角标:缺键/坏值回默认关(按需启用)。
-    ...(typeof state.showHighlightCaret === "boolean"
-      ? { showHighlightCaret: state.showHighlightCaret }
-      : {}),
-    // 文档地图开关(plan-rich-scrollbar RS-D10):缺键/坏值回默认开。
-    ...(typeof state.showScrollMap === "boolean"
-      ? { showScrollMap: state.showScrollMap }
-      : {}),
-    // 聚焦模式三开关(plan-focus-mode FM-D3):缺键/坏值回默认关。
-    ...(typeof state.focusSpotlight === "boolean"
-      ? { focusSpotlight: state.focusSpotlight }
-      : {}),
-    ...(typeof state.typewriterScroll === "boolean"
-      ? { typewriterScroll: state.typewriterScroll }
-      : {}),
-    ...(typeof state.readingRuler === "boolean"
-      ? { readingRuler: state.readingRuler }
-      : {}),
-    // 自动推进(plan-auto-pace):缺键/坏值回默认关与 bias=1。
-    ...(typeof state.autoPaceEnabled === "boolean"
-      ? { autoPaceEnabled: state.autoPaceEnabled }
-      : {}),
-    ...(typeof state.autoPaceBias === "number"
-      ? { autoPaceBias: clampAutoPaceBias(state.autoPaceBias) }
-      : {}),
-    // 读完接着读(plan-read-next):缺键/坏值回默认开。
-    ...(typeof state.readNextEnabled === "boolean"
-      ? { readNextEnabled: state.readNextEnabled }
-      : {}),
-    // 书架视图(plan-bookshelf-covers BC-D4):缺键/坏值回默认树形。
-    ...(typeof state.libraryViewMode === "string"
-      ? { libraryViewMode: normalizeLibraryViewMode(state.libraryViewMode) }
-      : {}),
-    ...(typeof state.ttsRate === "number" ? { ttsRate: state.ttsRate } : {}),
-    ...(typeof state.ttsVoiceName === "string" ? { ttsVoiceName: state.ttsVoiceName } : {}),
-    // 回顾卡片渲染档(plan-cloze-review CZ-D9):坏值回落默认摘录档。
-    ...(typeof state.reviewCardMode === "string"
-      ? { reviewCardMode: normalizeReviewCardMode(state.reviewCardMode) }
-      : {}),
-  };
-}
 
 function errorMessage(error: unknown): string {
   if (error instanceof Error) return error.message;
@@ -512,6 +305,7 @@ interface ReaderState {
 }
 
 let pendingOperations = 0;
+let libraryRequest = 0;
 let documentRequest = 0;
 let searchRequest = 0;
 
@@ -548,9 +342,11 @@ export const useReaderStore = create<ReaderState>()(
         const trimmedPath = rootPath.trim();
         if (!trimmedPath) return;
 
+        const request = ++libraryRequest;
         beginOperation();
         try {
           const snapshot = await openLibraryFromBackend(trimmedPath);
+          if (request !== libraryRequest) return;
           const tree = buildDocumentTree(snapshot.documents);
           const expandedPaths = reconcileExpandedPaths(get().expandedPaths, tree);
           set({
@@ -570,6 +366,7 @@ export const useReaderStore = create<ReaderState>()(
             verticalWriting: false,
           });
         } catch (error) {
+          if (request !== libraryRequest) return;
           set({ error: errorMessage(error) });
         } finally {
           endOperation();
@@ -585,32 +382,10 @@ export const useReaderStore = create<ReaderState>()(
         indexProgress: null,
         searchQuery: "",
         searchResults: [],
-        theme: preferredTheme(),
-        readingSettings: DEFAULT_READING_SETTINGS,
-        motionLevel: getSystemMotionLevel(),
+        ...createDefaultReaderPreferences(preferredTheme()),
         annotationTool: "view",
-        highlightColor: "yellow",
-        underlineColor: "blue",
-        excerptTone: "sand",
-        annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
-        fuzzyAnnotationAnchoring: false,
-        allowRemoteImages: false,
-        showHighlightCaret: false,
-        showScrollMap: true,
-        focusSpotlight: false,
-        typewriterScroll: false,
-        readingRuler: false,
-        autoPaceEnabled: false,
-        autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
-        readNextEnabled: true,
-        libraryViewMode: "tree",
-        expandedPaths: [],
         treeLayout: {},
         activeView: "reader",
-        dailyGoalMinutes: 0,
-        ttsRate: TTS_DEFAULT_RATE,
-        ttsVoiceName: null,
-        reviewCardMode: "excerpt",
         navHistory: EMPTY_NAV_HISTORY,
         verticalWriting: false,
         loading: false,
@@ -631,9 +406,11 @@ export const useReaderStore = create<ReaderState>()(
           const rootPath = get().snapshot?.rootPath;
           if (!rootPath) return;
 
+          const request = ++libraryRequest;
           beginOperation();
           try {
             const snapshot = await refreshLibraryFromBackend(rootPath);
+            if (request !== libraryRequest) return;
             const tree = buildDocumentTree(snapshot.documents);
             const currentPath = get().currentPath;
             const currentStillExists = snapshot.documents.some(
@@ -655,6 +432,7 @@ export const useReaderStore = create<ReaderState>()(
                   }),
             });
           } catch (error) {
+            if (request !== libraryRequest) return;
             set({ error: errorMessage(error) });
           } finally {
             endOperation();
@@ -933,23 +711,8 @@ export const useReaderStore = create<ReaderState>()(
 
         resetReaderPreferences: () => {
           set({
-            readingSettings: { ...DEFAULT_READING_SETTINGS },
-            motionLevel: getSystemMotionLevel(),
+            ...createResettablePreferencePatch(),
             annotationTool: "view",
-            highlightColor: "yellow",
-            underlineColor: "blue",
-            excerptTone: "sand",
-            annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
-            fuzzyAnnotationAnchoring: false,
-            allowRemoteImages: false,
-            showHighlightCaret: false,
-            showScrollMap: true,
-            focusSpotlight: false,
-            typewriterScroll: false,
-            readingRuler: false,
-            autoPaceEnabled: false,
-            autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
-            readNextEnabled: true,
           });
         },
 
@@ -994,31 +757,7 @@ export const useReaderStore = create<ReaderState>()(
       name: READER_PREFERENCES_STORAGE_KEY,
       version: READER_PREFERENCES_VERSION,
       storage: createJSONStorage(() => localStorage),
-      partialize: (state) => ({
-        theme: state.theme,
-        readingSettings: state.readingSettings,
-        motionLevel: state.motionLevel,
-        expandedPaths: state.expandedPaths,
-        highlightColor: state.highlightColor,
-        underlineColor: state.underlineColor,
-        excerptTone: state.excerptTone,
-        annotationColorNames: state.annotationColorNames,
-        dailyGoalMinutes: state.dailyGoalMinutes,
-        fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
-        allowRemoteImages: state.allowRemoteImages,
-        showHighlightCaret: state.showHighlightCaret,
-        showScrollMap: state.showScrollMap,
-        focusSpotlight: state.focusSpotlight,
-        typewriterScroll: state.typewriterScroll,
-        readingRuler: state.readingRuler,
-        autoPaceEnabled: state.autoPaceEnabled,
-        autoPaceBias: state.autoPaceBias,
-        readNextEnabled: state.readNextEnabled,
-        libraryViewMode: state.libraryViewMode,
-        ttsRate: state.ttsRate,
-        ttsVoiceName: state.ttsVoiceName,
-        reviewCardMode: state.reviewCardMode,
-      }),
+      partialize: (state) => pickPersistedPreferences(state),
       migrate: migrateReaderPreferences,
       merge: (persisted, current) => {
         const preferences = migrateReaderPreferences(
@@ -1027,104 +766,11 @@ export const useReaderStore = create<ReaderState>()(
         );
         return {
           ...current,
-          theme: normalizeReaderTheme(preferences.theme, current.theme),
-          readingSettings: normalizeReadingSettings(
-            preferences.readingSettings ?? {},
-            current.readingSettings,
-          ),
-          motionLevel: normalizeMotionLevel(
-            preferences.motionLevel,
-            current.motionLevel,
-          ),
+          ...mergeReaderPreferences(preferences, current),
           // Always start a session in "view": persisting an armed
           // highlight/underline tool would turn any selection made right
           // after launch (even a copy gesture) into an annotation.
           annotationTool: "view",
-          highlightColor: normalizeAnnotationColor(
-            preferences.highlightColor,
-            current.highlightColor,
-          ),
-          underlineColor: normalizeAnnotationColor(
-            preferences.underlineColor,
-            current.underlineColor,
-          ),
-          excerptTone: isAnnotationTone(preferences.excerptTone)
-            ? preferences.excerptTone
-            : legacyColorToTone(
-                normalizeAnnotationColor(
-                  preferences.highlightColor,
-                  current.highlightColor,
-                ),
-              ),
-          // 旧持久化数据没有该键时,归一函数补齐全部默认名。
-          annotationColorNames: normalizeAnnotationColorNames(
-            preferences.annotationColorNames,
-          ),
-          expandedPaths: Array.isArray(preferences.expandedPaths)
-            ? preferences.expandedPaths.filter(
-                (path): path is string => typeof path === "string",
-              )
-            : current.expandedPaths,
-          dailyGoalMinutes: normalizeDailyGoalMinutes(
-            preferences.dailyGoalMinutes,
-            current.dailyGoalMinutes,
-          ),
-          fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(
-            preferences.fuzzyAnnotationAnchoring,
-            current.fuzzyAnnotationAnchoring,
-          ),
-          allowRemoteImages:
-            typeof preferences.allowRemoteImages === "boolean"
-              ? preferences.allowRemoteImages
-              : current.allowRemoteImages,
-          showHighlightCaret:
-            typeof preferences.showHighlightCaret === "boolean"
-              ? preferences.showHighlightCaret
-              : current.showHighlightCaret,
-          showScrollMap:
-            typeof preferences.showScrollMap === "boolean"
-              ? preferences.showScrollMap
-              : current.showScrollMap,
-          focusSpotlight:
-            typeof preferences.focusSpotlight === "boolean"
-              ? preferences.focusSpotlight
-              : current.focusSpotlight,
-          typewriterScroll:
-            typeof preferences.typewriterScroll === "boolean"
-              ? preferences.typewriterScroll
-              : current.typewriterScroll,
-          readingRuler:
-            typeof preferences.readingRuler === "boolean"
-              ? preferences.readingRuler
-              : current.readingRuler,
-          autoPaceEnabled:
-            typeof preferences.autoPaceEnabled === "boolean"
-              ? preferences.autoPaceEnabled
-              : current.autoPaceEnabled,
-          autoPaceBias:
-            typeof preferences.autoPaceBias === "number"
-              ? clampAutoPaceBias(preferences.autoPaceBias)
-              : current.autoPaceBias,
-          readNextEnabled:
-            typeof preferences.readNextEnabled === "boolean"
-              ? preferences.readNextEnabled
-              : current.readNextEnabled,
-          libraryViewMode: normalizeLibraryViewMode(
-            preferences.libraryViewMode,
-            current.libraryViewMode,
-          ),
-          ttsRate:
-            typeof preferences.ttsRate === "number"
-              ? clampTtsRate(preferences.ttsRate)
-              : current.ttsRate,
-          ttsVoiceName:
-            typeof preferences.ttsVoiceName === "string" && preferences.ttsVoiceName
-              ? preferences.ttsVoiceName
-              : current.ttsVoiceName,
-          reviewCardMode: normalizeReviewCardMode(
-            preferences.reviewCardMode,
-            current.reviewCardMode,
-          ),
         };
       },
     },

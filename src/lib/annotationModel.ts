@@ -151,6 +151,11 @@ export interface DocumentAnnotationBundle {
   reviewEnrollments: ReviewEnrollment[];
 }
 
+export interface ExcerptCaptureResult {
+  excerpt: Excerpt;
+  reflection: Reflection | null;
+}
+
 export interface ExcerptDraft {
   id: string;
   relativePath: string;

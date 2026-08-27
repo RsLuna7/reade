@@ -40,7 +40,7 @@ Reade 是一款本地优先的长文阅读器：Windows 桌面版读取 Markdown
 - 主题切换墨水扩散：完整动效档下从日/月按钮或风格色卡位置做圆形揭示过渡（View Transitions，不支持的浏览器自动回落）
 - 正文默认随窗口铺满中间栏；阅读设置可设最大正文宽度（最右为「随窗口」）
 - 文档内相对链接与本地图片解析
-- 桌面版完全离线；两种运行时均不执行 raw HTML
+- 桌面版默认离线；用户可在阅读设置中允许加载 Markdown 远程 HTTPS 图片。两种运行时均不执行 raw HTML
 - Web 版构建期生成文档 manifest 与搜索数据，支持可分享的 `?doc=文档#章节` URL
 - Web 段落分享深链：选中文字一键复制 `?doc=文档#text=…` 链接，打开时自动定位到该段并短暂高亮，文本已变更时诚实提示
 - Web PWA 离线化：可安装到桌面/主屏，手写零依赖 service worker 让读过的文档断网可读（应用壳版本化更新、内容缓存 LRU 上限），桌面版不注册
@@ -61,7 +61,7 @@ Reade 是一款本地优先的长文阅读器：Windows 桌面版读取 Markdown
 - PDF：PDF.js `pdfjs-dist@6.2.108`；`pdf-inspector@0.1.8` 按页提取阅读文本
 - EPUB：`anydoc@0.1.8` 转换为 Reade 自有安全 DTO
 - Markdown：react-markdown + remark-gfm + remark-math + rehype-katex + rehype-slug
-- Extensions：Shiki（常用语言按需加载）与 Mermaid（懒加载、sandbox）
+- Extensions：Shiki（常用语言按需加载）与 Mermaid（懒加载、`securityLevel: "strict"` 内联 SVG）
 - File/search：`ignore`、`notify`、SQLite FTS5 trigram
 - Web publishing：Node.js 静态库生成器、客户端延迟搜索、GitHub Actions / Pages
 

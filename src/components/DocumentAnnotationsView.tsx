@@ -11,7 +11,7 @@ import {
   type AnnotationOutlineView,
 } from "../lib/annotationOutline";
 import type { TocItem } from "../lib/markdown";
-import { annotationFromBundleEntry } from "../lib/useDocumentAnnotationBundle";
+import { annotationFromBundleEntry } from "../lib/annotationBundle";
 
 function entryId(item: AnnotationOutlineEntry): string {
   return item.entry.id;
