@@ -1795,7 +1795,8 @@ fn migrate_to_v7(transaction: &Connection) -> CommandResult<()> {
             .query_map([], |row| row.get::<_, String>(0))
             .map_err(|error| format!("Cannot read annotation v7 roots: {error}"))?;
         for row in rows {
-            roots.insert(row.map_err(|error| format!("Cannot decode annotation v7 root: {error}"))?);
+            roots
+                .insert(row.map_err(|error| format!("Cannot decode annotation v7 root: {error}"))?);
         }
     }
 
@@ -2951,11 +2952,6 @@ fn list_annotation_rows(
     Ok(annotations)
 }
 
-/// The 12 annotation columns every row-decoding query must select, in the
-/// exact order `annotation_from_row` expects.
-const ANNOTATION_COLUMNS: &str = "id, relative_path, kind, color, note, selected_text, title,
-     locator_json, sort_index, created_at, updated_at, deleted_at";
-
 fn transfer_annotation_rows(connection: &Connection, root: &str) -> CommandResult<Vec<Annotation>> {
     reverse_project_v6_annotations(connection, root)
 }
@@ -3071,9 +3067,7 @@ fn import_annotation_rows(
     for enrollment in extras.review_enrollments {
         validate_annotation_id(&enrollment.excerpt_id)?;
         if !(0..=REVIEW_MAX_BOX).contains(&enrollment.box_level) {
-            return Err(format!(
-                "Review box must be between 0 and {REVIEW_MAX_BOX}"
-            ));
+            return Err(format!("Review box must be between 0 and {REVIEW_MAX_BOX}"));
         }
         enrollments.push(ReviewEnrollment {
             due_at: clamp_import_due_at(enrollment.due_at, now),
@@ -3306,22 +3300,22 @@ fn like_pattern(query: &str) -> String {
     format!("%{escaped}%")
 }
 
-fn query_annotations(
+fn collect_search_ids(
     connection: &Connection,
     sql: &str,
     params: &[&dyn rusqlite::ToSql],
-) -> CommandResult<Vec<Annotation>> {
+) -> CommandResult<Vec<String>> {
     let mut statement = connection
         .prepare(sql)
         .map_err(|error| format!("Cannot prepare the annotation search: {error}"))?;
     let mapped = statement
-        .query_map(params, annotation_from_row)
+        .query_map(params, |row| row.get(0))
         .map_err(|error| format!("Cannot search annotations: {error}"))?;
-    let mut annotations = Vec::new();
+    let mut ids = Vec::new();
     for row in mapped {
-        annotations.push(row.map_err(|error| format!("Cannot decode annotation: {error}"))?);
+        ids.push(row.map_err(|error| format!("Cannot decode annotation id: {error}"))?);
     }
-    Ok(annotations)
+    Ok(ids)
 }
 
 fn search_annotation_rows(
@@ -3335,24 +3329,82 @@ fn search_annotation_rows(
         return Ok(Vec::new());
     }
     let capped = limit.clamp(1, MAX_ANNOTATION_SEARCH_RESULTS);
-    let live = list_annotation_rows(connection, root, None)?;
-    let mut results: Vec<Annotation> = live
-        .into_iter()
-        .filter(|annotation| {
-            let haystack = build_searchable_text(
-                annotation.selected_text.as_deref(),
-                annotation.note.as_deref(),
-            )
-            .to_lowercase();
-            if haystack.contains(&normalized) {
-                return true;
+    let pattern = like_pattern(&normalized);
+    let mut hit_ids = HashSet::new();
+
+    // Excerpt body + reflection note: trigram FTS for longer queries, LIKE for
+    // short CJK tokens that the index cannot usefully match.
+    let excerpt_ids = if normalized.chars().count() >= MIN_FTS_QUERY_CHARS {
+        let phrase = fts_phrase(&normalized);
+        collect_search_ids(
+            connection,
+            "SELECT e.id
+             FROM excerpts e
+             JOIN excerpts_fts ON excerpts_fts.rowid = e.rowid
+             WHERE e.library_root = ?1
+               AND e.deleted_at IS NULL
+               AND excerpts_fts MATCH ?2",
+            &[&root as &dyn rusqlite::ToSql, &phrase],
+        )?
+    } else {
+        collect_search_ids(
+            connection,
+            "SELECT id FROM excerpts
+             WHERE library_root = ?1
+               AND deleted_at IS NULL
+               AND searchable_text LIKE ?2 ESCAPE '\\'",
+            &[&root as &dyn rusqlite::ToSql, &pattern],
+        )?
+    };
+    hit_ids.extend(excerpt_ids);
+
+    // Title supplement for excerpts (legacy_title is not in searchable_text).
+    hit_ids.extend(collect_search_ids(
+        connection,
+        "SELECT id FROM excerpts
+         WHERE library_root = ?1
+           AND deleted_at IS NULL
+           AND lower(ifnull(legacy_title, '')) LIKE ?2 ESCAPE '\\'",
+        &[&root as &dyn rusqlite::ToSql, &pattern],
+    )?);
+
+    // Reading places: title + optional reflection body (no place FTS table).
+    hit_ids.extend(collect_search_ids(
+        connection,
+        "SELECT p.id
+         FROM reading_places p
+         LEFT JOIN reflections r
+           ON r.library_root = p.library_root
+          AND r.entry_id = p.id
+          AND r.deleted_at IS NULL
+         WHERE p.library_root = ?1
+           AND p.deleted_at IS NULL
+           AND (
+             lower(ifnull(p.title, '')) LIKE ?2 ESCAPE '\\'
+             OR lower(ifnull(r.body, '')) LIKE ?2 ESCAPE '\\'
+           )",
+        &[&root as &dyn rusqlite::ToSql, &pattern],
+    )?);
+
+    let reflections = reflection_map(connection, root)?;
+    let mut results = Vec::with_capacity(hit_ids.len());
+    for id in hit_ids {
+        if let Some(excerpt) = read_excerpt_row(connection, root, &id)? {
+            if excerpt.deleted_at.is_some() {
+                continue;
             }
-            annotation
-                .title
-                .as_ref()
-                .is_some_and(|title| title.to_lowercase().contains(&normalized))
-        })
-        .collect();
+            let note = projected_reflection_note(None, reflections.get(&id));
+            results.push(excerpt_to_legacy_annotation(&excerpt, note));
+            continue;
+        }
+        if let Some(place) = read_reading_place_row(connection, root, &id)? {
+            if place.deleted_at.is_some() {
+                continue;
+            }
+            let note = projected_reflection_note(None, reflections.get(&id));
+            results.push(reading_place_to_legacy_annotation(&place, note));
+        }
+    }
     results.sort_by(|a, b| {
         a.relative_path
             .cmp(&b.relative_path)
@@ -3629,10 +3681,6 @@ fn projected_reflection_note(
     }
 }
 
-fn new_excerpt_legacy_projection(excerpt: &Excerpt, note: Option<String>) -> Annotation {
-    excerpt_to_legacy_annotation(excerpt, note)
-}
-
 fn excerpt_from_legacy_annotation(
     annotation: &Annotation,
     source_revision: Option<SourceRevision>,
@@ -3721,6 +3769,7 @@ fn place_from_legacy_annotation(
     })
 }
 
+#[cfg(test)]
 fn mirror_legacy_annotation_into_v6(
     connection: &Connection,
     root: &str,
@@ -4837,9 +4886,10 @@ fn upsert_annotation_row_legacy(
     Ok(())
 }
 
-/// Deleting writes a tombstone so deletions survive restarts and can later be
-/// synchronized or undone; the row is purged 90 days later. Explicitly
-/// clearing a document (`clear_annotation_rows`) purges immediately.
+/// Test / pre-v7 fixture helper. Production writers use v6-only create/update
+/// commands; this path still mirrors a legacy Annotation into the v6 core for
+/// search and migration regression fixtures.
+#[cfg(test)]
 fn upsert_annotation_row(
     connection: &Connection,
     root: &str,
@@ -4850,6 +4900,7 @@ fn upsert_annotation_row(
     refresh_v6_migration_ledger(connection, root, annotation.updated_at)
 }
 
+#[cfg(test)]
 fn tombstone_annotation(
     connection: &Connection,
     root: &str,
@@ -5229,58 +5280,11 @@ fn clear_annotation_rows(
     Ok(snapshot)
 }
 
-fn annotation_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Annotation> {
-    let kind_raw: String = row.get(2)?;
-    let color_raw: Option<String> = row.get(3)?;
-    let locator_json: String = row.get(7)?;
-    let locator = serde_json::from_str(&locator_json).map_err(|error| {
-        rusqlite::Error::FromSqlConversionFailure(7, rusqlite::types::Type::Text, Box::new(error))
-    })?;
-    Ok(Annotation {
-        id: row.get(0)?,
-        relative_path: row.get(1)?,
-        kind: annotation_kind_from_db(&kind_raw).map_err(|message| {
-            rusqlite::Error::FromSqlConversionFailure(
-                2,
-                rusqlite::types::Type::Text,
-                message.into(),
-            )
-        })?,
-        color: color_raw
-            .map(|value| annotation_color_from_db(&value))
-            .transpose()
-            .map_err(|message| {
-                rusqlite::Error::FromSqlConversionFailure(
-                    3,
-                    rusqlite::types::Type::Text,
-                    message.into(),
-                )
-            })?,
-        note: row.get(4)?,
-        selected_text: row.get(5)?,
-        title: row.get(6)?,
-        locator,
-        sort_index: row.get(8)?,
-        created_at: row.get::<_, i64>(9)? as u64,
-        updated_at: row.get::<_, i64>(10)? as u64,
-        deleted_at: row.get::<_, Option<i64>>(11)?.map(|value| value as u64),
-    })
-}
-
 fn annotation_kind_to_db(kind: &AnnotationKind) -> &'static str {
     match kind {
         AnnotationKind::Highlight => "highlight",
         AnnotationKind::Underline => "underline",
         AnnotationKind::Bookmark => "bookmark",
-    }
-}
-
-fn annotation_kind_from_db(value: &str) -> Result<AnnotationKind, String> {
-    match value {
-        "highlight" => Ok(AnnotationKind::Highlight),
-        "underline" => Ok(AnnotationKind::Underline),
-        "bookmark" => Ok(AnnotationKind::Bookmark),
-        _ => Err(format!("Unknown annotation kind: {value}")),
     }
 }
 
@@ -6182,10 +6186,7 @@ mod tests {
         };
         assert!(error.contains("newer"), "unexpected error: {error}");
         let connection = Connection::open(directory.path().join(USER_DB_FILE)).expect("reopen raw");
-        assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM excerpts"),
-            1
-        );
+        assert_eq!(count_rows(&connection, "SELECT count(*) FROM excerpts"), 1);
         assert_eq!(user_version(&connection), 99);
     }
 
@@ -7144,6 +7145,7 @@ mod tests {
             .expect("read review enrollment")
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn record_review_outcome_for_test(
         connection: &Connection,
         root: &str,
@@ -7438,7 +7440,8 @@ mod tests {
             deleted_pdf.updated_at = deleted_at;
             deleted_pdf.deleted_at = Some(deleted_at);
             let deleted_pdf = sanitize_annotation(deleted_pdf).expect("deleted pdf");
-            upsert_annotation_row_legacy(&connection, ROOT, &deleted_pdf).expect("insert deleted pdf");
+            upsert_annotation_row_legacy(&connection, ROOT, &deleted_pdf)
+                .expect("insert deleted pdf");
 
             insert_document_row(&connection, ROOT, "notes/pink.md", "ntxt:aaaa");
             insert_document_row(&connection, ROOT, "paper.pdf", "pmd5:bbbb");
@@ -7698,10 +7701,7 @@ mod tests {
         );
         // The direct assertion behind "deleting a list never deletes the
         // documents": annotation and fingerprint rows are untouched.
-        assert_eq!(
-            count_rows(&connection, "SELECT count(*) FROM excerpts"),
-            1
-        );
+        assert_eq!(count_rows(&connection, "SELECT count(*) FROM excerpts"), 1);
         assert_eq!(count_rows(&connection, "SELECT count(*) FROM documents"), 1);
         assert!(delete_collection_row(&mut connection, ROOT, "col-del").is_err());
     }
@@ -8326,7 +8326,7 @@ mod tests {
         // The expired tombstone and its review state are gone; the fresh
         // tombstone keeps its row so undoing the deletion restores progress;
         // rows without any annotation are dropped.
-        let mut remaining: Vec<String> = {
+        let remaining: Vec<String> = {
             let mut statement = connection
                 .prepare(
                     "SELECT excerpt_id FROM review_enrollments
@@ -8683,7 +8683,9 @@ mod tests {
         .expect("import");
         assert_eq!(written, 3);
         assert_eq!(
-            transfer_annotation_rows(&connection, ROOT).expect("transfer").len(),
+            transfer_annotation_rows(&connection, ROOT)
+                .expect("transfer")
+                .len(),
             3
         );
         let dead: Option<i64> = connection
@@ -8788,8 +8790,16 @@ mod tests {
         let oversized: Vec<Annotation> = (0..=MAX_IMPORT_ANNOTATIONS)
             .map(|index| sample_annotation(&format!("imp-{index}"), "a.md"))
             .collect();
-        let error = import_annotation_rows(&mut connection, ROOT, oversized, &[], AnnotationImportExtras::default(), &present, 7_000)
-            .expect_err("must reject oversized batch");
+        let error = import_annotation_rows(
+            &mut connection,
+            ROOT,
+            oversized,
+            &[],
+            AnnotationImportExtras::default(),
+            &present,
+            7_000,
+        )
+        .expect_err("must reject oversized batch");
         assert!(error.contains("limit"), "unexpected error: {error}");
         assert_eq!(
             count_rows(&connection, "SELECT count(*) FROM annotations"),
@@ -8850,7 +8860,10 @@ mod tests {
         )
         .expect("import update");
         let listed = list_annotation_rows(&connection, ROOT, None).expect("list after update");
-        let updated = listed.iter().find(|item| item.id == "imp-lww").expect("row");
+        let updated = listed
+            .iter()
+            .find(|item| item.id == "imp-lww")
+            .expect("row");
         assert_eq!(updated.note.as_deref(), Some("imported newer note"));
         assert_eq!(updated.updated_at, 9_000);
         assert_eq!(listed.len(), 1);
@@ -9489,7 +9502,8 @@ mod tests {
         upsert_reflection_row(&connection, ROOT, &deleted).expect("tombstone reflection");
         sync_reflection_to_entry(&connection, ROOT, &deleted).expect("clear note");
         refresh_v6_migration_ledger(&connection, ROOT, 1_600).expect("ledger");
-        let projected = list_annotation_rows(&connection, ROOT, Some("notes/a.md")).expect("list after clear");
+        let projected =
+            list_annotation_rows(&connection, ROOT, Some("notes/a.md")).expect("list after clear");
         let cleared = projected
             .iter()
             .find(|item| item.id == "ex-2")

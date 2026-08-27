@@ -231,8 +231,10 @@ describe("annotation interaction CSS", () => {
 
   it("keeps side panel tab labels on one line so pills never deform", () => {
     // 回归:中文标签在窄目录栏或出现计数角标时曾逐字竖排换行。
+    // 全库/链接 tab 下架后，剩余 tab 均分宽度（flex: 1 1 0），但仍禁止换行变形。
     expect(css).toMatch(/\.side-panel-tabs\s*\{[^}]*flex-wrap:\s*wrap/s);
-    expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*flex-shrink:\s*0/s);
+    expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*flex:\s*1 1 0/s);
+    expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*min-width:\s*0/s);
     expect(css).toMatch(/\.side-panel-tabs button\s*\{[^}]*white-space:\s*nowrap/s);
   });
 });

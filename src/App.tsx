@@ -4809,14 +4809,16 @@ function App() {
   useEffect(() => {
     if (!snapshot || lastMoveCheckSnapshot.current === snapshot) return;
     lastMoveCheckSnapshot.current = snapshot;
+    let cancelled = false;
     void (async () => {
       let candidates: MovedDocumentCandidate[];
       try {
         candidates = await detectMovedDocuments();
       } catch (cause) {
-        console.error("Reade: 文档移动检测失败", cause);
+        if (!cancelled) console.error("Reade: 文档移动检测失败", cause);
         return;
       }
+      if (cancelled) return;
       setMoveCandidates(candidates);
       const pairs = candidates.filter(
         (candidate) =>
@@ -4831,14 +4833,17 @@ function App() {
       const confirmed = window.confirm(
         `检测到 ${pairs.length} 个文档已移动，迁移 ${total} 条标注到新路径？`,
       );
-      if (!confirmed) return;
+      if (cancelled || !confirmed) return;
       try {
         let migrated = 0;
         for (const pair of pairs) {
+          if (cancelled) return;
           migrated += await rebindDocumentAnnotations(pair.oldPath, pair.newPath);
         }
+        if (cancelled) return;
         // 当前文档可能正是迁移目标;全库标注列表也需要重新拉取。
         await reloadAnnotations();
+        if (cancelled) return;
         setLibraryAnnotations({ status: "idle" });
         try {
           setMoveCandidates(await detectMovedDocuments());
@@ -4847,9 +4852,14 @@ function App() {
         }
         showNotice(`已迁移 ${migrated} 条标注记录`);
       } catch (cause) {
-        showNotice(cause instanceof Error ? `标注迁移失败：${cause.message}` : "标注迁移失败");
+        if (!cancelled) {
+          showNotice(cause instanceof Error ? `标注迁移失败：${cause.message}` : "标注迁移失败");
+        }
       }
     })();
+    return () => {
+      cancelled = true;
+    };
   }, [reloadAnnotations, showNotice, snapshot]);
 
   const libraryDocumentOptions = useMemo<LibraryDocumentOption[]>(

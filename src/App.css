@@ -4077,11 +4077,9 @@ a:focus-visible {
   width: 100%;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .auto-pace-bar,
-  .auto-pace-details {
-    transition: none;
-  }
+:root[data-motion="off"] .auto-pace-bar,
+:root[data-motion="off"] .auto-pace-details {
+  transition: none;
 }
 
 .read-aloud-transport {

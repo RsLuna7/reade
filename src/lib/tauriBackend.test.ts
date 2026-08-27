@@ -260,3 +260,25 @@ describe("v6 annotation IPC wrappers", () => {
     });
   });
 });
+
+describe("IPC command name parity with Rust generate_handler", () => {
+  it("keeps tauriBackend invoke names equal to lib.rs handler names", async () => {
+    const { readFile } = await import("node:fs/promises");
+    const { resolve } = await import("node:path");
+    const root = resolve(import.meta.dirname, "../..");
+    const rust = await readFile(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const ts = await readFile(resolve(root, "src/lib/tauriBackend.ts"), "utf8");
+
+    const handlerBlock = rust.match(/tauri::generate_handler!\s*\[\s*([\s\S]*?)\]/);
+    expect(handlerBlock).not.toBeNull();
+    const rustCommands = [
+      ...(handlerBlock?.[1].matchAll(/^\s*([a-z][a-z0-9_]*)\s*,?\s*(?:\/\/.*)?$/gm) ?? []),
+    ].map((match) => match[1]);
+    const tsCommands = [...ts.matchAll(/invoke\(\s*"([a-z][a-z0-9_]*)"/g)].map(
+      (match) => match[1],
+    );
+
+    expect([...new Set(tsCommands)].sort()).toEqual([...new Set(rustCommands)].sort());
+    expect(new Set(tsCommands).size).toBe(56);
+  });
+});

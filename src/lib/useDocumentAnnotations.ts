@@ -40,6 +40,8 @@ function entryKindForAnnotation(annotation: Annotation): AnnotationEntryKind {
 }
 
 export function annotationsFromBundle(bundle: DocumentAnnotationBundle): Annotation[] {
+  // Compatibility projection: live UI still consumes legacy Annotation marks,
+  // but the bundle is the v6 source of truth owned by this hook.
   const reflections = new Map(bundle.reflections.map((item) => [item.entryId, item]));
   const annotations = [
     ...bundle.excerpts.map((excerpt) =>

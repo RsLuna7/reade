@@ -22,7 +22,7 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 - Desktop shell：Tauri 2、Rust 2021、Windows WebView2
 - Frontend：React 19、TypeScript 5、Vite 7、Zustand 5
 - Markdown：`react-markdown`、`remark-gfm`、`remark-math`、`rehype-katex`、`rehype-slug`
-- 扩展渲染：Shiki 按需加载、Mermaid 懒加载并使用 sandbox
+- 扩展渲染：Shiki 按需加载、Mermaid 懒加载并以 `securityLevel: "strict"` 内联 SVG
 - PDF：前端 `pdfjs-dist` 原版式渲染，Rust 侧 `pdf-inspector` 按页提取文本
 - EPUB：Rust 侧 `anydoc` 转成自有安全 DTO，不执行书内 HTML/CSS
 - 本地能力：`ignore`、`notify`、SQLite FTS5 trigram（持久化于应用缓存目录）
@@ -165,7 +165,7 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 
 ## 高风险区域
 
-- **IPC 契约**：全部 commands 注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 里（当前 44 个，分布于 `library.rs`、`user_store.rs`、`stats.rs`、`transfer.rs`）——动手前先读那份清单，不要凭记忆假设命令名。Rust 使用 snake_case 参数，前端 `invoke` 传 camelCase；前端一律经 `src/lib/backend.ts` 的 facade 调用，桌面落到 `tauriBackend.ts`、Web 落到 `webLibrary.ts` 等实现；改一端必须同步另一端和类型。
+- **IPC 契约**：全部 commands 注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 里（当前 56 个，分布于 `library.rs`、`user_store.rs`、`stats.rs`、`transfer.rs`）——动手前先读那份清单，不要凭记忆假设命令名。Rust 使用 snake_case 参数，前端 `invoke` 传 camelCase；前端一律经 `src/lib/backend.ts` 的 facade 调用，桌面落到 `tauriBackend.ts`、Web 落到 `webLibrary.ts` 等实现；改一端必须同步另一端和类型。名称集合由 `src/lib/tauriBackend.test.ts` 的机械对账测试守护。
 - **渲染安全**：raw HTML 保持禁用；Mermaid 使用 `securityLevel: "strict"`（不要改回 sandbox iframe：`data:` iframe 会被 CSP `frame-src` 拦截，WebView2 显示“已阻止此内容”），50,000 字符和 500 条连线限制；`mermaid.render` 的结果经 `sanitizeMermaidSvg` 后再注入。
 - **文件边界**：Markdown 上限 10 MiB（超限文件在扫描阶段就被跳过，不会出现在文档树），本地资源 25 MiB，PDF/EPUB 128 MiB，单次 PDF Range 4 MiB，封面缩略图 512 KiB / 640 px；禁止绝对路径、父目录逃逸和跟随符号链接越界。
 - **外链与图片**：外链只允许 `http:`、`https:`、`mailto:` 且需用户确认；远程图片默认拦截；SVG data URL 不允许。注意 `read_asset` 的 MIME 由扩展名推断、Rust 侧不做白名单，真正的拦截在 `MarkdownRenderer.tsx` 的 `resolvedUrl`——它在 resolver 前后各做一次 `safeUrlTransform`，第二次那道校验挡的正是"库内 .svg 被解析成 `data:image/svg+xml`"，不可删。
