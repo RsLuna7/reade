@@ -3,7 +3,7 @@
 > **已被取代**：默认色名与产品语义以 [`plan-annotation-system-redesign.md`](./plan-annotation-system-redesign.md) 为准。新 UI 使用暖砂/青灰/墨蓝三色外观名；颜色不表示金句/疑问/行动/术语。本文保留展示层改名机制作为旧四色筛选的兼容偏好。
 
 - 日期：2026-08-13（基线查证日；同日复核基线并定稿）
-- 状态：**定稿（批次 2 实施）**
+- 状态：**已实施**
 - 定位：给黄/绿/蓝/粉四色赋予可改的语义名（默认"金句/疑问/行动/术语"），显示在颜色选择器 tooltip、全库筛选器与图例中。让四色从"随手挑的颜色"变成个人标注体系。**纯展示层，不改标注数据结构。**
 - 关联：四色常量与筛选来自标注体系现状（`annotations.ts`/`annotationSearch.ts`/`AnnotationUi.tsx`）；持久化走 `useReaderStore` 阅读偏好（localStorage，双端同构）。
 
