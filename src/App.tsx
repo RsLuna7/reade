@@ -50,6 +50,7 @@ import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
 import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
 import { BookshelfView } from "./components/BookshelfView";
+import { BrandCompanion } from "./components/BrandCompanion";
 import { DocumentTree } from "./components/DocumentTree";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
@@ -5542,7 +5543,9 @@ function App() {
       >
         <header className="sidebar-header">
           <div className="brand">
-            <div className="brand-mark" aria-hidden="true">R</div>
+            <div className="brand-mark" aria-hidden="true">
+              <BrandCompanion motionLevel={motionLevel} />
+            </div>
             <div className="brand-copy">
               <p className="brand-name">Reade</p>
               <p className="brand-tagline">
