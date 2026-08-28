@@ -3,6 +3,7 @@ import {
   lazy,
   Suspense,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -82,6 +83,14 @@ import {
   type ReadingSummary,
   type SessionDepthId,
 } from "../lib/readingStats";
+import {
+  DEFAULT_HEATMAP_BLOCKS,
+  HEATMAP_FONT_SIZE,
+  HEATMAP_WEEK_START,
+  heatmapBlockMetrics,
+  heatmapBlocksEqual,
+  heatmapWeekCount,
+} from "../lib/heatmapLayout";
 import { chartMotionProps, useCountUp, useEntranceFlag } from "../lib/statsMotion";
 import { runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { THEME_META, useReaderStore } from "../store/useReaderStore";
@@ -480,13 +489,13 @@ function polarPoint(cx: number, cy: number, radius: number, angle: number): stri
 }
 
 function ClockChart({ hourly }: { hourly: HourlyTotal[] }) {
-  const size = 244;
+  const size = 190;
   const center = size / 2;
-  const inner = 36;
-  const outer = 104;
+  const inner = 28;
+  const outer = 78;
   const max = hourly.reduce((result, entry) => Math.max(result, entry.seconds), 0);
   return (
-    <div className="stats-clock stats-enter">
+    <div className="stats-clock">
       <svg viewBox={`0 0 ${size} ${size}`} role="img" aria-label="按钟面排布的时段分布">
         <circle cx={center} cy={center} r={outer} fill="none" stroke="var(--line)" />
         <circle cx={center} cy={center} r={inner} fill="none" stroke="var(--line)" />
@@ -512,7 +521,7 @@ function ClockChart({ hourly }: { hourly: HourlyTotal[] }) {
         })}
         {[0, 6, 12, 18].map((hour) => {
           const angle = (hour / 24) * Math.PI * 2 - Math.PI / 2;
-          const [x, y] = polarPoint(center, center, outer + 10, angle).split(" ").map(Number);
+          const [x, y] = polarPoint(center, center, outer + 9, angle).split(" ").map(Number);
           return (
             <text key={hour} x={x} y={y + 3.5} textAnchor="middle" className="stats-clock-label">
               {hour}
@@ -930,6 +939,31 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     }));
   }, [daily, now]);
 
+  const heatmapWeeks = useMemo(() => {
+    const first = heatmapData[0];
+    const last = heatmapData[heatmapData.length - 1];
+    if (!first || !last) return 53;
+    return heatmapWeekCount(first.date, last.date, HEATMAP_WEEK_START);
+  }, [heatmapData]);
+
+  const heatmapHostRef = useRef<HTMLDivElement>(null);
+  const [heatmapBlocks, setHeatmapBlocks] = useState(DEFAULT_HEATMAP_BLOCKS);
+
+  useLayoutEffect(() => {
+    const element = heatmapHostRef.current;
+    if (!element) return;
+    const apply = () => {
+      if (element.clientWidth < 32) return;
+      const next = heatmapBlockMetrics(element.clientWidth, heatmapWeeks);
+      setHeatmapBlocks((current) => (heatmapBlocksEqual(current, next) ? current : next));
+    };
+    apply();
+    if (typeof ResizeObserver !== "function") return;
+    const observer = new ResizeObserver(apply);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [heatmapWeeks]);
+
   const trendData = useMemo(
     () =>
       buildTrendSeries(daily, now, trendRange).map((point) => ({
@@ -1247,17 +1281,17 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
               <h2>过去一年</h2>
               <span className="stats-section-hint">点击色块查看当日详情</span>
             </div>
-            <div className="stats-heatmap-scroll">
+            <div className="stats-heatmap-scroll" ref={heatmapHostRef}>
               <div className="stats-heatmap-scroll-inner">
                 <ActivityCalendar
                   data={heatmapData}
                   colorScheme={THEME_META[theme].mode}
                   theme={{ light: HEATMAP_SCALE, dark: HEATMAP_SCALE }}
-                  blockSize={11}
-                  blockMargin={3}
-                  blockRadius={2}
-                  fontSize={12}
-                  weekStart={1}
+                  blockSize={heatmapBlocks.blockSize}
+                  blockMargin={heatmapBlocks.blockMargin}
+                  blockRadius={heatmapBlocks.blockRadius}
+                  fontSize={HEATMAP_FONT_SIZE}
+                  weekStart={HEATMAP_WEEK_START}
                   maxLevel={4}
                   showTotalCount={false}
                   showWeekdayLabels={["mon", "wed", "fri"]}

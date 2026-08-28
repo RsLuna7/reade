@@ -14,7 +14,7 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 - 在三栏布局中提供稳定、可调且适合长文的阅读体验。
 - 安全读取和检索本地文档，不执行文档携带的代码或主动上传内容。
 - 保持启动、安装包与运行时开销适合个人桌面应用。
-- 用同一套 UI 支持本地 Tauri backend 与静态 Web library，不复制两套阅读器。
+- 用同一套 UI 支持本地 Tauri backend 与静态 Web library，不复制两套阅读器。**Web 版已封存**：保持现有站点可构建、可阅读即可，不再为它增加功能。
 - 标注、合集、回顾与阅读统计只落在本机，不引入账号与云同步。
 
 ## 技术栈
@@ -80,7 +80,15 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 - 影响排版或响应式行为时，用真实 Tauri 窗口或浏览器截图做视觉检查；不能只依赖测试通过。
 - 保持 TypeScript 与 `ES2020` 兼容，不使用未配置 polyfill 的新 API。
 - 重型渲染能力继续按需加载，避免把全部 Shiki grammar 或 Mermaid 提前打入首屏路径。
-- Web 版通过 `pnpm generate:web` 生成内容，Pages 子路径必须继续使用相对 Vite `base`。
+
+## Web 版封存
+
+Web 版（`--mode web`、GitHub Pages、`pnpm generate:web` / `dev:web` / `build:web`）**冻结功能**。现有静态站、PWA 与生成器保持能用，但默认不再为 Web 增加能力、专属交互、发布向增强或 Web 验收清单里的新项。
+
+- 新功能只做桌面版。不要为新能力补 `IS_WEB_RUNTIME` 体验分支、Web 专用 UI、或 Pages 部署向的产品改动。
+- 共享阅读界面仍可随桌面改动；不为 Web 补齐桌面新功能，也不主动把桌面能力做成 Web 对等实现。
+- 现有 Web 路径（生成器、相对 `base`、service worker、安全策略）不要无故拆掉。只有用户明确要求，或共享改动造成 Web 构建/安全回归时，才修 Web。
+- 不要把「再做一个 Web 面板 / 打开 Web UI 继续迭代」当成日常任务。
 
 ## 不应当做
 
@@ -93,6 +101,7 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 - 不做无关重构、依赖升级、格式化全仓库、Git 初始化、提交或发布，除非用户明确要求。
 - 不虚构 `pnpm lint`；本项目当前没有 ESLint script。
 - 不把内容目录中的任意文件都公开；生成器只允许 Markdown 和明确列出的安全图片格式。
+- 不为 Web 版增加功能或专属体验；Web 已封存，见上文。
 
 ## 命令
 
@@ -197,5 +206,5 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 - 前端 localStorage 只存偏好与轻量位置：`reade-reader-preferences`、`reade-library-mru`、`reade-reading-positions`、`reade-vertical-writing`、`reade-home-baseline`、`reade-device-id`；文档正文和索引不进前端存储。Web 版的标注与合集存 IndexedDB。
 - 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
 - `examples/demo-library/` 用于功能联调，`output/playwright/` 只作为视觉参考，不是源码或自动化测试结果的替代品。
-- `docs/roadmap-innovations.md` 末尾有一份尚未完成的人工验收清单（桌面真机 9 项、Web 真实部署 4 项）。碰到清单里的功能时，别把"测试通过"当成已验收。
-- `APP_RUNTIME` 由 Vite mode 决定：默认/production 是 desktop，`--mode web` 是 Web；不得用浏览器特征猜运行时。
+- `docs/roadmap-innovations.md` 末尾有一份尚未完成的人工验收清单（桌面真机 9 项、Web 真实部署 4 项）。碰到桌面清单里的功能时，别把"测试通过"当成已验收。Web 真实部署 4 项不再推进。
+- `APP_RUNTIME` 由 Vite mode 决定：默认/production 是 desktop，`--mode web` 是 Web；不得用浏览器特征猜运行时。Web 版功能已封存，日常开发以桌面为准。
