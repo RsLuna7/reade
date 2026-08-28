@@ -4970,9 +4970,14 @@ function App() {
               hasCandidates = false;
             }
           }
-          // 等待会话查询期间用户可能已自行打开文档或切换库。
+          // 等待会话查询期间用户可能已自行打开文档、切换库或进入 Overlay 视图(如阅读统计)。
           const state = useReaderStore.getState();
-          if (state.currentPath || state.loading || state.snapshot?.rootPath !== rootPath) {
+          if (
+            state.currentPath ||
+            state.loading ||
+            state.snapshot?.rootPath !== rootPath ||
+            state.activeView !== "reader"
+          ) {
             return;
           }
           if (hasCandidates) {
@@ -4983,9 +4988,10 @@ function App() {
         })();
         return;
       }
-      // 主页停留期间(冷启动落点或手动打开)不被自动打开第一篇抢占,
-      // 例如文件监听触发的库刷新。
-      if (activeView === "home") return;
+      // Overlay 视图(主页/统计/回顾/全库摘录)停留期间不被自动打开
+      // 第一篇抢占。否则从冷启动主页点「阅读统计」会先被 selectDocument
+      // 打回 reader(看起来像点了一次却跳进某篇文章)。
+      if (activeView !== "reader") return;
       const requestedPath = requestedWebDocument.current;
       requestedWebDocument.current = null;
       const requestedDocument = requestedPath

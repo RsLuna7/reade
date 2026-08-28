@@ -1815,6 +1815,51 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().currentPath).toBeNull();
   });
 
+  it("keeps stats open when opened from a home cold-start with no current document", async () => {
+    writeReadingPosition(HOME_ROOT, "guide.md", { kind: "scroll", scrollRatio: 0.4 });
+    setColdStartState();
+    render(<App />);
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().activeView).toBe("home");
+    });
+    expect(useReaderStore.getState().currentPath).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "打开阅读统计" }));
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().activeView).toBe("stats");
+    });
+    // 自动打开第一篇不得抢占统计页(否则表现为要点两次)。
+    expect(readDocument).not.toHaveBeenCalled();
+    expect(useReaderStore.getState().currentPath).toBeNull();
+  });
+
+  it("does not override stats view or auto-open when user clicks stats while cold-start query is in flight", async () => {
+    let resolveSessions: (sessions: ReadingSession[]) => void = () => {};
+    vi.mocked(listReadingSessions).mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveSessions = resolve;
+        }),
+    );
+    setColdStartState();
+    render(<App />);
+
+    // 用户在冷启动查询会话期间直接点击「打开阅读统计」
+    fireEvent.click(screen.getByRole("button", { name: "打开阅读统计" }));
+    expect(useReaderStore.getState().activeView).toBe("stats");
+
+    // 会话查询返回（即便无候选或有候选，都不打断用户已进入的统计视图）
+    resolveSessions([]);
+
+    await waitFor(() => {
+      expect(useReaderStore.getState().activeView).toBe("stats");
+    });
+    expect(readDocument).not.toHaveBeenCalled();
+    expect(useReaderStore.getState().currentPath).toBeNull();
+  });
+
   it("lands on home when 30-day sessions exist without persisted positions", async () => {
     vi.mocked(listReadingSessions).mockResolvedValue([
       homeSession("guide.md", Date.now() - 60_000),
