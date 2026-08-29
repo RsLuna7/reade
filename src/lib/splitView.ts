@@ -121,6 +121,11 @@ export const resolveLibraryRelativePath: (
  * Image sources referenced by a markdown body (dedup, declaration order).
  * Angle-bracket destinations may contain spaces; bare destinations may not.
  * Keys are normalised to match remark / react-markdown `img` src values.
+ *
+ * Also resolves reference-style images (`![alt][label]`, `![label][]`,
+ * `![label]`) through their `[label]: destination` definitions: remark
+ * renders them into `img` elements, so they must be preloaded just like
+ * inline images or they show up as blocked.
  */
 export function collectReferencedImages(markdown: string): string[] {
   const sources = new Set<string>();
@@ -129,6 +134,29 @@ export function collectReferencedImages(markdown: string): string[] {
   for (const match of markdown.matchAll(imagePattern)) {
     const raw = (match[1] ?? match[2] ?? "").trim();
     if (raw) sources.add(normalizeMarkdownUrlKey(raw));
+  }
+
+  const definitions = new Map<string, string>();
+  const definitionPattern =
+    /^[ \t]{0,3}\[([^\]\n]+)]:[ \t]*(?:<([^>\n]*)>|([^\s]+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?[ \t]*$/gm;
+  for (const match of markdown.matchAll(definitionPattern)) {
+    const label = match[1].trim().toLowerCase();
+    const destination = (match[2] ?? match[3] ?? "").trim();
+    if (label && destination && !definitions.has(label)) definitions.set(label, destination);
+  }
+
+  if (definitions.size > 0) {
+    // `(?!\()` skips inline images `![alt](url)` so their alt text is never
+    // mistaken for a reference label. Full form uses the second bracket;
+    // collapsed (`![label][]`) and shortcut (`![label]`) fall back to the
+    // alt text as the label, matching CommonMark.
+    const referencePattern = /!\[([^\]]*)](?!\()(?:\[([^\]\n]*)])?/g;
+    for (const match of markdown.matchAll(referencePattern)) {
+      const label = (match[2] || match[1] || "").trim().toLowerCase();
+      if (!label) continue;
+      const destination = definitions.get(label);
+      if (destination) sources.add(normalizeMarkdownUrlKey(destination));
+    }
   }
   return [...sources];
 }

@@ -153,6 +153,53 @@ describe("collectReferencedImages / paneImageAssetPaths", () => {
       { source: "./img/ok.png", relativePath: "notes/img/ok.png" },
     ]);
   });
+
+  it("resolves reference-style images through their definitions", () => {
+    const markdown = [
+      "![hero][full]",
+      "![shot.png][]",
+      "![shortcut]",
+      "",
+      "[full]: ./img/hero.png",
+      "[shot.png]: ./img/shot.png",
+      "[shortcut]: ./img/shortcut.png",
+    ].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual([
+      "./img/hero.png",
+      "./img/shot.png",
+      "./img/shortcut.png",
+    ]);
+    expect(paneImageAssetPaths(markdown, "notes/doc.md")).toEqual([
+      { source: "./img/hero.png", relativePath: "notes/img/hero.png" },
+      { source: "./img/shot.png", relativePath: "notes/img/shot.png" },
+      { source: "./img/shortcut.png", relativePath: "notes/img/shortcut.png" },
+    ]);
+  });
+
+  it("handles reference labels case-insensitively and keeps the first definition", () => {
+    const markdown = [
+      "![a][Logo]",
+      "![b][logo]",
+      "",
+      "[Logo]: ./first.png",
+      "[logo]: ./second.png",
+    ].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual(["./first.png"]);
+  });
+
+  it("supports angle-bracket and titled reference definitions", () => {
+    const markdown = ["![x][space]", "", "[space]: <./my file.png> \"title\""].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual(["./my%20file.png"]);
+  });
+
+  it("does not mistake inline image alt text for a reference label", () => {
+    const markdown = ["![Logo](./inline.png)", "", "[Logo]: ./definition.png"].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual(["./inline.png"]);
+  });
+
+  it("ignores reference usages without a definition", () => {
+    expect(collectReferencedImages("![missing][ref]")).toEqual([]);
+  });
 });
 
 describe("paneDisplayMarkdown", () => {
