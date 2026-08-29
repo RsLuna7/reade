@@ -306,6 +306,11 @@ interface ReaderState {
 
 let pendingOperations = 0;
 let libraryRequest = 0;
+// Only a successfully committed open changes the library context. Async
+// document/search work captures this generation so a late response from the
+// previous library cannot populate the newly opened one. Refreshes deliberately
+// keep the generation: they should not cancel an otherwise valid read/search.
+let activeLibraryGeneration = 0;
 let documentRequest = 0;
 let searchRequest = 0;
 
@@ -349,6 +354,7 @@ export const useReaderStore = create<ReaderState>()(
           if (request !== libraryRequest) return;
           const tree = buildDocumentTree(snapshot.documents);
           const expandedPaths = reconcileExpandedPaths(get().expandedPaths, tree);
+          activeLibraryGeneration += 1;
           set({
             snapshot,
             documents: snapshot.documents,
@@ -441,10 +447,14 @@ export const useReaderStore = create<ReaderState>()(
 
         selectDocument: async (relativePath: string, locator = null) => {
           const request = ++documentRequest;
+          const libraryGeneration = activeLibraryGeneration;
           beginOperation();
           try {
             const content = await readDocument(relativePath);
-            if (request === documentRequest) {
+            if (
+              request === documentRequest &&
+              libraryGeneration === activeLibraryGeneration
+            ) {
               const rootPath = get().snapshot?.rootPath;
               set({
                 currentPath: relativePath,
@@ -460,7 +470,12 @@ export const useReaderStore = create<ReaderState>()(
               });
             }
           } catch (error) {
-            if (request === documentRequest) set({ error: errorMessage(error) });
+            if (
+              request === documentRequest &&
+              libraryGeneration === activeLibraryGeneration
+            ) {
+              set({ error: errorMessage(error) });
+            }
           } finally {
             endOperation();
           }
@@ -529,6 +544,7 @@ export const useReaderStore = create<ReaderState>()(
           if (query !== undefined) set({ searchQuery: query });
 
           const request = ++searchRequest;
+          const libraryGeneration = activeLibraryGeneration;
           if (!normalizedQuery) {
             set({ searchResults: [] });
             return;
@@ -537,9 +553,19 @@ export const useReaderStore = create<ReaderState>()(
           beginOperation();
           try {
             const searchResults = await searchDocuments(normalizedQuery, 100);
-            if (request === searchRequest) set({ searchResults });
+            if (
+              request === searchRequest &&
+              libraryGeneration === activeLibraryGeneration
+            ) {
+              set({ searchResults });
+            }
           } catch (error) {
-            if (request === searchRequest) set({ error: errorMessage(error) });
+            if (
+              request === searchRequest &&
+              libraryGeneration === activeLibraryGeneration
+            ) {
+              set({ error: errorMessage(error) });
+            }
           } finally {
             endOperation();
           }

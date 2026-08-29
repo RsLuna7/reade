@@ -1890,6 +1890,24 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
   });
 
+  it("does not loop auto-opening the first document after a read failure", async () => {
+    // 首篇读取失败时 currentPath 保持 null,loading 翻转会让冷启动 effect
+    // 重跑;回归场景是不加防护时无限重试,加载遮罩持续闪烁。
+    vi.mocked(readDocument).mockRejectedValue(new Error("cannot read document"));
+    setColdStartState();
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(readDocument).toHaveBeenCalledTimes(1);
+    });
+    await new Promise((resolve) => setTimeout(resolve, 120));
+    expect(readDocument).toHaveBeenCalledTimes(1);
+    expect(useReaderStore.getState().currentPath).toBeNull();
+    // 失败必须以 error 通道呈现,而不是静默重试。
+    expect(useReaderStore.getState().error).toContain("cannot read document");
+  }, 10000);
+
   it("ignores history that only points at documents outside the library", async () => {
     writeReadingPosition(HOME_ROOT, "removed.md", { kind: "scroll", scrollRatio: 0.4 });
     vi.mocked(listReadingSessions).mockResolvedValue([

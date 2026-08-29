@@ -3310,7 +3310,7 @@ dependencies = [
 
 [[package]]
 name = "reade"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anydoc",
  "base64 0.22.1",

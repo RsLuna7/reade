@@ -7,6 +7,9 @@ const backendMocks = vi.hoisted(() => ({
   openLibrary: vi.fn<(rootPath: string) => Promise<import("../lib/backend").LibrarySnapshot>>(),
   readDocument: vi.fn<(relativePath: string) => Promise<import("../lib/backend").DocumentContent>>(),
   retryDocumentIndex: vi.fn<(relativePath: string) => Promise<void>>(),
+  searchDocuments: vi.fn<
+    (query: string, limit?: number) => Promise<import("../lib/backend").SearchResult[]>
+  >(),
 }));
 
 vi.mock("../lib/backend", async (importOriginal) => {
@@ -56,6 +59,7 @@ describe("reading settings", () => {
       .mockImplementation(async (rootPath) => ({ rootPath, documents: [] }));
     backendMocks.readDocument.mockReset().mockImplementation(async (relativePath) => ({ kind: "markdown", relativePath, markdown: "# Test" }));
     backendMocks.retryDocumentIndex.mockReset().mockResolvedValue(undefined);
+    backendMocks.searchDocuments.mockReset().mockResolvedValue([]);
     useReaderStore.setState({
       theme: "paper-light",
       readingSettings: DEFAULT_READING_SETTINGS,
@@ -920,6 +924,101 @@ describe("reading settings", () => {
     expect(second).toEqual(locator);
     expect(first).not.toBe(locator);
     expect(second).not.toBe(first);
+  });
+
+  it("ignores a document read that finishes after switching libraries", async () => {
+    let resolveRead:
+      | ((content: import("../lib/backend").DocumentContent) => void)
+      | undefined;
+    backendMocks.readDocument.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveRead = resolve;
+        }),
+    );
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library-a", documents: [] },
+      documents: [],
+      currentPath: null,
+      currentContent: null,
+    });
+
+    const pendingRead = useReaderStore.getState().selectDocument("old.md");
+    await useReaderStore.getState().openLibrary("D:/library-b");
+    resolveRead?.({ kind: "markdown", relativePath: "old.md", markdown: "# Old" });
+    await pendingRead;
+
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:/library-b");
+    expect(useReaderStore.getState().currentPath).toBeNull();
+    expect(useReaderStore.getState().currentContent).toBeNull();
+  });
+
+  it("ignores search results that finish after switching libraries", async () => {
+    let resolveSearch:
+      | ((results: import("../lib/backend").SearchResult[]) => void)
+      | undefined;
+    backendMocks.searchDocuments.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveSearch = resolve;
+        }),
+    );
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library-a", documents: [] },
+      documents: [],
+      searchQuery: "old",
+      searchResults: [],
+    });
+
+    const pendingSearch = useReaderStore.getState().runSearch("old");
+    await useReaderStore.getState().openLibrary("D:/library-b");
+    resolveSearch?.([
+      {
+        resultId: "old.md:1",
+        relativePath: "old.md",
+        title: "Old",
+        snippet: "old result",
+        score: 1,
+        format: "markdown",
+        locator: null,
+      },
+    ]);
+    await pendingSearch;
+
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:/library-b");
+    expect(useReaderStore.getState().searchResults).toEqual([]);
+  });
+
+  it("ignores document and search errors from the previous library", async () => {
+    let rejectRead: ((reason?: unknown) => void) | undefined;
+    let rejectSearch: ((reason?: unknown) => void) | undefined;
+    backendMocks.readDocument.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectRead = reject;
+        }),
+    );
+    backendMocks.searchDocuments.mockImplementationOnce(
+      () =>
+        new Promise((_, reject) => {
+          rejectSearch = reject;
+        }),
+    );
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library-a", documents: [] },
+      documents: [],
+      error: null,
+    });
+
+    const pendingRead = useReaderStore.getState().selectDocument("old.md");
+    const pendingSearch = useReaderStore.getState().runSearch("old");
+    await useReaderStore.getState().openLibrary("D:/library-b");
+    rejectRead?.(new Error("old read failed"));
+    rejectSearch?.(new Error("old search failed"));
+    await Promise.all([pendingRead, pendingSearch]);
+
+    expect(useReaderStore.getState().snapshot?.rootPath).toBe("D:/library-b");
+    expect(useReaderStore.getState().error).toBeNull();
   });
 });
 

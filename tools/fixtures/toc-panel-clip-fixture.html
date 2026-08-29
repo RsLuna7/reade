@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>TOC panel clip fixture</title>
+    <link rel="stylesheet" href="/src/styles/theme-tokens.css" />
+    <link rel="stylesheet" href="/src/App.css" />
+    <style>
+      html,
+      body {
+        width: 100%;
+        height: 100%;
+        margin: 0;
+        overflow: auto;
+        background: #cfcfcf;
+      }
+      .fixture {
+        display: grid;
+        grid-template-columns: 1fr var(--toc-width, 200px);
+        width: 900px;
+        height: 640px;
+        margin: 24px auto;
+        background: var(--paper, #fff);
+        box-shadow: 0 8px 32px rgb(0 0 0 / 18%);
+      }
+      .fixture-main {
+        background: #f3f1ea;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="fixture" data-theme="paper-light">
+      <div class="fixture-main" aria-hidden="true"></div>
+      <aside class="toc-panel" aria-label="本文目录与标注">
+        <div class="toc-inner">
+          <div class="side-panel-tabs" role="tablist">
+            <button type="button">目录</button>
+            <button type="button">
+              标注<span class="side-panel-count">7</span>
+            </button>
+            <button type="button">链接</button>
+            <button type="button" class="active">全库</button>
+          </div>
+          <div class="annotation-library">
+            <button type="button" class="annotation-hub-link">打开全库摘录</button>
+            <div class="annotation-filter-controls">
+              <div class="annotation-library-search">
+                <input type="search" placeholder="搜索全库标注" aria-label="搜索全库标注" />
+              </div>
+              <div class="annotation-filter-row">
+                <button type="button" class="annotation-filter-chip">高亮</button>
+                <button type="button" class="annotation-filter-chip">下划线</button>
+                <button type="button" class="annotation-filter-chip">书签</button>
+                <button type="button" class="annotation-filter-chip annotation-filter-chip--color">
+                  <span class="annotation-tone-swatch annotation-tone-swatch--sand"></span>暖砂
+                </button>
+                <button type="button" class="annotation-filter-chip">已加入间隔回顾</button>
+              </div>
+            </div>
+            <div class="annotation-list-toolbar">
+              <span class="annotation-library-total">命中 46 条，来自 5 个文档</span>
+              <div class="annotation-list-toolbar-actions">
+                <button type="button">刷新</button>
+                <button type="button">导出当前结果</button>
+              </div>
+            </div>
+            <section class="annotation-library-group">
+              <h3 class="annotation-library-doc">
+                <span class="annotation-library-doc-title"
+                  >深入理解 AI Agent：设计原理与实践路径完整标题应省略</span
+                >
+              </h3>
+              <ol class="annotation-list">
+                <li class="annotation-list-item">
+                  <button type="button" class="annotation-list-main">
+                    <span class="annotation-list-kind annotation-list-kind--highlight annotation-list-kind--yellow"
+                      >高亮</span
+                    >
+                    <span class="annotation-list-title"
+                      >来表达：Agent = LLM (大型语言模型) + Memory + Planning + ToolUse，这是 Agent
+                      的整个决策内核与行动闭环定义。</span
+                    >
+                  </button>
+                </li>
+                <li class="annotation-list-item">
+                  <button type="button" class="annotation-list-main">
+                    <span class="annotation-list-kind annotation-list-kind--underline annotation-list-kind--blue"
+                      >下划线</span
+                    >
+                    <span class="annotation-list-title"
+                      >Agent 的整个决策内核必须在有限上下文窗口内完成规划、调用与反思，而不能假设无限上下文。</span
+                    >
+                  </button>
+                </li>
+              </ol>
+            </section>
+          </div>
+        </div>
+      </aside>
+    </div>
+  </body>
+</html>

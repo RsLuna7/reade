@@ -24,6 +24,9 @@ scratch/
 /reade.exe
 /uninstall.exe
 
+# Cursor editor debug logs
+.cursor/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

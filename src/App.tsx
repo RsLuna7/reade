@@ -1794,6 +1794,11 @@ function App() {
   // H-D1 方案 A:桌面冷启动落点只判定一次;之后库刷新/切换维持
   // "自动打开第一篇"的现状行为。
   const coldStartDecided = useRef(false);
+  // 自动打开失败时 selectDocument 不写 currentPath,loading 翻转会让
+  // 下面的 effect 立刻重跑;不记录尝试就会无限重开首篇,把加载遮罩闪成
+  // 死循环。同一快照 + 同一路径只自动尝试一次,库刷新产生新快照后才
+  // 允许再试(文件被外部修复的场景)。
+  const autoOpenAttempt = useRef<{ snapshot: LibrarySnapshot; path: string } | null>(null);
   // 5.5 文档移动检测:每个库快照只检测一次;同一对 old→new 在一次会话内
   // 只询问一次,避免监听刷新反复弹确认。
   const lastMoveCheckSnapshot = useRef<LibrarySnapshot | null>(null);
@@ -4977,8 +4982,10 @@ function App() {
           }
           if (hasCandidates) {
             setActiveView("home");
-          } else if (state.documents.length > 0) {
-            void state.selectDocument(state.documents[0].relativePath);
+          } else if (state.documents.length > 0 && state.snapshot) {
+            const firstPath = state.documents[0].relativePath;
+            autoOpenAttempt.current = { snapshot: state.snapshot, path: firstPath };
+            void state.selectDocument(firstPath);
           }
         })();
         return;
@@ -4996,9 +5003,14 @@ function App() {
           )
         : null;
       if (requestedPath && !requestedDocument) pendingHash.current = null;
-      void selectDocument(
-        requestedDocument?.relativePath ?? documents[0].relativePath,
-      );
+      const autoOpenPath =
+        requestedDocument?.relativePath ?? documents[0].relativePath;
+      const attempted = autoOpenAttempt.current;
+      if (attempted && attempted.snapshot === snapshot && attempted.path === autoOpenPath) {
+        return;
+      }
+      autoOpenAttempt.current = { snapshot, path: autoOpenPath };
+      void selectDocument(autoOpenPath);
     }
   }, [activeView, currentPath, documents, loading, selectDocument, setActiveView, snapshot]);
 
