@@ -34,9 +34,7 @@ import {
 } from "react";
 import { X } from "lucide-react";
 import {
-  assetDataUrl,
   openExternalLink,
-  readAsset,
   readDocument,
   type Annotation,
   type DocumentInfo,
@@ -50,7 +48,8 @@ import {
   paneImageAssetPaths,
   reducePaneContent,
 } from "../lib/splitView";
-import { resolveMarkdownImageSrc } from "../lib/markdownImages";
+import { normalizeMarkdownUrlKey, resolveMarkdownImageSrc } from "../lib/markdownImages";
+import { useMarkdownImageAssets } from "../lib/useMarkdownImageAssets";
 import { EpubReader } from "./EpubReader";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { PdfPagePosition, PdfReaderHandle } from "./PdfReader";
@@ -109,7 +108,6 @@ export function SecondaryPane({
 }: SecondaryPaneProps) {
   const [activePath, setActivePath] = useState(path);
   const [pane, dispatchPane] = useReducer(reducePaneContent, null);
-  const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const articleRef = useRef<HTMLDivElement | null>(null);
@@ -151,33 +149,19 @@ export function SecondaryPane({
   // The reset bails out when the map is already empty: a fresh object here
   // would re-render with a new `resolveImageSrc` identity, and the markdown
   // subtree (inline component map) would remount its DOM for nothing.
-  const resetAssetUrls = () =>
-    setAssetUrls((current) => (Object.keys(current).length === 0 ? current : {}));
+  // Dedupe, batched writes and failure reasons live in the shared hook.
+  const { assetUrls, svgAssets, imageErrors, load: loadMarkdownImageAsset, reset: resetImageAssets } =
+    useMarkdownImageAssets();
   useEffect(() => {
     if (pane?.status !== "ready" || pane.content.kind !== "markdown") {
-      resetAssetUrls();
+      resetImageAssets();
       return;
     }
-    let cancelled = false;
-    resetAssetUrls();
-    for (const { source, relativePath } of paneImageAssetPaths(
-      pane.content.markdown,
-      pane.path,
-    )) {
-      void readAsset(relativePath)
-        .then((asset) => {
-          if (!cancelled) {
-            setAssetUrls((current) => ({ ...current, [source]: assetDataUrl(asset) }));
-          }
-        })
-        .catch(() => {
-          // Missing and out-of-library images stay visibly blocked.
-        });
+    resetImageAssets();
+    for (const { source } of paneImageAssetPaths(pane.content.markdown, pane.path)) {
+      loadMarkdownImageAsset(pane.path, source);
     }
-    return () => {
-      cancelled = true;
-    };
-  }, [pane]);
+  }, [pane, loadMarkdownImageAsset, resetImageAssets]);
 
   // Session scroll restore; explicit hash targets take priority below.
   useLayoutEffect(() => {
@@ -275,6 +259,17 @@ export function SecondaryPane({
     [allowRemoteImages, assetUrls],
   );
 
+  const resolveLocalSvg = useCallback(
+    (source: string) => svgAssets[normalizeMarkdownUrlKey(source)] ?? null,
+    [svgAssets],
+  );
+
+  /** 渲染器兜底:预加载清单漏收集的本地图片用真实 src 按需读取。 */
+  const handleLoadLocalImage = useCallback(
+    (source: string) => loadMarkdownImageAsset(activePath, source),
+    [activePath, loadMarkdownImageAsset],
+  );
+
   const handleNavigate = useCallback(
     (href: string) => {
       const navigation = classifyPaneNavigation(href, activePath, documents);
@@ -350,6 +345,9 @@ export function SecondaryPane({
           content={paneDisplayMarkdown(loaded.markdown)}
           resolveImageSrc={resolveImageSrc}
           onAllowRemoteImages={onAllowRemoteImages}
+          onLoadLocalImage={handleLoadLocalImage}
+          localImageErrors={imageErrors}
+          resolveLocalSvg={resolveLocalSvg}
           onNavigate={(href) => handleNavigate(href)}
         />
       );

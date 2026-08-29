@@ -106,6 +106,20 @@ function decodePathValue(value: string): string {
   }
 }
 
+const ASCII_PUNCTUATION_ESCAPE = /\\([!"#$%&'()*+,\-./:;<=>?@[\\\]^_`{|}~])/g;
+/** remark 把不成对十六进制的裸 `%` 补编码为 `%25`;收集侧做同样还原。 */
+const BARE_PERCENT_SIGN = /%(?![0-9A-Fa-f]{2})/g;
+
+/**
+ * 归一化一条原文图片目的地,使预加载 key 与 remark 交给 `img` 的 src
+ * 一致:先反转义 CommonMark ASCII 标点(remark 解析时已反转义),再补
+ * 编码裸 `%`,最后走共享的 key 归一化。
+ */
+function normalizeImageDestination(raw: string): string {
+  const unescaped = raw.replace(ASCII_PUNCTUATION_ESCAPE, "$1");
+  return normalizeMarkdownUrlKey(unescaped.replace(BARE_PERCENT_SIGN, "%25"));
+}
+
 /**
  * Resolves a relative link/image source against the referencing document's
  * library path. Protocol URLs, protocol-relative URLs and parent-directory
@@ -123,26 +137,35 @@ export const resolveLibraryRelativePath: (
  * Keys are normalised to match remark / react-markdown `img` src values.
  *
  * Also resolves reference-style images (`![alt][label]`, `![label][]`,
- * `![label]`) through their `[label]: destination` definitions: remark
- * renders them into `img` elements, so they must be preloaded just like
- * inline images or they show up as blocked.
+ * `![label]`) through their `[label]: destination` definitions — including
+ * definitions inside list items and blockquotes, which remark still honours.
+ *
+ * The collector is a fast preloading path, not the correctness bound: any
+ * syntax this misses is recovered by the renderer's on-demand
+ * `onLoadLocalImage` fallback, which receives the exact src remark parsed.
  */
 export function collectReferencedImages(markdown: string): string[] {
   const sources = new Set<string>();
+  // Alt text allows one balanced bracket level and backslash escapes, so
+  // `![alt [v1]](x.png)` and `![a\]b](x.png)` still match like remark's.
   const imagePattern =
-    /!\[[^\]]*]\(\s*(?:<([^>\n]+)>|([^\s)]+))(?:\s+(?:"[^"]*"|'[^']*'))?\s*\)/g;
+    /!\[((?:\\.|[^\\\]]|\[[^\][]*])*)]\(\s*(?:<([^>\n]+)>|((?:\\.|[^\s)])+))(?:\s+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?\s*\)/g;
   for (const match of markdown.matchAll(imagePattern)) {
-    const raw = (match[1] ?? match[2] ?? "").trim();
-    if (raw) sources.add(normalizeMarkdownUrlKey(raw));
+    const raw = (match[2] ?? match[3] ?? "").trim();
+    if (raw) sources.add(normalizeImageDestination(raw));
   }
 
   const definitions = new Map<string, string>();
+  // Definition lines may sit inside blockquotes and (single-level) list
+  // items; remark accepts definitions there, so preloading must too.
   const definitionPattern =
-    /^[ \t]{0,3}\[([^\]\n]+)]:[ \t]*(?:<([^>\n]*)>|([^\s]+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?[ \t]*$/gm;
+    /^[ \t]*(?:(?:>[ \t]*|[-*+][ \t]+|\d{1,9}[.)][ \t]+)+)?\[([^\]\n]+)]:[ \t]*(?:<([^>\n]*)>|([^\s]+))(?:[ \t]+(?:"[^"]*"|'[^']*'|\([^)\n]*\)))?[ \t]*$/gm;
   for (const match of markdown.matchAll(definitionPattern)) {
     const label = match[1].trim().toLowerCase();
     const destination = (match[2] ?? match[3] ?? "").trim();
-    if (label && destination && !definitions.has(label)) definitions.set(label, destination);
+    if (label && destination && !definitions.has(label)) {
+      definitions.set(label, normalizeImageDestination(destination));
+    }
   }
 
   if (definitions.size > 0) {
@@ -150,12 +173,13 @@ export function collectReferencedImages(markdown: string): string[] {
     // mistaken for a reference label. Full form uses the second bracket;
     // collapsed (`![label][]`) and shortcut (`![label]`) fall back to the
     // alt text as the label, matching CommonMark.
-    const referencePattern = /!\[([^\]]*)](?!\()(?:\[([^\]\n]*)])?/g;
+    const referencePattern =
+      /!\[((?:\\.|[^\\\]]|\[[^\][]*])*)](?!\()(?:\[([^\]\n]*)])?/g;
     for (const match of markdown.matchAll(referencePattern)) {
       const label = (match[2] || match[1] || "").trim().toLowerCase();
       if (!label) continue;
       const destination = definitions.get(label);
-      if (destination) sources.add(normalizeMarkdownUrlKey(destination));
+      if (destination) sources.add(destination);
     }
   }
   return [...sources];

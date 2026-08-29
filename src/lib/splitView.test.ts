@@ -200,6 +200,41 @@ describe("collectReferencedImages / paneImageAssetPaths", () => {
   it("ignores reference usages without a definition", () => {
     expect(collectReferencedImages("![missing][ref]")).toEqual([]);
   });
+
+  it("normalises escaped, percent-bearing and titled destinations like remark", () => {
+    const markdown = [
+      "![paren](./a.png (title))",
+      "![bracket alt [v1]](./b.png)",
+      "![escaped \\] alt](./c.png)",
+      "![esc](./d\\(1\\).png)",
+      "![percent](./e%z.png)",
+    ].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual([
+      "./a.png",
+      "./b.png",
+      "./c.png",
+      "./d(1).png",
+      "./e%25z.png",
+    ]);
+  });
+
+  it("collects reference definitions inside list items and blockquotes", () => {
+    const markdown = [
+      "- [ref]: ./in-list.png",
+      "",
+      "> [quoted]: ./quoted.png",
+      "",
+      "![a][ref]",
+      "![b][quoted]",
+    ].join("\n");
+    expect(collectReferencedImages(markdown)).toEqual(["./in-list.png", "./quoted.png"]);
+  });
+
+  it("collects reference definitions across CRLF line endings", () => {
+    expect(collectReferencedImages("![a][ref]\r\n\r\n[ref]: ./crlf.png\r\n")).toEqual([
+      "./crlf.png",
+    ]);
+  });
 });
 
 describe("paneDisplayMarkdown", () => {

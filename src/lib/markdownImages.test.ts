@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  describeAssetLoadFailure,
   isAllowedRemoteImageUrl,
   isRemoteHttpUrl,
+  isSafeImageMimeType,
   normalizeMarkdownUrlKey,
   resolveMarkdownImageSrc,
 } from "./markdownImages";
@@ -48,5 +50,28 @@ describe("resolveMarkdownImageSrc", () => {
     expect(resolveMarkdownImageSrc(https, {}, false)).toBeNull();
     expect(resolveMarkdownImageSrc(https, {}, true)).toBe(https);
     expect(resolveMarkdownImageSrc(http, {}, true)).toBeNull();
+  });
+});
+
+describe("isSafeImageMimeType / describeAssetLoadFailure", () => {
+  it("mirrors the SAFE_DATA_IMAGE type whitelist", () => {
+    expect(isSafeImageMimeType("image/png")).toBe(true);
+    expect(isSafeImageMimeType("image/jpeg")).toBe(true);
+    expect(isSafeImageMimeType("image/svg+xml")).toBe(false);
+    expect(isSafeImageMimeType("image/bmp")).toBe(false);
+  });
+
+  it("maps read_asset failures to readable placeholder reasons", () => {
+    expect(describeAssetLoadFailure("Asset is too large (99999999 bytes)")).toBe(
+      "文件超过 25 MiB 上限",
+    );
+    expect(describeAssetLoadFailure("Cannot read asset: no such file")).toBe(
+      "文件不存在或无法读取",
+    );
+    expect(describeAssetLoadFailure("Asset resolved outside the library")).toBe(
+      "路径越出文档库边界",
+    );
+    expect(describeAssetLoadFailure("something odd")).toBe("读取失败：something odd");
+    expect(describeAssetLoadFailure(undefined)).toBe("读取失败");
   });
 });

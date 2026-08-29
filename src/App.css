@@ -2540,6 +2540,17 @@ a:focus-visible {
   place-items: center;
 }
 
+.markdown-image-svg {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+}
+
+.markdown-image-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
 .markdown-mermaid-loading {
   color: var(--muted);
   font-size: 11px;

@@ -140,6 +140,9 @@ interface AnnotatedMarkdownProps extends Pick<
   | "onAllowRemoteImages"
   | "onLinkPreview"
   | "onLinkPreviewCancel"
+  | "onLoadLocalImage"
+  | "localImageErrors"
+  | "resolveLocalSvg"
 > {
   annotations: Annotation[];
   /** Enables the fuzzy last-resort anchoring step (global preference). */
@@ -158,6 +161,9 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
   onAllowRemoteImages,
   onLinkPreview,
   onLinkPreviewCancel,
+  onLoadLocalImage,
+  localImageErrors,
+  resolveLocalSvg,
   onBrokenIdsChange,
   onApproximateIdsChange,
   onResolutionsChange,
@@ -221,6 +227,9 @@ export const AnnotatedMarkdown = memo(function AnnotatedMarkdown({
         onAllowRemoteImages={onAllowRemoteImages}
         onLinkPreview={onLinkPreview}
         onLinkPreviewCancel={onLinkPreviewCancel}
+        onLoadLocalImage={onLoadLocalImage}
+        localImageErrors={localImageErrors}
+        resolveLocalSvg={resolveLocalSvg}
       />
     </div>
   );

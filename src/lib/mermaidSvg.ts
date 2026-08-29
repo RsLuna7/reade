@@ -45,6 +45,11 @@ function decodeBase64(payload: string): string {
   return new TextDecoder().decode(bytes);
 }
 
+/** Base64 → UTF-8 文本;库内 .svg 资产管线与 Mermaid 沙箱解包共用。 */
+export function decodeBase64Text(payload: string): string {
+  return decodeBase64(payload);
+}
+
 function decodeDataHtmlUrl(src: string): string | null {
   const match = DATA_HTML_URL.exec(src.trim());
   if (!match) {
@@ -121,7 +126,10 @@ function tagNameOf(element: Element): string {
 }
 
 function sanitizeSvgRoot(root: Element): boolean {
-  for (const element of Array.from(root.querySelectorAll("*"))) {
+  // 根元素也要过属性清洗:任意库内 SVG 可以在 <svg> 根上挂 onload,
+  // querySelectorAll("*") 不含根,Mermaid 输出覆盖不到这一面。
+  const elements = [root, ...Array.from(root.querySelectorAll("*"))];
+  for (const element of elements) {
     if (FORBIDDEN_TAGS.has(tagNameOf(element))) {
       element.remove();
       continue;
@@ -178,4 +186,13 @@ export function sanitizeMermaidSvg(markup: string): string | null {
     return null;
   }
   return serialized;
+}
+
+/**
+ * 库内 `.svg` 文件与 Mermaid 输出走同一条消毒管线(禁脚本/事件处理器/
+ * 外部引用/危险 CSS),再以内联 SVG 渲染。语义化别名,方便资产管线
+ * 调用点读出信任模型。
+ */
+export function sanitizeLibrarySvg(markup: string): string | null {
+  return sanitizeMermaidSvg(markup);
 }

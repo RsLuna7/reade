@@ -64,7 +64,6 @@ import {
 import {
   APP_RUNTIME,
   DEFAULT_LIBRARY_ROOT,
-  assetDataUrl,
   captureReadSnapshot,
   detectMovedDocuments,
   findRelatedPassages,
@@ -85,7 +84,6 @@ import {
   openExternalLink,
   pickAnnotationImportFile,
   probeLibraryPath,
-  readAsset,
   readDocument,
   readPdfReadingMode,
   readSnapshotDiff,
@@ -133,10 +131,8 @@ import {
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
 import { resolveLibraryPath } from "./lib/documentLinks";
-import {
-  normalizeMarkdownUrlKey,
-  resolveMarkdownImageSrc,
-} from "./lib/markdownImages";
+import { normalizeMarkdownUrlKey, resolveMarkdownImageSrc } from "./lib/markdownImages";
+import { useMarkdownImageAssets } from "./lib/useMarkdownImageAssets";
 import {
   clampSplitPos,
   collectReferencedImages as referencedImages,
@@ -1640,7 +1636,6 @@ function App() {
   const mobileScrollSuppressUntil = useRef(0);
   const [tocState, setTocState] = useState<{ path: string; items: TocItem[] } | null>(null);
   const [activeHeadingState, setActiveHeadingState] = useState<{ path: string; id: string | null } | null>(null);
-  const [assetUrls, setAssetUrls] = useState<Record<string, string>>({});
   const [notice, setNotice] = useState<{
     id: number;
     message: string;
@@ -5111,37 +5106,26 @@ function App() {
     setAnnotationTool,
   ]);
 
+  // Markdown 本地资产管线(主栏):去重、批量写入与失败原因都收在 hook 里。
+  const {
+    assetUrls,
+    svgAssets,
+    imageErrors,
+    load: loadMarkdownImageAsset,
+    reset: resetImageAssets,
+  } = useMarkdownImageAssets();
+
   useEffect(() => {
     if (!currentContent || currentContent.kind !== "markdown" || !currentPath) {
-      setAssetUrls({});
+      resetImageAssets();
       return;
     }
 
-    let cancelled = false;
-    setAssetUrls({});
-    const sources = referencedImages(currentContent.markdown);
-    for (const source of sources) {
-      if (source.startsWith("data:") || EXTERNAL_PROTOCOL.test(source)) continue;
-      const relativePath = resolveLibraryPath(source, currentPath);
-      if (!relativePath) continue;
-      void readAsset(relativePath)
-        .then((asset) => {
-          if (!cancelled) {
-            setAssetUrls((current) => ({
-              ...current,
-              [normalizeMarkdownUrlKey(source)]: assetDataUrl(asset),
-            }));
-          }
-        })
-        .catch(() => {
-          // Missing and out-of-library images stay visibly blocked in the document.
-        });
+    resetImageAssets();
+    for (const source of referencedImages(currentContent.markdown)) {
+      loadMarkdownImageAsset(currentPath, source);
     }
-
-    return () => {
-      cancelled = true;
-    };
-  }, [currentContent, currentPath]);
+  }, [currentContent, currentPath, loadMarkdownImageAsset, resetImageAssets]);
 
   useEffect(() => {
     const article = articleRef.current;
@@ -5404,6 +5388,24 @@ function App() {
   const resolveImageSrc = useCallback(
     (source: string) => resolveMarkdownImageSrc(source, assetUrls, allowRemoteImages),
     [allowRemoteImages, assetUrls],
+  );
+
+  const resolveLocalSvg = useCallback(
+    (source: string) => svgAssets[normalizeMarkdownUrlKey(source)] ?? null,
+    [svgAssets],
+  );
+
+  /**
+   * 预加载清单(正则收集)与 remark 实际解析可能不一致(转义、列表内
+   * 引用定义、百分号补编码等),被拦的本地图片把 remark 交来的真实 src
+   * 交回这里按需读取,杜绝"图片已拦截"误报。
+   */
+  const handleLoadLocalImage = useCallback(
+    (source: string) => {
+      if (!currentPath) return;
+      loadMarkdownImageAsset(currentPath, source);
+    },
+    [currentPath, loadMarkdownImageAsset],
   );
 
   const handleAllowRemoteImages = useCallback(() => {
@@ -6006,6 +6008,9 @@ function App() {
                     fuzzyAnchoring={fuzzyAnchoring}
                     resolveImageSrc={resolveImageSrc}
                     onAllowRemoteImages={handleAllowRemoteImages}
+                    onLoadLocalImage={handleLoadLocalImage}
+                    localImageErrors={imageErrors}
+                    resolveLocalSvg={resolveLocalSvg}
                     onNavigate={handleMarkdownNavigate}
                     onLinkPreview={hoverPreview.previewLink}
                     onLinkPreviewCancel={hoverPreviewCancel}

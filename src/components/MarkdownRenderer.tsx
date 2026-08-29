@@ -21,7 +21,7 @@ import {
   countMermaidEdges,
   safeUrlTransform,
 } from "../lib/markdown";
-import { isRemoteHttpUrl } from "../lib/markdownImages";
+import { isRemoteHttpUrl, normalizeMarkdownUrlKey } from "../lib/markdownImages";
 import { sanitizeMermaidSvg } from "../lib/mermaidSvg";
 
 export interface MarkdownRendererProps {
@@ -45,6 +45,20 @@ export interface MarkdownRendererProps {
     trigger: "hover" | "focus",
   ) => void;
   onLinkPreviewCancel?: () => void;
+  /**
+   * 本地图片未命中资产表时的按需加载兜底:remark 交给 `img` 的 src 是
+   * 唯一事实,预加载清单(上游正则收集)只是加速路径。上层去重,渲染器
+   * 只转发;不挂时保持纯静态的拦截占位。
+   */
+  onLoadLocalImage?: (source: string) => void;
+  /** 归一化 src → 加载失败原因;命中时占位符从"已拦截"改为具体原因。 */
+  localImageErrors?: Record<string, string>;
+  /**
+   * 归一化 src → 已消毒的内联 SVG 标记(库内 .svg 文件经
+   * sanitizeLibrarySvg 处理)。返回值直接注入 DOM,安全边界在上层消毒,
+   * 不再过 safeUrlTransform——那是 URL 策略,不是标记策略。
+   */
+  resolveLocalSvg?: (source: string) => string | null;
 }
 
 type SourcePosition = {
@@ -439,6 +453,48 @@ function resolvedUrl(value: string, resolver?: (value: string) => string | null)
   return resolved === null ? null : safeUrlTransform(resolved);
 }
 
+/**
+ * 库内 .svg 资产:上层已经 sanitizeLibrarySvg 消毒,这里只负责以
+ * 行内元素承载(Mermaid 图表同一信任模型),不经过 URL 策略。
+ */
+function InlineSvgImage({ markup, alt }: { markup: string; alt?: string }) {
+  return (
+    <span
+      className="markdown-image-svg"
+      role="img"
+      aria-label={alt || "库内 SVG 图像"}
+      dangerouslySetInnerHTML={{ __html: markup }}
+    />
+  );
+}
+
+/**
+ * 未命中资产表的本地图片占位:挂载即把 remark 交来的真实 src 上报给
+ * 上层按需读取,读取成功后资产表更新、本组件被真正的 img 替换。
+ * 读取失败(文件缺失/越界/超限)则停在与远程拦截一致的占位样式。
+ */
+function BlockedLocalImage({
+  source,
+  alt,
+  failure,
+  onLoadLocalImage,
+}: {
+  source: string;
+  alt?: string;
+  failure?: string;
+  onLoadLocalImage: (source: string) => void;
+}) {
+  useEffect(() => {
+    onLoadLocalImage(source);
+  }, [source, onLoadLocalImage]);
+
+  return (
+    <span className="markdown-image-blocked">
+      <span>{failure ? `图片加载失败：${failure}` : (alt || "图片已拦截")}</span>
+    </span>
+  );
+}
+
 export function MarkdownRenderer({
   content,
   className,
@@ -448,6 +504,9 @@ export function MarkdownRenderer({
   onAllowRemoteImages,
   onLinkPreview,
   onLinkPreviewCancel,
+  onLoadLocalImage,
+  localImageErrors,
+  resolveLocalSvg,
 }: MarkdownRendererProps) {
   const components: Components = {
     h1: heading(1),
@@ -515,6 +574,27 @@ export function MarkdownRenderer({
       const resolved = typeof src === "string" ? resolvedUrl(src, resolveImageSrc) : null;
       if (resolved === null) {
         const remote = typeof src === "string" && isRemoteHttpUrl(src);
+        const localCandidate =
+          !remote && typeof src === "string" && !!src && !src.startsWith("data:");
+        if (localCandidate) {
+          const initiallySafe = safeUrlTransform(src);
+          if (initiallySafe !== null) {
+            const svg = resolveLocalSvg?.(initiallySafe) ?? null;
+            if (svg) {
+              return <InlineSvgImage markup={svg} alt={alt} />;
+            }
+          }
+          if (onLoadLocalImage) {
+            return (
+              <BlockedLocalImage
+                source={src}
+                alt={alt}
+                failure={localImageErrors?.[normalizeMarkdownUrlKey(src)]}
+                onLoadLocalImage={onLoadLocalImage}
+              />
+            );
+          }
+        }
         return (
           <span className="markdown-image-blocked">
             <span>{alt || (remote ? "远程图片已拦截" : "图片已拦截")}</span>

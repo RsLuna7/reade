@@ -76,6 +76,89 @@ describe("MarkdownRenderer", () => {
     expect(onAllowRemoteImages).toHaveBeenCalledTimes(1);
   });
 
+  it("reports blocked local images for on-demand loading instead of staying static", () => {
+    const onLoadLocalImage = vi.fn();
+    const { container, rerender } = render(
+      <MarkdownRenderer
+        content={"![esc](./d\\(1\\).png)\n\n![](https://cdn.example/diagram.png)"}
+        resolveImageSrc={() => null}
+        onLoadLocalImage={onLoadLocalImage}
+      />,
+    );
+
+    // Only the local image is reported, with remark's exact (unescaped) src.
+    expect(onLoadLocalImage).toHaveBeenCalledTimes(1);
+    expect(onLoadLocalImage).toHaveBeenCalledWith("./d(1).png");
+
+    // Once the asset map resolves the src, the real img replaces the block.
+    rerender(
+      <MarkdownRenderer
+        content={"![esc](./d\\(1\\).png)\n\n![](https://cdn.example/diagram.png)"}
+        resolveImageSrc={(source) => (source === "./d(1).png" ? "data:image/png;base64,AAAA" : null)}
+        onLoadLocalImage={onLoadLocalImage}
+      />,
+    );
+    expect(container.querySelector("img")).toHaveAttribute("src", "data:image/png;base64,AAAA");
+  });
+
+  it("keeps blocked local images informational without the on-demand loader", () => {
+    render(
+      <MarkdownRenderer content={"![](./missing.png)"} resolveImageSrc={() => null} />,
+    );
+
+    expect(screen.getByText("图片已拦截")).toBeInTheDocument();
+  });
+
+  it("shows the concrete failure reason on blocked local images", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={"![](./missing.png)"}
+        resolveImageSrc={() => null}
+        onLoadLocalImage={vi.fn()}
+        localImageErrors={{ "./missing.png": "文件超过 25 MiB 上限" }}
+      />,
+    );
+
+    expect(container.textContent).toContain("图片加载失败：文件超过 25 MiB 上限");
+  });
+
+  it("renders sanitized library SVGs inline without going through the URL policy", () => {
+    const { container } = render(
+      <MarkdownRenderer
+        content={"![图](<./diagram file.svg>)"}
+        resolveImageSrc={() => null}
+        resolveLocalSvg={(source) =>
+          source === "./diagram%20file.svg" ? '<svg xmlns="http://www.w3.org/2000/svg"/>' : null
+        }
+      />,
+    );
+
+    const holder = container.querySelector("span.markdown-image-svg");
+    expect(holder).toHaveAttribute("role", "img");
+    expect(holder?.querySelector("svg")).toBeInTheDocument();
+  });
+
+  it("keeps SVG data URLs written in markdown text blocked, never inline", () => {
+    const onLoadLocalImage = vi.fn();
+    const resolveLocalSvg = vi.fn(() => "<svg/>");
+    const { container } = render(
+      <MarkdownRenderer
+        content={
+          "![](data:image/svg+xml;base64,PHN2ZyBvbmxvYWQ9ImFsZXJ0KDEpIi8+)"
+        }
+        resolveImageSrc={() => null}
+        onLoadLocalImage={onLoadLocalImage}
+        resolveLocalSvg={resolveLocalSvg}
+      />,
+    );
+
+    expect(container.querySelector("span.markdown-image-svg")).not.toBeInTheDocument();
+    expect(container.querySelector("img")).not.toBeInTheDocument();
+    expect(onLoadLocalImage).not.toHaveBeenCalled();
+    expect(resolveLocalSvg).not.toHaveBeenCalled();
+    expect(container.querySelector(".markdown-image-blocked")).toBeInTheDocument();
+  });
+
   it("renders remote https images when the resolver allows them", () => {
     const { container } = render(
       <MarkdownRenderer
