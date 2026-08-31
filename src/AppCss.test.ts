@@ -115,6 +115,14 @@ describe("application CSS isolation", () => {
     );
   });
 
+  it("uses per-item inset markers for TOC active and reached states, not a continuous left rail", () => {
+    expect(css).toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+transparent/s);
+    expect(css).toMatch(
+      /\.toc-link\.active\s*,\s*\.toc-link\[aria-current="location"\]\s*\{[^}]*box-shadow:\s*inset\s+2px\s+0\s+0\s+var\(--accent\)/s,
+    );
+    expect(css).not.toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+var\(--line\)/s);
+  });
+
   it("keeps the right TOC panel from clipping annotation cards horizontally", () => {
     // #1: library-group 若用 auto 轨，子项 width/max-width:100% 与内容宽度循环，
     // 卡片会撑到面板外再被 overflow-x:hidden 硬裁。

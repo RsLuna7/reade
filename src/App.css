@@ -2660,7 +2660,8 @@ a:focus-visible {
   display: block;
   padding: 5px 8px 5px calc(10px + (var(--toc-depth, 1) - 1) * 11px);
   overflow: hidden;
-  border-left: 1px solid var(--line);
+  /* 未读节左缘透明(plan-heatmap-toc §3.3);勿用连续灰轨,否则 accent 活动线像叠在滚动条上。 */
+  border-left: 1px solid transparent;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.45;
@@ -2668,7 +2669,6 @@ a:focus-visible {
   text-overflow: ellipsis;
   white-space: nowrap;
   transition:
-    border-color var(--motion-fast) var(--motion-ease),
     color var(--motion-fast) var(--motion-ease),
     background-color var(--motion-fast) var(--motion-ease);
 }
@@ -2679,7 +2679,8 @@ a:focus-visible {
 
 .toc-link.active,
 .toc-link[aria-current="location"] {
-  border-left-color: var(--accent);
+  /* 与 .is-reached 同族 inset 线,避免 border 灰轨与 accent 段重叠。 */
+  box-shadow: inset 2px 0 0 var(--accent);
   color: var(--accent-ink);
   font-weight: 650;
 }
@@ -2700,7 +2701,7 @@ a:focus-visible {
   margin: 0 0 8px;
   padding: 4px 8px 4px 10px;
   border: 0;
-  border-left: 1px solid var(--line);
+  border-left: 1px solid transparent;
   border-radius: 0;
   color: var(--muted);
   background: transparent;
