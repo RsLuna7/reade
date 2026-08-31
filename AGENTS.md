@@ -204,7 +204,7 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 - 桌面版发现 `.md`、`.markdown`、`.mdx`、`.pdf`、`.epub`；`.mdx` 仅按普通 Markdown 安全展示；Web 版只发布 Markdown。
 - 桌面扫描遵守 `.gitignore`，不跟随符号链接，并排除常见构建/依赖目录；Web 生成器不读 `.gitignore`，改用扩展名白名单，两者语义不同。
 - 前端 localStorage 只存偏好与轻量位置：`reade-reader-preferences`、`reade-library-mru`、`reade-reading-positions`、`reade-vertical-writing`、`reade-home-baseline`、`reade-device-id`；文档正文和索引不进前端存储。Web 版的标注与合集存 IndexedDB。
-- 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
+- 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Ctrl+滚轮` 放大/缩小阅读（Markdown/EPUB 调字号，PDF 原版式调页面缩放）、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
 - `examples/demo-library/` 用于功能联调，`output/playwright/` 只作为视觉参考，不是源码或自动化测试结果的替代品。
 - `docs/roadmap-innovations.md` 末尾有一份尚未完成的人工验收清单（桌面真机 9 项、Web 真实部署 4 项）。碰到桌面清单里的功能时，别把"测试通过"当成已验收。Web 真实部署 4 项不再推进。
 - `APP_RUNTIME` 由 Vite mode 决定：默认/production 是 desktop，`--mode web` 是 Web；不得用浏览器特征猜运行时。Web 版功能已封存，日常开发以桌面为准。

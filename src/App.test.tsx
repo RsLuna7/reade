@@ -2148,6 +2148,37 @@ describe("vertical writing mode (plan-vertical-writing)", () => {
   });
 });
 
+describe("reader wheel zoom", () => {
+  it("adjusts persisted font size with Ctrl+wheel on markdown", async () => {
+    setLibraryReadingState();
+    useReaderStore.getState().updateReadingSettings({ fontSize: 17 });
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    fireEvent.wheel(reader, { deltaY: -120, ctrlKey: true });
+    expect(useReaderStore.getState().readingSettings.fontSize).toBe(18);
+
+    fireEvent.wheel(reader, { deltaY: 120, ctrlKey: true });
+    expect(useReaderStore.getState().readingSettings.fontSize).toBe(17);
+  });
+
+  it("does not zoom when Ctrl is not held", async () => {
+    setLibraryReadingState();
+    useReaderStore.getState().updateReadingSettings({ fontSize: 17 });
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
+    });
+
+    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
+    fireEvent.wheel(reader, { deltaY: -120 });
+    expect(useReaderStore.getState().readingSettings.fontSize).toBe(17);
+  });
+});
+
 describe("reading position persistence (H0)", () => {
   it("persists the scroll ratio through the rAF + trailing debounce pipeline", async () => {
     setLibraryReadingState();

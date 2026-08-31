@@ -15,6 +15,7 @@ import {
 } from "../lib/annotations";
 import type { AnchorResolution } from "../lib/annotationModel";
 import type { TocItem } from "../lib/markdown";
+import { adjustPdfScale, type WheelZoomDirection } from "../lib/readerWheelZoom";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import {
   cropRegionFromSource,
@@ -269,6 +270,7 @@ export interface PdfReaderHandle {
   restorePosition: (position: PdfPagePosition) => boolean;
   jumpToPage: (physicalPage: number) => void;
   openPageCalibration: () => void;
+  adjustScale: (direction: WheelZoomDirection) => void;
 }
 
 interface PdfReaderProps {
@@ -1244,6 +1246,11 @@ export function PdfReader({
     }
   }, [session, spreadActive]);
 
+  const adjustScale = useCallback((direction: WheelZoomDirection) => {
+    if (direction === 0) return;
+    setScale((value) => adjustPdfScale(value, direction));
+  }, []);
+
   useEffect(() => {
     // 加载即适宽;spreadActive 改变 fitWidth 身份,切换双页/单页时
     // 顺带重新适宽(定稿 §6.1 的已知取舍:手动缩放不跨切换保留)。
@@ -1460,11 +1467,12 @@ export function PdfReader({
       },
       jumpToPage: (physicalPage) => jump(physicalPage),
       openPageCalibration,
+      adjustScale,
     };
     return () => {
       readerRef.current = null;
     };
-  }, [capturePosition, jump, mode, openPageCalibration, openReadingMode, readerRef, switchMode]);
+  }, [adjustScale, capturePosition, jump, mode, openPageCalibration, openReadingMode, readerRef, switchMode]);
 
   useEffect(() => {
     if (locator?.kind !== "pdfPage") return;

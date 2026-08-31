@@ -298,6 +298,7 @@ import {
   applySentenceHighlight,
   clearSentenceHighlight,
 } from "./lib/sentenceHighlight";
+import { adjustFontSize, wheelZoomDirection } from "./lib/readerWheelZoom";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
 import {
   CONTENT_WIDTH_MAX,
@@ -1553,6 +1554,7 @@ function App() {
   const searchResults = useReaderStore((state) => state.searchResults);
   const theme = useReaderStore((state) => state.theme);
   const readingSettings = useReaderStore((state) => state.readingSettings);
+  const updateReadingSettings = useReaderStore((state) => state.updateReadingSettings);
   const motionLevel = useReaderStore((state) => state.motionLevel);
   const annotationTool = useReaderStore((state) => state.annotationTool);
   const highlightColor = useReaderStore((state) => state.highlightColor);
@@ -1833,12 +1835,40 @@ function App() {
     reader.addEventListener("wheel", onWheel, { passive: false });
     return () => reader.removeEventListener("wheel", onWheel);
   }, [verticalActive, currentPath]);
+
   const statsOpen = !IS_WEB_RUNTIME && activeView === "stats";
   const homeOpen = activeView === "home";
   const reviewOpen = activeView === "review";
   const annotationsOpen = activeView === "annotations";
   /** 任一全屏视图打开时,阅读面保持挂载但隐藏(stats 的既有挂载模式)。 */
   const overlayViewOpen = statsOpen || homeOpen || reviewOpen || annotationsOpen;
+
+  // Ctrl+滚轮缩放:Markdown/EPUB(及 PDF 阅读模式)调正文字号;PDF 原版式调页面缩放。
+  useEffect(() => {
+    if (overlayViewOpen) return;
+    const reader = readerRef.current;
+    if (!reader) return;
+    const onWheel = (event: WheelEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      if (!currentPath || !currentContent) return;
+      const direction = wheelZoomDirection(event.deltaY);
+      if (direction === 0) return;
+      event.preventDefault();
+      const pdfHandle = pdfReaderHandleRef.current;
+      if (currentContent.kind === "pdf" && pdfHandle?.getMode() === "original") {
+        pdfHandle.adjustScale(direction);
+        return;
+      }
+      const currentSize = useReaderStore.getState().readingSettings.fontSize;
+      const nextSize = adjustFontSize(currentSize, direction);
+      if (nextSize !== currentSize) {
+        updateReadingSettings({ fontSize: nextSize });
+      }
+    };
+    reader.addEventListener("wheel", onWheel, { passive: false });
+    return () => reader.removeEventListener("wheel", onWheel);
+  }, [overlayViewOpen, currentPath, currentContent, updateReadingSettings]);
+
   const themeMode = THEME_META[theme].mode;
   // 回顾会话跨视图保留(App 内存 state):「打开原文」跳走后同日回来续接。
   const [reviewSession, setReviewSession] = useState<ReviewSession | null>(null);
