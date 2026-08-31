@@ -211,7 +211,6 @@ describe("StatsView footprint card", () => {
     const foreign = within(ranking).getByTitle("来自文档库「papers」· 打开该库后可跳转");
     expect(foreign).toBeDisabled();
     expect(within(ranking).getByText("（papers）")).toBeInTheDocument();
-    expect(screen.getByText(/个人累计，跨文档库/)).toBeInTheDocument();
   });
 
   it("treats Windows canonicalize-prefixed sessions as openable in the current library", async () => {

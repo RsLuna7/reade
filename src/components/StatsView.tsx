@@ -1120,7 +1120,6 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
         </button>
         <div className="stats-heading">
           <h1>阅读统计</h1>
-          <span>数据仅保存在本机 · 个人累计，跨文档库</span>
         </div>
         <div className="stats-header-tools">
           <div className="stats-popover-anchor">
