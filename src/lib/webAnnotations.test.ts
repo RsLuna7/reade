@@ -353,6 +353,15 @@ describe("upsert sort index fallback", () => {
     const listed = await listWebAnnotations("notes/a.md");
     expect(listed[0].deletedAt).toBeNull();
   });
+
+  it("recolors an existing excerpt when legacy upsert changes tone", async () => {
+    await upsertWebAnnotation(makeAnnotation("ann-recolor", "notes/a.md", { color: "green" }));
+    await upsertWebAnnotation(
+      makeAnnotation("ann-recolor", "notes/a.md", { color: "blue", updatedAt: 2 }),
+    );
+    const listed = await listWebAnnotations("notes/a.md");
+    expect(listed[0]?.color).toBe("blue");
+  });
 });
 
 async function readAllFingerprints(): Promise<WebDocumentFingerprint[]> {

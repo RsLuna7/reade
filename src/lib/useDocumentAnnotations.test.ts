@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Annotation } from "./backend";
 import {
   migrateLegacyAnnotation,
+  toneToLegacyColor,
   type AnnotationEntryKind,
   type DocumentAnnotationBundle,
   type Excerpt,
@@ -15,6 +16,7 @@ import {
 const backendMocks = vi.hoisted(() => ({
   listDocumentAnnotations: vi.fn(),
   upsertAnnotation: vi.fn(),
+  updateExcerptAppearance: vi.fn(),
   createExcerpt: vi.fn(),
   deleteAnnotation: vi.fn(),
   clearDocumentAnnotations: vi.fn(),
@@ -126,6 +128,24 @@ beforeEach(() => {
   backendMocks.upsertAnnotation.mockReset().mockImplementation(async (annotation: Annotation) => {
     putLegacyAnnotation(annotation);
     return annotation;
+  });
+  backendMocks.updateExcerptAppearance.mockReset().mockImplementation(async (id, appearance) => {
+    const excerpt = serverBundle.excerpts.find((item) => item.id === id);
+    if (!excerpt) throw new Error("Excerpt was not found");
+    const toneChanged = excerpt.appearance.tone !== appearance.tone;
+    const updated = {
+      ...excerpt,
+      appearance: { ...appearance },
+      updatedAt: Date.now(),
+      legacyKind: appearance.style,
+      legacyColor: toneChanged
+        ? toneToLegacyColor(appearance.tone)
+        : excerpt.legacyColor,
+    };
+    serverBundle.excerpts = serverBundle.excerpts.map((item) =>
+      item.id === id ? updated : item,
+    );
+    return updated;
   });
   backendMocks.createExcerpt.mockReset().mockImplementation(async (draft, reflectionBody) => {
     const excerpt: Excerpt = {
@@ -395,6 +415,24 @@ describe("atomic actions and undo semantics", () => {
     });
     expect(result.current.annotations[0]?.note).toBe("new thought");
     expect(result.current.bundle.reviewEnrollments[0]?.totalReviews).toBe(3);
+  });
+
+  it("recolors an existing mark through the v6 appearance command", async () => {
+    serverBundle = bundleFromAnnotations([makeAnnotation("a1", { color: "green" })]);
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.annotations).toHaveLength(1));
+    expect(result.current.annotations[0]?.color).toBe("green");
+
+    await act(async () => {
+      await result.current.updateColor(result.current.annotations[0]!, "blue");
+    });
+
+    expect(backendMocks.updateExcerptAppearance).toHaveBeenCalledWith("a1", {
+      style: "highlight",
+      tone: "slate",
+    });
+    expect(backendMocks.upsertAnnotation).not.toHaveBeenCalled();
+    expect(result.current.annotations[0]?.color).toBe("blue");
   });
 
   it("caps the undo stack at 20 entries", async () => {

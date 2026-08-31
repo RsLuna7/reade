@@ -7,6 +7,7 @@ import {
   restoreAnnotationEntry,
   restoreDocumentAnnotations,
   setReviewEnrollment,
+  updateExcerptAppearance,
   upsertAnnotation,
   upsertReflection,
   type Annotation,
@@ -14,11 +15,13 @@ import {
 } from "./backend";
 import {
   excerptToLegacyAnnotation,
+  legacyColorToTone,
   readingPlaceToLegacyAnnotation,
   type AnnotationEntryKind,
   type DocumentAnnotationBundle,
   type ExcerptDraft,
 } from "./annotationModel";
+import { isAnnotationMarkKind } from "./annotations";
 
 const MAX_UNDO = 20;
 
@@ -241,9 +244,23 @@ export function useDocumentAnnotations(relativePath: string | null) {
   );
 
   const updateColor = useCallback(
-    async (annotation: Annotation, color: AnnotationColor) =>
-      save({ ...annotation, color, updatedAt: Date.now() }, { recordUndo: false }),
-    [save],
+    async (annotation: Annotation, color: AnnotationColor) => {
+      if (!isAnnotationMarkKind(annotation.kind)) {
+        return save({ ...annotation, color, updatedAt: Date.now() }, { recordUndo: false });
+      }
+      const saved = await updateExcerptAppearance(annotation.id, {
+        style: annotation.kind,
+        tone: legacyColorToTone(color),
+      });
+      commitBundle({
+        ...bundleRef.current,
+        excerpts: [
+          saved,
+          ...bundleRef.current.excerpts.filter((item) => item.id !== saved.id),
+        ],
+      });
+    },
+    [commitBundle, save],
   );
 
   const saveReflection = useCallback(

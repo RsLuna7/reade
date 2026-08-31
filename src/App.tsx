@@ -3275,7 +3275,7 @@ function App() {
 
   const handleChangeAnnotationColor = useCallback(
     async (annotation: Annotation, color: AnnotationColor) => {
-      if (annotation.color === color) return;
+      if (legacyColorToTone(annotation.color) === legacyColorToTone(color)) return;
       try {
         await updateColor(annotation, color);
         showNotice("已更新颜色");

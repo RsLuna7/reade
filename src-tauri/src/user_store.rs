@@ -3707,11 +3707,20 @@ fn excerpt_from_legacy_annotation(
         },
     };
     let (tone, legacy_color, created_at) = if let Some(existing) = existing {
-        (
-            existing.appearance.tone.clone(),
-            existing.legacy_color.clone(),
-            existing.created_at,
-        )
+        let incoming_tone = legacy_color_to_tone(annotation.color.as_ref());
+        if incoming_tone != existing.appearance.tone {
+            (
+                incoming_tone,
+                annotation.color.clone(),
+                existing.created_at,
+            )
+        } else {
+            (
+                existing.appearance.tone.clone(),
+                existing.legacy_color.clone(),
+                existing.created_at,
+            )
+        }
     } else {
         (
             legacy_color_to_tone(annotation.color.as_ref()),
@@ -9448,6 +9457,36 @@ mod tests {
         )
         .expect("legacy sage");
         refresh_v6_migration_ledger(connection, ROOT, 1_300).expect("ledger");
+    }
+
+    #[test]
+    fn legacy_upsert_recolor_updates_v6_appearance() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        let excerpt = persist_excerpt(
+            &connection,
+            sample_excerpt_draft("ex-recolor", "notes/a.md"),
+            1_000,
+        );
+        upsert_annotation_row(
+            &connection,
+            ROOT,
+            &excerpt_to_legacy_annotation(&excerpt, None),
+        )
+        .expect("legacy insert");
+        refresh_v6_migration_ledger(&connection, ROOT, 1_000).expect("ledger");
+
+        let mut recolored = excerpt_to_legacy_annotation(&excerpt, None);
+        recolored.color = Some(AnnotationColor::Blue);
+        recolored.updated_at = 1_100;
+        upsert_annotation_row(&connection, ROOT, &recolored).expect("legacy recolor");
+        refresh_v6_migration_ledger(&connection, ROOT, 1_100).expect("ledger");
+
+        let stored = read_excerpt_row(&connection, ROOT, "ex-recolor")
+            .expect("read")
+            .expect("present");
+        assert_eq!(stored.appearance.tone, ExcerptTone::Slate);
+        assert_eq!(stored.legacy_color, Some(AnnotationColor::Blue));
     }
 
     #[test]

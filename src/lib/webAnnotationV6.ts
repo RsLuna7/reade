@@ -1,6 +1,7 @@
 import type { Annotation } from "./backend";
 import {
   excerptToLegacyAnnotation,
+  legacyColorToTone,
   migrateLegacyAnnotation,
   readingPlaceToLegacyAnnotation,
   type Excerpt,
@@ -136,11 +137,14 @@ export function projectAnnotationIntoV6(
   );
   if (migrated.excerpt) {
     if (existingExcerpt && existingExcerpt.deletedAt == null) {
-      migrated.excerpt.appearance = {
-        ...migrated.excerpt.appearance,
-        tone: existingExcerpt.appearance.tone,
-      };
-      migrated.excerpt.legacyColor = existingExcerpt.legacyColor;
+      const incomingTone = legacyColorToTone(annotation.color);
+      if (incomingTone !== existingExcerpt.appearance.tone) {
+        migrated.excerpt.appearance.tone = incomingTone;
+        migrated.excerpt.legacyColor = annotation.color;
+      } else {
+        migrated.excerpt.appearance.tone = existingExcerpt.appearance.tone;
+        migrated.excerpt.legacyColor = existingExcerpt.legacyColor;
+      }
       migrated.excerpt.createdAt = existingExcerpt.createdAt;
     }
     tx.objectStore(EXCERPTS_STORE).put(migrated.excerpt);
