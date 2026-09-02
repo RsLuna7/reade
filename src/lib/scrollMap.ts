@@ -9,8 +9,9 @@
  * first; PDF annotations without a rendered mark fall back to the page
  * skeleton plus the stored normalized rects; bookmarks mirror the
  * `performAnnotationJump` chain (heading element → page offset → scroll
- * ratio). Markdown search hits carry no in-document offset and stay
- * absent (RS-D3).
+ * ratio). Library-wide Ctrl+K search hits still lack intra-doc offsets
+ * (RS-D3); in-document Ctrl+F matches are measured separately via
+ * {@link collectFindScrollPoints}.
  */
 
 import type { Annotation, AnnotationColor, SearchResult } from "./backend";
@@ -233,6 +234,46 @@ export function collectSearchScrollPoints(
       offset: offsetInScroller(scroller, element.getBoundingClientRect().top),
       label: pointLabel("search", result.snippet),
       targetId: result.resultId,
+    });
+  }
+  return points;
+}
+
+export interface FindScrollPointInput {
+  targetId: string;
+  label: string;
+  range: Range | null;
+}
+
+/** In-document find hits measured from resolved DOM ranges (Ctrl+F). */
+export function collectFindScrollPoints(
+  scroller: HTMLElement,
+  entries: readonly FindScrollPointInput[],
+): ScrollMapPoint[] {
+  const points: ScrollMapPoint[] = [];
+  for (const entry of entries) {
+    if (!entry.range) continue;
+    let top: number | null = null;
+    if (typeof entry.range.getBoundingClientRect === "function") {
+      const rect = entry.range.getBoundingClientRect();
+      if (Number.isFinite(rect.top)) top = rect.top;
+    }
+    if (top === null) {
+      const node = entry.range.startContainer;
+      const element =
+        node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+      if (element instanceof HTMLElement) {
+        const rect = element.getBoundingClientRect();
+        if (Number.isFinite(rect.top)) top = rect.top;
+      }
+    }
+    if (top === null) continue;
+    points.push({
+      kind: "search",
+      color: null,
+      offset: offsetInScroller(scroller, top),
+      label: pointLabel("search", entry.label),
+      targetId: entry.targetId,
     });
   }
   return points;

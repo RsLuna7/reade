@@ -120,13 +120,17 @@ import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components
 import { HoverPreviewCard } from "./components/HoverPreviewCard";
 import { useHoverPreview } from "./lib/useHoverPreview";
 // 富滚动条刻度层(plan-rich-scrollbar):纯映射在 lib,测量与点击语义在此。
+import { FindBar } from "./components/FindBar";
 import { ScrollMap } from "./components/ScrollMap";
+import { useDocumentFind } from "./lib/useDocumentFind";
 import {
   buildScrollMapMarks,
   collectAnnotationScrollPoints,
+  collectFindScrollPoints,
   collectSearchScrollPoints,
   type ScrollMapMark,
 } from "./lib/scrollMap";
+import { rangeForFindMatch } from "./lib/documentFindAdapters";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
@@ -300,6 +304,15 @@ import {
 } from "./lib/sentenceHighlight";
 import { adjustFontSize, wheelZoomDirection } from "./lib/readerWheelZoom";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
+import {
+  READER_CJK_FONTS,
+  READER_FONT_PAIRS,
+  READER_LATIN_FONTS,
+  loadResolvedReaderFonts,
+  resolveReaderFontSelection,
+  type ReaderFontId,
+  type ReaderFontPairId,
+} from "./lib/readerFonts";
 import {
   CONTENT_WIDTH_MAX,
   CONTENT_WIDTH_MIN,
@@ -786,6 +799,7 @@ export function ReadingSettingsPanel({
   onNotice,
   focusUnavailableReason = null,
   verticalUnavailableReason = null,
+  isWeb = IS_WEB_RUNTIME,
 }: {
   open: boolean;
   onClose: () => void;
@@ -794,6 +808,8 @@ export function ReadingSettingsPanel({
   focusUnavailableReason?: string | null;
   /** 竖排开关对当前文档不可用的原因(如 PDF/mdx);null = 可用。 */
   verticalUnavailableReason?: string | null;
+  /** Explicit runtime seam keeps desktop-only controls independently testable. */
+  isWeb?: boolean;
 }) {
   const settings = useReaderStore((state) => state.readingSettings);
   const update = useReaderStore((state) => state.updateReadingSettings);
@@ -840,6 +856,7 @@ export function ReadingSettingsPanel({
     (event: ChangeEvent<HTMLInputElement>) => {
       update({ [key]: Number(event.target.value) });
     };
+  const resolvedFontSelection = resolveReaderFontSelection(settings);
 
   return (
     <div
@@ -921,20 +938,136 @@ export function ReadingSettingsPanel({
         />
       </label>
 
-      <label className="setting-row">
-        <span className="setting-label">字体风格</span>
-        <select
-          className="setting-select"
-          value={settings.fontFamily}
-          onChange={(event) =>
-            update({ fontFamily: event.target.value as ReaderFontFamily })
-          }
-        >
-          <option value="system">系统均衡</option>
-          <option value="sans">清晰无衬线</option>
-          <option value="serif">书刊衬线</option>
-        </select>
-      </label>
+      {isWeb ? (
+        <label className="setting-row">
+          <span className="setting-label">字体风格</span>
+          <select
+            className="setting-select"
+            value={settings.fontFamily}
+            onChange={(event) =>
+              update({ fontFamily: event.target.value as ReaderFontFamily })
+            }
+          >
+            <option value="system">系统均衡</option>
+            <option value="sans">清晰无衬线</option>
+            <option value="serif">书刊衬线</option>
+          </select>
+        </label>
+      ) : (
+        <fieldset className="setting-row font-setting">
+          <legend className="setting-label">中西文字体</legend>
+          <div className="font-mode-control" role="group" aria-label="字体选择模式">
+            {([
+              ["theme", "跟随主题"],
+              ["pair", "搭配预设"],
+              ["custom", "高级选择"],
+            ] as const).map(([mode, label]) => (
+              <button
+                type="button"
+                key={mode}
+                aria-pressed={settings.fontMode === mode}
+                className={settings.fontMode === mode ? "active" : undefined}
+                onClick={() => update({ fontMode: mode })}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+
+          {settings.fontMode === "theme" && (
+            <label className="font-setting-field">
+              <span>主题字体风格</span>
+              <select
+                className="setting-select"
+                value={settings.fontFamily}
+                onChange={(event) =>
+                  update({ fontFamily: event.target.value as ReaderFontFamily })
+                }
+              >
+                <option value="system">系统均衡</option>
+                <option value="sans">清晰无衬线</option>
+                <option value="serif">书刊衬线</option>
+              </select>
+            </label>
+          )}
+
+          {settings.fontMode === "pair" && (
+            <label className="font-setting-field">
+              <span>策展搭配</span>
+              <select
+                className="setting-select"
+                aria-label="字体搭配预设"
+                value={settings.fontPairId}
+                onChange={(event) =>
+                  update({
+                    fontMode: "pair",
+                    fontPairId: event.target.value as ReaderFontPairId,
+                  })
+                }
+              >
+                {READER_FONT_PAIRS.map((pair) => (
+                  <option value={pair.id} key={pair.id}>
+                    {pair.label} · {pair.description}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+
+          {settings.fontMode === "custom" && (
+            <div className="font-custom-grid">
+              <label className="font-setting-field">
+                <span>中文字体</span>
+                <select
+                  className="setting-select"
+                  aria-label="中文字体"
+                  value={settings.cjkFontId}
+                  onChange={(event) =>
+                    update({
+                      fontMode: "custom",
+                      cjkFontId: event.target.value as ReaderFontId,
+                    })
+                  }
+                >
+                  {READER_CJK_FONTS.map((font) => (
+                    <option value={font.id} key={font.id}>
+                      {font.label}{font.bodyRecommended ? "" : "（展示/特定方向）"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="font-setting-field">
+                <span>西文字体</span>
+                <select
+                  className="setting-select"
+                  aria-label="西文字体"
+                  value={settings.latinFontId}
+                  onChange={(event) =>
+                    update({
+                      fontMode: "custom",
+                      latinFontId: event.target.value as ReaderFontId,
+                    })
+                  }
+                >
+                  {READER_LATIN_FONTS.map((font) => (
+                    <option value={font.id} key={font.id}>
+                      {font.label}{font.bodyRecommended ? "" : "（展示/特定方向）"}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+          )}
+
+          <p className="font-selection-summary">当前：{resolvedFontSelection.label}</p>
+          {resolvedFontSelection.warnings.map((warning) => (
+            <p className="setting-hint font-warning" key={warning}>
+              {warning}
+            </p>
+          ))}
+          <p className="setting-hint">仅桌面版注册字体；实际只加载当前选择及正文所需字重。</p>
+        </fieldset>
+      )}
 
       <fieldset className="setting-row motion-setting">
         <legend className="setting-label">动态效果</legend>
@@ -2190,6 +2323,19 @@ function App() {
     setCompactTocOpen(false);
   }, [motionLevel]);
 
+  const resolvedReaderFonts = useMemo(
+    () =>
+      resolveReaderFontSelection(
+        IS_WEB_RUNTIME
+          ? { ...readingSettings, fontMode: "theme" }
+          : readingSettings,
+      ),
+    [readingSettings],
+  );
+  useEffect(() => {
+    void loadResolvedReaderFonts(resolvedReaderFonts);
+  }, [resolvedReaderFonts]);
+
   const readerStyle = {
     "--reader-font-size": `${readingSettings.fontSize}px`,
     "--reader-line-height": readingSettings.lineHeight,
@@ -2198,12 +2344,7 @@ function App() {
         ? "none"
         : `${readingSettings.contentWidth}px`,
     "--reader-paragraph-spacing": readingSettings.paragraphSpacing,
-    "--reader-font-family":
-      readingSettings.fontFamily === "serif"
-        ? '"Noto Serif SC", "Source Han Serif SC", "Songti SC", SimSun, serif'
-        : readingSettings.fontFamily === "sans"
-          ? '"Segoe UI Variable Text", "Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", sans-serif'
-          : '"Segoe UI Variable Text", "Segoe UI", "Noto Sans SC", "Microsoft YaHei UI", sans-serif',
+    "--reader-font-family": resolvedReaderFonts.cssStack,
   } as CSSProperties;
 
   const showNotice = useCallback(
@@ -2365,6 +2506,32 @@ function App() {
     : currentContent?.kind === "pdf" && pdfViewMode === "original"
       ? "PDF 原版式没有段落结构，聚焦模式不适用；切换到阅读模式后可用。"
       : null;
+
+  const documentFind = useDocumentFind({
+    enabled: !IS_WEB_RUNTIME && Boolean(currentPath && currentContent),
+    currentPath,
+    contentKind: currentContent?.kind ?? null,
+    pdfMode: currentContent?.kind === "pdf" ? pdfViewMode : null,
+    readerRef,
+    articleRef,
+    motionLevel,
+    jumpToPage: (page) => pdfReaderHandleRef.current?.jumpToPage(page),
+  });
+  const {
+    open: findOpen,
+    openFind,
+    closeFind,
+    query: findQuery,
+    activeIndex: findActiveIndex,
+    matches: findMatches,
+    status: findStatus,
+    format: findFormat,
+    inputRef: findInputRef,
+    setQuery: setFindQuery,
+    nextMatch: findNextMatch,
+    previousMatch: findPreviousMatch,
+    selectMatch: selectFindMatch,
+  } = documentFind;
 
   // useFocusMode / useAutoPace 在 readingSpeed 就绪后接线（见下方）。
 
@@ -3229,11 +3396,23 @@ function App() {
             (result) => result.relativePath === currentPath && result.locator,
           )
         : [];
+      const findPoints =
+        findOpen && findQuery.trim() && findMatches.length > 0 && findFormat
+          ? collectFindScrollPoints(
+              reader,
+              findMatches.map((match) => ({
+                targetId: match.id,
+                label: match.quote ?? findQuery,
+                range: rangeForFindMatch(article, findFormat, match),
+              })),
+            )
+          : [];
       setScrollMapMarks(
         buildScrollMapMarks(
           [
             ...collectAnnotationScrollPoints(reader, article, annotations),
             ...collectSearchScrollPoints(reader, article, hits),
+            ...findPoints,
           ],
           reader.scrollHeight,
         ),
@@ -3255,6 +3434,10 @@ function App() {
     annotations,
     currentContent,
     currentPath,
+    findMatches,
+    findOpen,
+    findQuery,
+    findFormat,
     overlayViewOpen,
     readingSettings,
     searchQuery,
@@ -3264,13 +3447,20 @@ function App() {
     verticalActive,
   ]);
 
-  /** 刻度点击(RS-D7):标注/书签走既有跳转链,其余按比例滚动。 */
+  /** 刻度点击(RS-D7):标注/书签走既有跳转链;库搜索与查找命中按比例或选中。 */
   const handleScrollMapSelect = useCallback(
     (mark: ScrollMapMark) => {
       if (mark.kind === "annotation" || mark.kind === "bookmark") {
         const annotation = annotations.find((candidate) => candidate.id === mark.targetId);
         if (annotation) {
           jumpToAnnotation(annotation);
+          return;
+        }
+      }
+      if (mark.kind === "search" && mark.targetId && findOpen) {
+        const findIndex = findMatches.findIndex((match) => match.id === mark.targetId);
+        if (findIndex >= 0) {
+          selectFindMatch(findIndex);
           return;
         }
       }
@@ -3281,7 +3471,7 @@ function App() {
         motionLevel === "off" ? "auto" : "smooth",
       );
     },
-    [annotations, jumpToAnnotation, motionLevel, recordNavDeparture],
+    [annotations, findMatches, findOpen, jumpToAnnotation, motionLevel, recordNavDeparture, selectFindMatch],
   );
 
   const handleDeleteAnnotation = useCallback(
@@ -5070,6 +5260,10 @@ function App() {
       }
       if (!(event.ctrlKey || event.metaKey)) {
         if (event.key === "Escape") {
+          if (findOpen) {
+            closeFind();
+            return;
+          }
           if (autoPace.barOpen) {
             autoPace.stop();
             return;
@@ -5126,6 +5320,12 @@ function App() {
         if (!currentPath || !currentContent) return;
         event.preventDefault();
         void handleCreateBookmark();
+      } else if (event.key.toLowerCase() === "f" && !event.shiftKey && !event.altKey) {
+        if (IS_WEB_RUNTIME) return;
+        const target = event.target;
+        if (target instanceof HTMLElement && target.closest(".secondary-pane")) return;
+        event.preventDefault();
+        openFind();
       }
     };
     window.addEventListener("keydown", onKeyDown);
@@ -5134,14 +5334,17 @@ function App() {
     canUndo,
     chooseAndOpenLibrary,
     clearRelocatePreview,
+    closeFind,
     currentContent,
     currentPath,
     dismissReadNext,
+    findOpen,
     handleCreateBookmark,
     handleNavBack,
     handleNavForward,
     handleUndoAnnotation,
     closeRelatedPassages,
+    openFind,
     autoPace.barOpen,
     autoPace.stop,
     annotationTool,
@@ -6003,6 +6206,19 @@ function App() {
             {/* reading-frame(RS-D5):替 reading-scroll 占据原 grid 轨道,
                 为右缘刻度层提供定位锚;副栏不挂刻度层。 */}
             <div className="reading-frame">
+            {findOpen && (
+              <FindBar
+                query={findQuery}
+                activeIndex={findActiveIndex}
+                matchCount={findMatches.length}
+                status={findStatus}
+                inputRef={findInputRef}
+                onQueryChange={setFindQuery}
+                onPrevious={findPreviousMatch}
+                onNext={findNextMatch}
+                onClose={closeFind}
+              />
+            )}
             {reread && reread.path === currentPath && (
               <RereadBanner
                 message={rereadBannerMessage(reread.diff)}
@@ -6074,6 +6290,7 @@ function App() {
                   readerRef={pdfReaderHandleRef}
                   libraryRoot={snapshot?.rootPath}
                   keyboardActive={
+                    !findOpen &&
                     !commandPaletteOpen &&
                     !settingsOpen &&
                     !stylePickerOpen &&

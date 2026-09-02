@@ -1,0 +1,1944 @@
+{
+  "schemaVersion": 1,
+  "generator": "typography-system/scripts/build-reade-font-pack.py",
+  "inventorySignature": "a0b8235c7bd945720bc17c3cd09ebc55d6504e7b65759ee5f642d59313fedf30",
+  "generatedFiles": [
+    "alegreya-italic-vf.woff2",
+    "alegreya-normal-vf.woff2",
+    "atkinson-hyperlegible-italic-400.woff2",
+    "atkinson-hyperlegible-italic-700.woff2",
+    "atkinson-hyperlegible-normal-400.woff2",
+    "atkinson-hyperlegible-normal-700.woff2",
+    "charter-italic-400.woff2",
+    "charter-italic-700.woff2",
+    "charter-normal-400.woff2",
+    "charter-normal-700.woff2",
+    "crimson-pro-italic-vf.woff2",
+    "crimson-pro-normal-vf.woff2",
+    "eb-garamond-italic-vf.woff2",
+    "eb-garamond-normal-vf.woff2",
+    "genryu-min-normal-400.woff2",
+    "genryu-min-normal-700.woff2",
+    "genyo-min-normal-400.woff2",
+    "genyo-min-normal-700.woff2",
+    "huiwen-mincho-normal-400.woff2",
+    "ibm-plex-serif-italic-400.woff2",
+    "ibm-plex-serif-italic-700.woff2",
+    "ibm-plex-serif-normal-400.woff2",
+    "ibm-plex-serif-normal-700.woff2",
+    "kinghwa-old-song-normal-400.woff2",
+    "libre-baskerville-italic-vf.woff2",
+    "libre-baskerville-normal-vf.woff2",
+    "literata-italic-vf.woff2",
+    "literata-normal-vf.woff2",
+    "lora-italic-vf.woff2",
+    "lora-normal-vf.woff2",
+    "lxgw-wenkai-normal-400.woff2",
+    "lxgw-wenkai-normal-500.woff2",
+    "merriweather-italic-vf.woff2",
+    "merriweather-normal-vf.woff2",
+    "misans-normal-400.woff2",
+    "misans-normal-700.woff2",
+    "newsreader-italic-vf.woff2",
+    "newsreader-normal-vf.woff2",
+    "noto-serif-italic-vf.woff2",
+    "noto-serif-normal-vf.woff2",
+    "pt-serif-italic-400.woff2",
+    "pt-serif-italic-700.woff2",
+    "pt-serif-normal-400.woff2",
+    "pt-serif-normal-700.woff2",
+    "roboto-slab-normal-vf.woff2",
+    "sarasa-gothic-sc-normal-400.woff2",
+    "sarasa-gothic-sc-normal-700.woff2",
+    "smiley-sans-normal-400.woff2",
+    "source-han-sans-cn-normal-400.woff2",
+    "source-han-sans-cn-normal-700.woff2",
+    "source-han-serif-sc-normal-400.woff2",
+    "source-han-serif-sc-normal-700.woff2",
+    "source-serif-4-italic-vf.woff2",
+    "source-serif-4-normal-vf.woff2",
+    "spectral-italic-400.woff2",
+    "spectral-italic-700.woff2",
+    "spectral-normal-400.woff2",
+    "spectral-normal-700.woff2"
+  ],
+  "packEntries": [
+    {
+      "id": "charter",
+      "label": "Charter",
+      "script": "latin",
+      "cssFamily": "Reade charter",
+      "description": "稳健紧凑的经典屏幕阅读衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400,
+        700
+      ],
+      "variableAxes": [],
+      "collectionId": "library/01-衬线宋体/charter",
+      "faces": [
+        {
+          "file": "charter-italic-700.woff2",
+          "sha256": "5f2ead8cbd45bb26c86c2221ba26088160ae6c0260c527d67b368295229a6ae2",
+          "sizeBytes": 16104,
+          "roles": [
+            "strongItalic"
+          ],
+          "sourceFile": "01-衬线宋体/Charter/Charter 210112/TTF format (best for Windows)/Charter/Charter Bold Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Charter",
+          "internalSubfamily": "Bold Italic",
+          "weight": "700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "charter-normal-700.woff2",
+          "sha256": "ca7c6aadefb1318729ac10048a85faeb6eccfbe4d4ecb2e582747663a3915792",
+          "sizeBytes": 15028,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/Charter/Charter 210112/TTF format (best for Windows)/Charter/Charter Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Charter",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "charter-italic-400.woff2",
+          "sha256": "35b98e2d6da9ab1d3580aee832f6d8ddfc3687cfd8e12e4e699aa202a70446e2",
+          "sizeBytes": 15376,
+          "roles": [
+            "italic"
+          ],
+          "sourceFile": "01-衬线宋体/Charter/Charter 210112/TTF format (best for Windows)/Charter/Charter Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Charter",
+          "internalSubfamily": "Italic",
+          "weight": "400",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "charter-normal-400.woff2",
+          "sha256": "8e7630ba96aeed2974bfd9ab9bde2d3159e4cba98dfdb5757584e3542f1ac962",
+          "sizeBytes": 14648,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "01-衬线宋体/Charter/Charter 210112/TTF format (best for Windows)/Charter/Charter Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Charter",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "crimson-pro",
+      "label": "Crimson Pro",
+      "script": "latin",
+      "cssFamily": "Reade crimson-pro",
+      "description": "现代屏幕友好的书籍衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 200.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/01-衬线宋体/crimson-pro",
+      "faces": [
+        {
+          "file": "crimson-pro-italic-vf.woff2",
+          "sha256": "c1f00aa21c3061c3d9f277ea4b990c4ad9ad3ff7e6aa782e7c82f11d27dd560e",
+          "sizeBytes": 90332,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "01-衬线宋体/Crimson Pro/CrimsonPro-Italic[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Crimson Pro",
+          "internalSubfamily": "Italic",
+          "weight": "200 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        },
+        {
+          "file": "crimson-pro-normal-vf.woff2",
+          "sha256": "177280bc356bd7889a076559ab2bcb1001e7f33a2aa27e8aeadc98dd5f21622f",
+          "sizeBytes": 85852,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/Crimson Pro/CrimsonPro[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Crimson Pro",
+          "internalSubfamily": "Regular",
+          "weight": "200 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "eb-garamond",
+      "label": "EB Garamond",
+      "script": "latin",
+      "cssFamily": "Reade eb-garamond",
+      "description": "古典文学与旧式书籍气质",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 400.0,
+          "default": 400.0,
+          "max": 800.0
+        }
+      ],
+      "collectionId": "library/01-衬线宋体/eb-garamond",
+      "faces": [
+        {
+          "file": "eb-garamond-italic-vf.woff2",
+          "sha256": "1b373df84f0c3abc942be4366f01a0c262faeab43a5e0383d097ad44dd47a54c",
+          "sizeBytes": 285864,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "01-衬线宋体/EB Garamond/EBGaramond-Italic[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "EB Garamond",
+          "internalSubfamily": "Italic",
+          "weight": "400 800",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 800.0
+            }
+          ]
+        },
+        {
+          "file": "eb-garamond-normal-vf.woff2",
+          "sha256": "f58f6c6a927aa64e80e6deffce5583cf6c850859fea2dbc870b11f75c44c49a8",
+          "sizeBytes": 296792,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/EB Garamond/EBGaramond[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "EB Garamond",
+          "internalSubfamily": "Regular",
+          "weight": "400 800",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 800.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "libre-baskerville",
+      "label": "Libre Baskerville",
+      "script": "latin",
+      "cssFamily": "Reade libre-baskerville",
+      "description": "结实传统的屏幕书籍衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 400.0,
+          "default": 400.0,
+          "max": 700.0
+        }
+      ],
+      "collectionId": "library/01-衬线宋体/libre-baskerville",
+      "faces": [
+        {
+          "file": "libre-baskerville-italic-vf.woff2",
+          "sha256": "e9349fa52e63a21f705f7935a1f7c1a2a77f1e97e0546e245f221134e94f09b9",
+          "sizeBytes": 61500,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "01-衬线宋体/Libre Baskerville/LibreBaskerville-Italic[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Libre Baskerville",
+          "internalSubfamily": "Italic",
+          "weight": "400 700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 700.0
+            }
+          ]
+        },
+        {
+          "file": "libre-baskerville-normal-vf.woff2",
+          "sha256": "1ce91cc87fd7602c7d4d1a925af15aaefbb85acd379dbee9b34a82e653669320",
+          "sizeBytes": 64008,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/Libre Baskerville/LibreBaskerville[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Libre Baskerville",
+          "internalSubfamily": "Regular",
+          "weight": "400 700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 700.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "lora",
+      "label": "Lora",
+      "script": "latin",
+      "cssFamily": "Reade lora",
+      "description": "温暖、带书写感的杂志衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 400.0,
+          "default": 400.0,
+          "max": 700.0
+        }
+      ],
+      "collectionId": "library/01-衬线宋体/lora",
+      "faces": [
+        {
+          "file": "lora-italic-vf.woff2",
+          "sha256": "6cda7d220aebc862d9de3cdbd6e5068b64477aca6f284dbb1ca6e00114744faf",
+          "sizeBytes": 91636,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "01-衬线宋体/Lora/Lora-Italic[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Lora",
+          "internalSubfamily": "Italic",
+          "weight": "400 700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 700.0
+            }
+          ]
+        },
+        {
+          "file": "lora-normal-vf.woff2",
+          "sha256": "7c514f026f03de1b0fc344c0c0f0df141fcf16b6f9ab672db191908ba740dab6",
+          "sizeBytes": 85096,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/Lora/Lora[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Lora",
+          "internalSubfamily": "Regular",
+          "weight": "400 700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 700.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "roboto-slab",
+      "label": "Roboto Slab",
+      "script": "latin",
+      "cssFamily": "Reade roboto-slab",
+      "description": "强调结构的现代粗衬线",
+      "bodyRecommended": false,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": "正文密度偏高，优先用于标题或技术编辑风格",
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 100.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/01-衬线宋体/roboto-slab",
+      "faces": [
+        {
+          "file": "roboto-slab-normal-vf.woff2",
+          "sha256": "a85880785a54d41536259b2736492fba35dc3f258c327a5431ca998ce5f85fed",
+          "sizeBytes": 118296,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/Roboto Slab/RobotoSlab-Variable.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Roboto Slab",
+          "internalSubfamily": "Regular",
+          "weight": "100 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 100.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "alegreya",
+      "label": "Alegreya",
+      "script": "latin",
+      "cssFamily": "Reade alegreya",
+      "description": "节奏活跃的人文书写衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 400.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/alegreya",
+      "faces": [
+        {
+          "file": "alegreya-italic-vf.woff2",
+          "sha256": "bb51b7d7a138ab9314eb8518b359534d1a51d91652a6fc60dae371a088ac7f77",
+          "sizeBytes": 170792,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Alegreya/Alegreya-Italic[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Alegreya",
+          "internalSubfamily": "Italic",
+          "weight": "400 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        },
+        {
+          "file": "alegreya-normal-vf.woff2",
+          "sha256": "7b280b08beda4f54bed2c2e1cdc64063bc5b5bf38832cffbf04f5efadf3bfa87",
+          "sizeBytes": 161220,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Alegreya/Alegreya[wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Alegreya",
+          "internalSubfamily": "Regular",
+          "weight": "400 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 400.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "atkinson-hyperlegible",
+      "label": "Atkinson Hyperlegible",
+      "script": "latin",
+      "cssFamily": "Reade atkinson-hyperlegible",
+      "description": "强调字符辨识度的无衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400,
+        700
+      ],
+      "variableAxes": [],
+      "collectionId": "library/02-现代衬线与屏幕优化/atkinson-hyperlegible",
+      "faces": [
+        {
+          "file": "atkinson-hyperlegible-normal-700.woff2",
+          "sha256": "da8fce41a04f8498fbf79076f92d304b12e70c76f71b143c5dcfb6536c93c075",
+          "sizeBytes": 23776,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Atkinson Hyperlegible/AtkinsonHyperlegible-Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Atkinson Hyperlegible",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "atkinson-hyperlegible-italic-700.woff2",
+          "sha256": "f27e95143bc12e8f40f955cf86c74e6afef4441abb89d271282ea0f9e93c1fd5",
+          "sizeBytes": 25160,
+          "roles": [
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Atkinson Hyperlegible/AtkinsonHyperlegible-BoldItalic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Atkinson Hyperlegible",
+          "internalSubfamily": "Bold Italic",
+          "weight": "700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "atkinson-hyperlegible-italic-400.woff2",
+          "sha256": "60bedf0954ffa7e7800eddd529b06c7558d09283667c74fef60170d8d241089e",
+          "sizeBytes": 24908,
+          "roles": [
+            "italic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Atkinson Hyperlegible/AtkinsonHyperlegible-Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Atkinson Hyperlegible",
+          "internalSubfamily": "Italic",
+          "weight": "400",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "atkinson-hyperlegible-normal-400.woff2",
+          "sha256": "2df4ba17804bc7a36f123127966075d8427bff2df58d0d76820c1130bb1a4150",
+          "sizeBytes": 23196,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Atkinson Hyperlegible/AtkinsonHyperlegible-Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Atkinson Hyperlegible",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "ibm-plex-serif",
+      "label": "IBM Plex Serif",
+      "script": "latin",
+      "cssFamily": "Reade ibm-plex-serif",
+      "description": "理性、技术感的现代衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        100,
+        200,
+        300,
+        400,
+        500,
+        600,
+        700
+      ],
+      "variableAxes": [],
+      "collectionId": "library/02-现代衬线与屏幕优化/ibm-plex-serif",
+      "faces": [
+        {
+          "file": "ibm-plex-serif-normal-700.woff2",
+          "sha256": "d3ef172ab8b39faab369936ec8018057055fba4940624b863d956eda51568ef0",
+          "sizeBytes": 50480,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/IBM Plex Serif/IBMPlexSerif-Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "IBM Plex Serif",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "ibm-plex-serif-italic-700.woff2",
+          "sha256": "2747646ab682bb48f7bcfb670beb1bc656afd1ecd86ae6908aaf68cf526bd1e6",
+          "sizeBytes": 55648,
+          "roles": [
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/IBM Plex Serif/IBMPlexSerif-BoldItalic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "IBM Plex Serif",
+          "internalSubfamily": "Bold Italic",
+          "weight": "700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "ibm-plex-serif-italic-400.woff2",
+          "sha256": "82fb5613e752b1c10d8f70b48bdf06658cd5bfbc194cded061f0b92109b07795",
+          "sizeBytes": 55844,
+          "roles": [
+            "italic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/IBM Plex Serif/IBMPlexSerif-Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "IBM Plex Serif",
+          "internalSubfamily": "Italic",
+          "weight": "400",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "ibm-plex-serif-normal-400.woff2",
+          "sha256": "6b30f49d793549eb4b31773a762c74e1e01a1e13d076e16bbceefb539a0ed629",
+          "sizeBytes": 51212,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/IBM Plex Serif/IBMPlexSerif-Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "IBM Plex Serif",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "literata",
+      "label": "Literata",
+      "script": "latin",
+      "cssFamily": "Reade literata",
+      "description": "面向电子书长读的文学衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "opsz",
+          "name": "Optical size",
+          "min": 7.0,
+          "default": 12.0,
+          "max": 72.0
+        },
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 200.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/literata",
+      "faces": [
+        {
+          "file": "literata-italic-vf.woff2",
+          "sha256": "38060b182b46a8b6c5f521982e86c59480f8811e77852ed563ce8a66a4adecb6",
+          "sizeBytes": 396676,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Literata/Literata-Italic[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Literata",
+          "internalSubfamily": "Italic",
+          "weight": "200 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "opsz",
+              "name": "Optical size",
+              "min": 7.0,
+              "default": 12.0,
+              "max": 72.0
+            },
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        },
+        {
+          "file": "literata-normal-vf.woff2",
+          "sha256": "230e5b1de4f4ace4d49c9fda9c8cf0851acb5425dce9067d89ff88aed93f325d",
+          "sizeBytes": 397212,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Literata/Literata[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Literata",
+          "internalSubfamily": "Regular",
+          "weight": "200 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "opsz",
+              "name": "Optical size",
+              "min": 7.0,
+              "default": 12.0,
+              "max": 72.0
+            },
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "merriweather",
+      "label": "Merriweather",
+      "script": "latin",
+      "cssFamily": "Reade merriweather",
+      "description": "较深、结实的屏幕阅读衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        300
+      ],
+      "variableAxes": [
+        {
+          "tag": "opsz",
+          "name": "Optical size",
+          "min": 18.0,
+          "default": 18.0,
+          "max": 144.0
+        },
+        {
+          "tag": "wdth",
+          "name": "Width",
+          "min": 87.0,
+          "default": 100.0,
+          "max": 112.0
+        },
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 300.0,
+          "default": 300.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/merriweather",
+      "faces": [
+        {
+          "file": "merriweather-italic-vf.woff2",
+          "sha256": "f640520e317d970c3b2eedbdc75021aa97c12642d39f2dfd921ed93e32e67045",
+          "sizeBytes": 2479616,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Merriweather/Merriweather-Italic[opsz,wdth,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Merriweather",
+          "internalSubfamily": "Light Italic",
+          "weight": "300 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 300.0,
+              "default": 300.0,
+              "max": 900.0
+            },
+            {
+              "tag": "wdth",
+              "name": "Width",
+              "min": 87.0,
+              "default": 100.0,
+              "max": 112.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical size",
+              "min": 18.0,
+              "default": 18.0,
+              "max": 144.0
+            }
+          ]
+        },
+        {
+          "file": "merriweather-normal-vf.woff2",
+          "sha256": "0e157d94a790a245659b8444eef67466ff9d0a4754318a4f1252852ab3e2fcd0",
+          "sizeBytes": 2490512,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Merriweather/Merriweather[opsz,wdth,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Merriweather",
+          "internalSubfamily": "Light",
+          "weight": "300 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 300.0,
+              "default": 300.0,
+              "max": 900.0
+            },
+            {
+              "tag": "wdth",
+              "name": "Width",
+              "min": 87.0,
+              "default": 100.0,
+              "max": 112.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical size",
+              "min": 18.0,
+              "default": 18.0,
+              "max": 144.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "newsreader",
+      "label": "Newsreader",
+      "script": "latin",
+      "cssFamily": "Reade newsreader",
+      "description": "报刊编辑与长文阅读衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "opsz",
+          "name": "Optical Size",
+          "min": 6.0,
+          "default": 18.0,
+          "max": 72.0
+        },
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 200.0,
+          "default": 400.0,
+          "max": 800.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/newsreader",
+      "faces": [
+        {
+          "file": "newsreader-italic-vf.woff2",
+          "sha256": "8920f06c4c116e91721a2cbbbb195d1ab6997a657cb3313dab5c99b6b202d899",
+          "sizeBytes": 239360,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Newsreader/Newsreader-Italic[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Newsreader",
+          "internalSubfamily": "Italic",
+          "weight": "200 800",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 800.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical Size",
+              "min": 6.0,
+              "default": 18.0,
+              "max": 72.0
+            }
+          ]
+        },
+        {
+          "file": "newsreader-normal-vf.woff2",
+          "sha256": "52f54c34206c51e23e2907bfda4f04fb11ac6ba7f75f8021b2d0075b091d1308",
+          "sizeBytes": 214960,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Newsreader/Newsreader[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Newsreader",
+          "internalSubfamily": "Regular",
+          "weight": "200 800",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 800.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical Size",
+              "min": 6.0,
+              "default": 18.0,
+              "max": 72.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "noto-serif",
+      "label": "Noto Serif",
+      "script": "latin",
+      "cssFamily": "Reade noto-serif",
+      "description": "中性、兼容性稳健的衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "wdth",
+          "name": "Width",
+          "min": 62.5,
+          "default": 100.0,
+          "max": 100.0
+        },
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 100.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/noto-serif",
+      "faces": [
+        {
+          "file": "noto-serif-italic-vf.woff2",
+          "sha256": "b227171a80e4f3f78e74855eebcaf2b674ae0ce8f3e002553a9467b048644f4e",
+          "sizeBytes": 1048192,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Noto Serif/NotoSerif-Italic[wdth,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Noto Serif",
+          "internalSubfamily": "Italic",
+          "weight": "100 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 100.0,
+              "default": 400.0,
+              "max": 900.0
+            },
+            {
+              "tag": "wdth",
+              "name": "Width",
+              "min": 62.5,
+              "default": 100.0,
+              "max": 100.0
+            }
+          ]
+        },
+        {
+          "file": "noto-serif-normal-vf.woff2",
+          "sha256": "903b265b99ebc48e69cb4010b314ecd1832acb241f33985183dc31219897218a",
+          "sizeBytes": 802328,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Noto Serif/NotoSerif[wdth,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Noto Serif",
+          "internalSubfamily": "Regular",
+          "weight": "100 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 100.0,
+              "default": 400.0,
+              "max": 900.0
+            },
+            {
+              "tag": "wdth",
+              "name": "Width",
+              "min": 62.5,
+              "default": 100.0,
+              "max": 100.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "pt-serif",
+      "label": "PT Serif",
+      "script": "latin",
+      "cssFamily": "Reade pt-serif",
+      "description": "传统而不过时的编辑衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400,
+        700
+      ],
+      "variableAxes": [],
+      "collectionId": "library/02-现代衬线与屏幕优化/pt-serif",
+      "faces": [
+        {
+          "file": "pt-serif-normal-700.woff2",
+          "sha256": "91af5739ac34b3b69ff34ad92bc46c5115933014b722e4b0208ca15f2ec0d644",
+          "sizeBytes": 91824,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/PT Serif/PT_Serif-Web-Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "PT Serif",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "pt-serif-italic-700.woff2",
+          "sha256": "52a8c66ce940ea145c2c4dcef868fe6a21b0915e3b40ddbc2f3e84399780c1c0",
+          "sizeBytes": 91032,
+          "roles": [
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/PT Serif/PT_Serif-Web-BoldItalic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "PT Serif",
+          "internalSubfamily": "Bold Italic",
+          "weight": "700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "pt-serif-italic-400.woff2",
+          "sha256": "8e3cad367eb1a9205fd9bed8438af210dd9d2152af606ddc547e86ded49627c6",
+          "sizeBytes": 109632,
+          "roles": [
+            "italic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/PT Serif/PT_Serif-Web-Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "PT Serif",
+          "internalSubfamily": "Italic",
+          "weight": "400",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "pt-serif-normal-400.woff2",
+          "sha256": "fa58f4524d1a937117a119f1d2a71974e82d2d5632c3034fe479fd81cca39133",
+          "sizeBytes": 102608,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/PT Serif/PT_Serif-Web-Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "PT Serif",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "source-serif-4",
+      "label": "Source Serif 4",
+      "script": "latin",
+      "cssFamily": "Reade source-serif-4",
+      "description": "现代、均衡且层级完整的正文衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [
+        {
+          "tag": "opsz",
+          "name": "Optical Size",
+          "min": 8.0,
+          "default": 20.0,
+          "max": 60.0
+        },
+        {
+          "tag": "wght",
+          "name": "Weight",
+          "min": 200.0,
+          "default": 400.0,
+          "max": 900.0
+        }
+      ],
+      "collectionId": "library/02-现代衬线与屏幕优化/source-serif-4",
+      "faces": [
+        {
+          "file": "source-serif-4-italic-vf.woff2",
+          "sha256": "a5e93099350c2768f7939fa51503641c961550830fb2a02083f5cf11adf227b5",
+          "sizeBytes": 346088,
+          "roles": [
+            "italic",
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Source Serif 4/SourceSerif4-Italic[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Source Serif 4",
+          "internalSubfamily": "Italic",
+          "weight": "200 900",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical Size",
+              "min": 8.0,
+              "default": 20.0,
+              "max": 60.0
+            }
+          ]
+        },
+        {
+          "file": "source-serif-4-normal-vf.woff2",
+          "sha256": "4453d73855919eb67a8291bf2bad07782ecaf8af0e4e363d58948ff993209d51",
+          "sizeBytes": 427556,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Source Serif 4/SourceSerif4[opsz,wght].ttf",
+          "collectionIndex": null,
+          "internalFamily": "Source Serif 4",
+          "internalSubfamily": "Regular",
+          "weight": "200 900",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": [
+            {
+              "tag": "wght",
+              "name": "Weight",
+              "min": 200.0,
+              "default": 400.0,
+              "max": 900.0
+            },
+            {
+              "tag": "opsz",
+              "name": "Optical Size",
+              "min": 8.0,
+              "default": 20.0,
+              "max": 60.0
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "spectral",
+      "label": "Spectral",
+      "script": "latin",
+      "cssFamily": "Reade spectral",
+      "description": "具有编辑表现力的现代衬线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": true,
+      "hasRealStrong": true,
+      "availableWeights": [
+        200,
+        300,
+        400,
+        500,
+        600,
+        700,
+        800
+      ],
+      "variableAxes": [],
+      "collectionId": "library/02-现代衬线与屏幕优化/spectral",
+      "faces": [
+        {
+          "file": "spectral-normal-700.woff2",
+          "sha256": "756051951bea5417b0c44b4d29114516cbac995cd3266c03ee7a55721d64d892",
+          "sizeBytes": 88720,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Spectral/Spectral-Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Spectral",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "spectral-italic-700.woff2",
+          "sha256": "43663ffbba4fc29a051976e77558071ba7ac4da3744a77857e67b0041f497789",
+          "sizeBytes": 92988,
+          "roles": [
+            "strongItalic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Spectral/Spectral-BoldItalic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Spectral",
+          "internalSubfamily": "Bold Italic",
+          "weight": "700",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "spectral-italic-400.woff2",
+          "sha256": "d45faab3fee201166b3b89b3c2765aba3ef7d6faf75f89a4c82cac37ccf44c82",
+          "sizeBytes": 82996,
+          "roles": [
+            "italic"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Spectral/Spectral-Italic.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Spectral",
+          "internalSubfamily": "Italic",
+          "weight": "400",
+          "style": "italic",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        },
+        {
+          "file": "spectral-normal-400.woff2",
+          "sha256": "e9120c4f81a4da857af83016dbf4e7e9ed4c7bc82ceb6202f75625e2afb8c4c5",
+          "sizeBytes": 80216,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "02-现代衬线与屏幕优化/Spectral/Spectral-Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Spectral",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "kinghwa-old-song",
+      "label": "京华老宋体",
+      "script": "cjk",
+      "cssFamily": "Reade kinghwa-old-song",
+      "description": "复古铅印质感的老宋体",
+      "bodyRecommended": false,
+      "licenseStatus": "claimed-by-local-index-unverified",
+      "warning": "重新分发证据未独立核实；层级有限，适合明确的复古阅读方向",
+      "hasItalic": false,
+      "hasRealStrong": false,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [],
+      "collectionId": "library/01-衬线宋体/京华老宋体",
+      "faces": [
+        {
+          "file": "kinghwa-old-song-normal-400.woff2",
+          "sha256": "48788217fe4614eba3cccd2d364568d1b26d243d17f9221d748324666edbd970",
+          "sizeBytes": 21253740,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/京华老宋体/KingHwaOldSong.ttf",
+          "collectionIndex": null,
+          "internalFamily": "KingHwa_OldSong",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "source-han-serif-sc",
+      "label": "思源宋体 SC",
+      "script": "cjk",
+      "cssFamily": "Reade source-han-serif-sc",
+      "description": "简中宋体的中性专业基线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        250,
+        300,
+        400,
+        500,
+        600,
+        700,
+        900
+      ],
+      "variableAxes": [],
+      "collectionId": "library/01-衬线宋体/思源宋体sc",
+      "faces": [
+        {
+          "file": "source-han-serif-sc-normal-700.woff2",
+          "sha256": "2606639e0a25d9a25af8b36aa6d4a5a6582db7a5df0c12d97e91d756736e6c37",
+          "sizeBytes": 17816216,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/思源宋体SC/OTF/SimplifiedChinese/SourceHanSerifSC-Bold.otf",
+          "collectionIndex": null,
+          "internalFamily": "Source Han Serif SC",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "source-han-serif-sc-normal-400.woff2",
+          "sha256": "2c77c5fda4b9fd218120aa4c809069d40d14870b7b7242ceed0252f370d447d2",
+          "sizeBytes": 16708168,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "01-衬线宋体/思源宋体SC/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf",
+          "collectionIndex": null,
+          "internalFamily": "Source Han Serif SC",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "genyo-min",
+      "label": "源样明体",
+      "script": "cjk",
+      "cssFamily": "Reade genyo-min",
+      "description": "台湾字形取向的传统明体",
+      "bodyRecommended": false,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": "区域字形偏台湾，不作为 zh-CN 默认候选",
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        250,
+        300,
+        400,
+        500,
+        600,
+        700,
+        900
+      ],
+      "variableAxes": [],
+      "collectionId": "library/01-衬线宋体/源样明体",
+      "faces": [
+        {
+          "file": "genyo-min-normal-700.woff2",
+          "sha256": "d3eb7dfe9ae9a95325251ebe6e122d6f3065a4e72d4426abd7558ea3d13295b4",
+          "sizeBytes": 6767268,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/源样明体/GenYoMin2-B.ttc",
+          "collectionIndex": 0,
+          "internalFamily": "GenYoMin2 TW",
+          "internalSubfamily": "B",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "genyo-min-normal-400.woff2",
+          "sha256": "960cc0f4f6c45cef0cae83ef7e320231e0ebb12376e83e27d0567a38e498be6c",
+          "sizeBytes": 6462712,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "01-衬线宋体/源样明体/GenYoMin2-R.ttc",
+          "collectionIndex": 0,
+          "internalFamily": "GenYoMin2 TW",
+          "internalSubfamily": "R",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "genryu-min",
+      "label": "源流明体",
+      "script": "cjk",
+      "cssFamily": "Reade genryu-min",
+      "description": "流丽雕刻感的台湾字形明体",
+      "bodyRecommended": false,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": "区域字形偏台湾，不作为 zh-CN 默认候选",
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        250,
+        300,
+        400,
+        500,
+        600,
+        700,
+        900
+      ],
+      "variableAxes": [],
+      "collectionId": "library/01-衬线宋体/源流明体",
+      "faces": [
+        {
+          "file": "genryu-min-normal-700.woff2",
+          "sha256": "63197a4b365597a9900f50a55c977d0032488eeee50006c312171203c024faa8",
+          "sizeBytes": 7523404,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "01-衬线宋体/源流明体/GenRyuMin2-B.ttc",
+          "collectionIndex": 0,
+          "internalFamily": "GenRyuMin2 TW",
+          "internalSubfamily": "B",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "genryu-min-normal-400.woff2",
+          "sha256": "9ced7e1428590cd0a0903314da5b286722e6ed3d6cad28cc045f424a7096e76f",
+          "sizeBytes": 7183036,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "01-衬线宋体/源流明体/GenRyuMin2-R.ttc",
+          "collectionIndex": 0,
+          "internalFamily": "GenRyuMin2 TW",
+          "internalSubfamily": "R",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "misans",
+      "label": "MiSans",
+      "script": "cjk",
+      "cssFamily": "Reade misans",
+      "description": "现代、中性的屏幕黑体",
+      "bodyRecommended": true,
+      "licenseStatus": "claimed-by-local-index-unverified",
+      "warning": "重新分发证据未独立核实",
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        100,
+        200,
+        300,
+        400,
+        500,
+        600,
+        700,
+        900
+      ],
+      "variableAxes": [],
+      "collectionId": "library/03-无衬线黑体/misans",
+      "faces": [
+        {
+          "file": "misans-normal-700.woff2",
+          "sha256": "247cb48eb66e491f5d9f3a5d330fac27d43952a6daed3f6136f9884021b6099e",
+          "sizeBytes": 4204484,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "03-无衬线黑体/MiSans/MiSans-Bold.ttf",
+          "collectionIndex": null,
+          "internalFamily": "MiSans",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "misans-normal-400.woff2",
+          "sha256": "bd6be2f0d43346b8d47c5006d1c9a3bf362c827229ca6e5a1f8ba848ec0e11b4",
+          "sizeBytes": 4081464,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "03-无衬线黑体/MiSans/MiSans-Normal.ttf",
+          "collectionIndex": null,
+          "internalFamily": "MiSans",
+          "internalSubfamily": "Normal",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "source-han-sans-cn",
+      "label": "思源黑体 CN",
+      "script": "cjk",
+      "cssFamily": "Reade source-han-sans-cn",
+      "description": "简中黑体的中性专业基线",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        250,
+        300,
+        350,
+        400,
+        500,
+        700,
+        900
+      ],
+      "variableAxes": [],
+      "collectionId": "library/03-无衬线黑体/思源黑体cn",
+      "faces": [
+        {
+          "file": "source-han-sans-cn-normal-700.woff2",
+          "sha256": "63c44dc91cc4467297c48f1aaeb56e2241aba0611a1ba1b180b46517f831d3e2",
+          "sizeBytes": 6474968,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "03-无衬线黑体/思源黑体CN/SubsetOTF/CN/SourceHanSansCN-Bold.otf",
+          "collectionIndex": null,
+          "internalFamily": "Source Han Sans CN",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "source-han-sans-cn-normal-400.woff2",
+          "sha256": "e766621f2093562a840e3946e4928d80926a78fdf18b4e3e602e525c7be8b1a8",
+          "sizeBytes": 6200108,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "03-无衬线黑体/思源黑体CN/SubsetOTF/CN/SourceHanSansCN-Regular.otf",
+          "collectionIndex": null,
+          "internalFamily": "Source Han Sans CN",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "sarasa-gothic-sc",
+      "label": "更纱黑体 SC",
+      "script": "cjk",
+      "cssFamily": "Reade sarasa-gothic-sc",
+      "description": "适合技术混排的黑体",
+      "bodyRecommended": true,
+      "licenseStatus": "claimed-by-local-index-unverified",
+      "warning": "第三方 SC 转包；重新分发证据未独立核实",
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        300,
+        400,
+        700
+      ],
+      "variableAxes": [],
+      "collectionId": "library/03-无衬线黑体/更纱黑体sc",
+      "faces": [
+        {
+          "file": "sarasa-gothic-sc-normal-700.woff2",
+          "sha256": "1896578226b6f2ebcc81e2f0b425a202b7ead5d1ead7855a3a47fc4bebd9953e",
+          "sizeBytes": 9648840,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "03-无衬线黑体/更纱黑体SC/SarasaGothicSC-Bold.woff2",
+          "collectionIndex": null,
+          "internalFamily": "Sarasa Gothic SC",
+          "internalSubfamily": "Bold",
+          "weight": "700",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "sarasa-gothic-sc-normal-400.woff2",
+          "sha256": "a62b9d602a6277f302e95140fc969b72c337fbf7a889c45cd9333daf9376190f",
+          "sizeBytes": 9355952,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "03-无衬线黑体/更纱黑体SC/SarasaGothicSC-Regular.woff2",
+          "collectionIndex": null,
+          "internalFamily": "Sarasa Gothic SC",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "huiwen-mincho",
+      "label": "汇文明朝体",
+      "script": "cjk",
+      "cssFamily": "Reade huiwen-mincho",
+      "description": "旧式中文印刷所气质的明朝体",
+      "bodyRecommended": false,
+      "licenseStatus": "claimed-by-local-index-unverified",
+      "warning": "重新分发证据未独立核实；单一字重",
+      "hasItalic": false,
+      "hasRealStrong": false,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [],
+      "collectionId": "library/04-楷体手写/汇文明朝体",
+      "faces": [
+        {
+          "file": "huiwen-mincho-normal-400.woff2",
+          "sha256": "01199be4a764c9eecc9ad8be8f7c93ac2c102f569d6f105ea7f8634e30d1adc2",
+          "sizeBytes": 8238348,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "04-楷体手写/汇文明朝体/Huiwenmincho.ttf",
+          "collectionIndex": null,
+          "internalFamily": "Huiwen-mincho",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "lxgw-wenkai",
+      "label": "霞鹜文楷",
+      "script": "cjk",
+      "cssFamily": "Reade lxgw-wenkai",
+      "description": "温润、带手写感的阅读楷体",
+      "bodyRecommended": true,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": null,
+      "hasItalic": false,
+      "hasRealStrong": true,
+      "availableWeights": [
+        400,
+        500
+      ],
+      "variableAxes": [],
+      "collectionId": "library/04-楷体手写/霞鹜文楷",
+      "faces": [
+        {
+          "file": "lxgw-wenkai-normal-500.woff2",
+          "sha256": "ec2022329b12de91682436d5ddb0353b71d5cfffcaa83763b3861ad898e1047f",
+          "sizeBytes": 8952188,
+          "roles": [
+            "strong"
+          ],
+          "sourceFile": "04-楷体手写/霞鹜文楷/LXGWWenKai-Medium.ttf",
+          "collectionIndex": null,
+          "internalFamily": "LXGW WenKai",
+          "internalSubfamily": "Medium",
+          "weight": "500",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        },
+        {
+          "file": "lxgw-wenkai-normal-400.woff2",
+          "sha256": "8c92d1b42fbfc8e6f81eb57810d58c85106e8682d1d05e9cda31552326e440d3",
+          "sizeBytes": 8016756,
+          "roles": [
+            "regular"
+          ],
+          "sourceFile": "04-楷体手写/霞鹜文楷/LXGWWenKai-Regular.ttf",
+          "collectionIndex": null,
+          "internalFamily": "LXGW WenKai",
+          "internalSubfamily": "Regular",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "normal",
+          "variableAxes": []
+        }
+      ]
+    },
+    {
+      "id": "smiley-sans",
+      "label": "得意黑",
+      "script": "cjk",
+      "cssFamily": "Reade smiley-sans",
+      "description": "窄长斜切的展示字体",
+      "bodyRecommended": false,
+      "licenseStatus": "verified-local-or-embedded",
+      "warning": "源 face 为固定斜切造型并映射为 CSS normal；仅建议用于标题，高级选择正文时需明确承担可读性风险",
+      "hasItalic": false,
+      "hasRealStrong": false,
+      "availableWeights": [
+        400
+      ],
+      "variableAxes": [],
+      "collectionId": "library/05-特殊展示/得意黑",
+      "faces": [
+        {
+          "file": "smiley-sans-normal-400.woff2",
+          "sha256": "4895e7a5b72753b7d4bf090581fbc4375e0ec53484944f369a584588f1eeaf08",
+          "sizeBytes": 1361268,
+          "roles": [
+            "regular",
+            "strong"
+          ],
+          "sourceFile": "05-特殊展示/得意黑/SmileySans-Oblique.otf.woff2",
+          "collectionIndex": null,
+          "internalFamily": "Smiley Sans",
+          "internalSubfamily": "Oblique",
+          "weight": "400",
+          "style": "normal",
+          "sourceStyle": "italic",
+          "variableAxes": []
+        }
+      ]
+    }
+  ]
+}

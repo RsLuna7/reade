@@ -374,4 +374,30 @@ describe("SecondaryPane", () => {
     expect(readDocumentMock.mock.calls.length).toBe(loads);
     expect(memory.get("scan.pdf")).toEqual({ page: 40, offsetRatio: 0 });
   });
+
+  it("opens an in-document find bar on Ctrl+F when the pane is focused", async () => {
+    readDocumentMock.mockResolvedValue(
+      markdownContent("notes/alpha.md", "# Alpha\n\nSecondary find target."),
+    );
+    render(
+      <SecondaryPane
+        path="notes/alpha.md"
+        documents={libraryDocuments}
+        motionLevel="off"
+        onClose={() => undefined}
+      />,
+    );
+    await screen.findByText("Secondary find target.");
+    const body = document.querySelector(".secondary-pane .markdown-body") as HTMLElement | null;
+    expect(body).not.toBeNull();
+    fireEvent.keyDown(body!, { key: "f", ctrlKey: true, bubbles: true });
+    const findInput = await screen.findByRole("searchbox", { name: "查找内容" });
+    fireEvent.change(findInput, { target: { value: "Secondary" } });
+    await waitFor(
+      () => {
+        expect(screen.getByText("第 1 项，共 1 项")).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+  });
 });

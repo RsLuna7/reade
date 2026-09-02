@@ -189,6 +189,23 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().readingSettings.fontFamily).toBe("system");
   });
 
+  it("keeps explicit curated fonts across theme-series changes", () => {
+    useReaderStore.getState().updateReadingSettings({
+      fontMode: "custom",
+      cjkFontId: "lxgw-wenkai",
+      latinFontId: "lora",
+    });
+    useReaderStore.getState().setThemeSeries("ink");
+    useReaderStore.getState().toggleTheme();
+    useReaderStore.getState().setThemeSeries("celadon");
+
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "custom",
+      cjkFontId: "lxgw-wenkai",
+      latinFontId: "lora",
+    });
+  });
+
   it("persists the switched series and preset like any other preference", () => {
     useReaderStore.getState().setThemeSeries("ink");
     const stored = JSON.parse(
@@ -291,6 +308,36 @@ describe("reading settings", () => {
     ) as { state: Record<string, unknown>; version: number };
     expect(stored.version).toBe(READER_PREFERENCES_VERSION);
     expect(stored.state).toMatchObject({ theme: "paper-dark" });
+  });
+
+  it("migrates v4 reading settings into theme-managed font mode (v5)", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 4,
+        state: {
+          theme: "ink-dark",
+          readingSettings: {
+            fontSize: 18,
+            lineHeight: 1.9,
+            contentWidth: 1600,
+            paragraphSpacing: 1,
+            fontFamily: "serif",
+          },
+        },
+      }),
+    );
+
+    await useReaderStore.persist.rehydrate();
+
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontSize: 18,
+      fontFamily: "serif",
+      fontMode: "theme",
+      fontPairId: "balanced-modern-book",
+      cjkFontId: "source-han-serif-sc",
+      latinFontId: "source-serif-4",
+    });
   });
 
   it("drops an unknown persisted theme id instead of inventing one", async () => {

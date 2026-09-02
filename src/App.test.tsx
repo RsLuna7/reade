@@ -301,6 +301,40 @@ describe("motion integration", () => {
     expect(useReaderStore.getState().motionLevel).toBe("full");
   });
 
+  it("selects curated pairs and advanced Chinese/Latin fonts", () => {
+    render(
+      <ReadingSettingsPanel
+        open
+        isWeb={false}
+        onClose={() => undefined}
+        onNotice={() => undefined}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "搭配预设" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "字体搭配预设" }), {
+      target: { value: "warm-essay" },
+    });
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "pair",
+      fontPairId: "warm-essay",
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "高级选择" }));
+    fireEvent.change(screen.getByRole("combobox", { name: "中文字体" }), {
+      target: { value: "misans" },
+    });
+    fireEvent.change(screen.getByRole("combobox", { name: "西文字体" }), {
+      target: { value: "atkinson-hyperlegible" },
+    });
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "custom",
+      cjkFontId: "misans",
+      latinFontId: "atkinson-hyperlegible",
+    });
+    expect(screen.getByText(/MiSans：重新分发证据未独立核实/)).toBeInTheDocument();
+  });
+
   it("replays an identical notice when its id changes", () => {
     const cancel = vi.fn();
     const animate = vi.fn(() => ({
@@ -2261,6 +2295,62 @@ describe("reading position persistence (H0)", () => {
     await waitFor(() => {
       expect(reader.scrollTop).toBe(120);
     });
+  });
+});
+
+describe("in-document find (Ctrl+F)", () => {
+  function setFindState() {
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/find-lib", documents: [] },
+      documents: [markdownDocument("guide.md", "Guide")],
+      currentPath: "guide.md",
+      currentContent: {
+        kind: "markdown",
+        relativePath: "guide.md",
+        markdown: "## Target section\n\nBody text for find.",
+      },
+      motionLevel: "off",
+      verticalWriting: false,
+    });
+  }
+
+  it("opens on Ctrl+F with preventDefault and closes on Escape before other overlays", async () => {
+    setFindState();
+    render(<App />);
+    await screen.findByText("Body text for find.");
+
+    expect(fireEvent.keyDown(window, { key: "f", ctrlKey: true })).toBe(false);
+    const findInput = await screen.findByRole("searchbox", { name: "查找内容" });
+    expect(findInput).toHaveFocus();
+
+    fireEvent.keyDown(findInput, { key: "Escape" });
+    expect(screen.queryByRole("searchbox", { name: "查找内容" })).not.toBeInTheDocument();
+  });
+
+  it("finds matches after debounce and reports the count", async () => {
+    setFindState();
+    render(<App />);
+    await screen.findByText("Body text for find.");
+
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    const findInput = await screen.findByRole("searchbox", { name: "查找内容" });
+    fireEvent.change(findInput, { target: { value: "Body" } });
+    await waitFor(
+      () => {
+        expect(screen.getByText("第 1 项，共 1 项")).toBeInTheDocument();
+      },
+      { timeout: 2000 },
+    );
+  });
+
+  it("stays available in vertical writing mode", async () => {
+    setFindState();
+    useReaderStore.setState({ verticalWriting: true });
+    render(<App />);
+    await screen.findByText("Body text for find.");
+
+    fireEvent.keyDown(window, { key: "f", ctrlKey: true });
+    expect(await screen.findByRole("searchbox", { name: "查找内容" })).toBeInTheDocument();
   });
 });
 

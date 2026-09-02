@@ -1849,8 +1849,7 @@ a:focus-visible {
 .article-title {
   margin: 0;
   color: var(--ink);
-  font-family: "Iowan Old Style", "Noto Serif SC", "Source Han Serif SC",
-    "Songti SC", "SimSun", serif;
+  font-family: var(--reader-font-family);
   font-size: clamp(29px, 2.5vw, 38px);
   font-weight: 700;
   letter-spacing: -0.025em;
@@ -2110,7 +2109,7 @@ a:focus-visible {
 .epub-reader { width: 100%; max-width: 100%; color: var(--ink); font-family: var(--reader-font-family); font-size: var(--reader-font-size); line-height: var(--reader-line-height); }
 .epub-chapter { padding-bottom: 72px; margin-bottom: 64px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }
 .epub-chapter-heading { position: relative; }
-.epub-chapter-title { margin: 8px 0 36px; font-family: "Iowan Old Style", "Noto Serif SC", "Songti SC", serif; font-size: clamp(25px, 2vw, 33px); line-height: 1.35; }
+.epub-chapter-title { margin: 8px 0 36px; font-family: var(--reader-font-family); font-size: clamp(25px, 2vw, 33px); line-height: 1.35; }
 .reade-motion-locator-highlight { position: absolute; z-index: 3; inset: 0; border-radius: 8px; background: var(--accent); opacity: 0; pointer-events: none; }
 .epub-chapter-heading > .reade-motion-locator-highlight { z-index: 0; inset: -10px -12px; }
 .epub-chapter-heading > :not(.reade-motion-locator-highlight) { position: relative; z-index: 1; }
@@ -2150,8 +2149,7 @@ a:focus-visible {
 .markdown-body h5,
 .markdown-body h6 {
   color: var(--ink);
-  font-family: "Iowan Old Style", "Noto Serif SC", "Source Han Serif SC",
-    "Songti SC", "SimSun", serif;
+  font-family: var(--reader-font-family);
   font-weight: 700;
   letter-spacing: -0.012em;
   line-height: 1.42;
@@ -3808,6 +3806,65 @@ a:focus-visible {
   background-color: var(--selection);
 }
 
+::highlight(reade-find-match) {
+  background-color: color-mix(in srgb, var(--accent-soft) 72%, transparent);
+}
+
+::highlight(reade-find-active) {
+  background-color: var(--accent-soft);
+  color: var(--accent-ink);
+}
+
+.find-bar {
+  position: sticky;
+  top: 0;
+  z-index: 4;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px var(--reader-gutter-inline);
+  border-bottom: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 92%, transparent);
+  backdrop-filter: blur(10px);
+}
+
+.find-bar__input {
+  min-width: 0;
+  flex: 1;
+  max-width: 320px;
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font: inherit;
+  font-size: 13px;
+}
+
+.find-bar__input:focus {
+  outline: 2px solid var(--accent-soft);
+  outline-offset: 1px;
+}
+
+.find-bar__status {
+  min-width: 0;
+  flex: none;
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.find-bar__nav,
+.find-bar__close {
+  flex: none;
+}
+
+.secondary-pane .find-bar {
+  position: relative;
+  z-index: 2;
+  border-bottom: 1px solid var(--line);
+}
+
 .annotation-note-editor {
   position: fixed;
   right: 24px;
@@ -5011,6 +5068,7 @@ a:focus-visible {
   max-width: min(var(--reader-measure, 760px), 760px);
   margin: 0 auto;
   padding: 40px 26px 120px;
+  font-family: var(--reader-font-family);
   font-size: var(--reader-font-size);
   line-height: var(--reader-line-height);
 }
@@ -5018,7 +5076,7 @@ a:focus-visible {
 .book-digest-title {
   margin: 0 0 6px;
   color: var(--ink);
-  font-family: "Iowan Old Style", "Noto Serif SC", "Source Han Serif SC", "Songti SC", "SimSun", serif;
+  font-family: var(--reader-font-family);
   font-size: 1.5em;
   line-height: 1.4;
 }
@@ -5461,6 +5519,70 @@ a:focus-visible {
 
 .setting-select:focus {
   border-color: var(--accent);
+}
+
+.font-setting {
+  padding: 0;
+  border: 0;
+}
+
+.font-setting > .setting-label {
+  width: 100%;
+}
+
+.font-mode-control {
+  display: grid;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--chrome);
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.font-mode-control button {
+  min-height: 30px;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10.5px;
+  cursor: pointer;
+}
+
+.font-mode-control button:hover {
+  color: var(--ink-soft);
+}
+
+.font-mode-control button.active,
+.font-mode-control button[aria-pressed="true"] {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: var(--paper-raised);
+}
+
+.font-setting-field {
+  display: grid;
+  margin-top: 8px;
+  gap: 5px;
+  color: var(--ink-soft);
+  font-size: 10.5px;
+}
+
+.font-custom-grid {
+  display: grid;
+  gap: 2px;
+}
+
+.font-selection-summary {
+  margin: 8px 0 0;
+  color: var(--ink-soft);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.font-warning {
+  color: var(--accent-ink);
 }
 
 .setting-hint {

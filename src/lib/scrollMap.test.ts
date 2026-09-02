@@ -4,6 +4,7 @@ import type { Annotation, SearchResult } from "./backend";
 import {
   buildScrollMapMarks,
   collectAnnotationScrollPoints,
+  collectFindScrollPoints,
   collectSearchScrollPoints,
   SCROLL_MAP_MAX_MARKS,
   truncateScrollMapLabel,
@@ -280,6 +281,32 @@ describe("collectSearchScrollPoints", () => {
       ["r2", 700],
     ]);
     expect(points[0].kind).toBe("search");
+  });
+});
+
+describe("collectFindScrollPoints", () => {
+  it("measures resolved ranges into search ticks", () => {
+    const { scroller, article } = fixture();
+    scroller.scrollTop = 50;
+    stubRect(scroller, 0);
+    const mark = document.createElement("span");
+    mark.textContent = "find";
+    stubRect(mark, 200);
+    article.appendChild(mark);
+    const range = document.createRange();
+    range.selectNodeContents(mark);
+
+    const points = collectFindScrollPoints(scroller, [
+      { targetId: "0:4", label: "find", range },
+      { targetId: "missing", label: "x", range: null },
+    ]);
+    expect(points).toHaveLength(1);
+    expect(points[0]).toMatchObject({
+      kind: "search",
+      offset: 250,
+      targetId: "0:4",
+    });
+    expect(points[0].label).toBe("命中 · find");
   });
 });
 

@@ -26,9 +26,20 @@ import {
   type ReaderTheme,
   isReaderTheme,
 } from "./themes";
+import {
+  DEFAULT_CJK_READER_FONT_ID,
+  DEFAULT_LATIN_READER_FONT_ID,
+  DEFAULT_READER_FONT_PAIR_ID,
+  normalizeReaderFontId,
+  normalizeReaderFontMode,
+  normalizeReaderFontPairId,
+  type ReaderFontId,
+  type ReaderFontMode,
+  type ReaderFontPairId,
+} from "./readerFonts";
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
-export const READER_PREFERENCES_VERSION = 4;
+export const READER_PREFERENCES_VERSION = 5;
 
 export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
 export type LibraryViewMode = "tree" | "shelf";
@@ -40,7 +51,13 @@ export interface ReadingSettings {
   /** Max article width in px. At CONTENT_WIDTH_MAX the measure is fluid (no cap). */
   contentWidth: number;
   paragraphSpacing: number;
+  /** Theme-series font preset, retained for the existing reading style. */
   fontFamily: ReaderFontFamily;
+  /** Desktop custom fonts are opt-in; theme preserves pre-integration behavior. */
+  fontMode: ReaderFontMode;
+  fontPairId: ReaderFontPairId;
+  cjkFontId: ReaderFontId;
+  latinFontId: ReaderFontId;
 }
 
 export const CONTENT_WIDTH_MIN = 560;
@@ -53,6 +70,10 @@ export const DEFAULT_READING_SETTINGS: ReadingSettings = {
   contentWidth: CONTENT_WIDTH_MAX,
   paragraphSpacing: 1,
   fontFamily: "system",
+  fontMode: "theme",
+  fontPairId: DEFAULT_READER_FONT_PAIR_ID,
+  cjkFontId: DEFAULT_CJK_READER_FONT_ID,
+  latinFontId: DEFAULT_LATIN_READER_FONT_ID,
 };
 
 const LIBRARY_VIEW_MODES = new Set<LibraryViewMode>(["tree", "shelf"]);
@@ -138,6 +159,10 @@ export function normalizeReadingSettings(
       settings.fontFamily && FONT_FAMILIES.has(settings.fontFamily)
         ? settings.fontFamily
         : current.fontFamily,
+    fontMode: normalizeReaderFontMode(settings.fontMode, current.fontMode),
+    fontPairId: normalizeReaderFontPairId(settings.fontPairId, current.fontPairId),
+    cjkFontId: normalizeReaderFontId(settings.cjkFontId, current.cjkFontId),
+    latinFontId: normalizeReaderFontId(settings.latinFontId, current.latinFontId),
   };
 }
 

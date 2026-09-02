@@ -62,6 +62,46 @@ export function scrollToOffsetWithinElement(
   return true;
 }
 
+/** Scroll a Range into view within a reading container (horizontal or vertical). */
+export function scrollRangeIntoContainer(
+  container: HTMLElement | null,
+  range: Range | null,
+  behavior: ScrollBehavior = "auto",
+): boolean {
+  if (!container || !range) return false;
+  if (isVerticalContainer(container)) {
+    const node = range.startContainer;
+    const element =
+      node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+    if (!(element instanceof HTMLElement)) return false;
+    element.scrollIntoView({ block: "start", inline: "nearest", behavior });
+    return true;
+  }
+  let rangeRect: DOMRect | { top: number; left: number } | null = null;
+  if (typeof range.getBoundingClientRect === "function") {
+    rangeRect = range.getBoundingClientRect();
+  } else {
+    const node = range.startContainer;
+    const element =
+      node.nodeType === Node.TEXT_NODE ? node.parentElement : (node as Element);
+    if (element instanceof HTMLElement) {
+      rangeRect = element.getBoundingClientRect();
+    }
+  }
+  if (!rangeRect) return false;
+  const containerRect = container.getBoundingClientRect();
+  const top = Math.max(
+    0,
+    container.scrollTop + rangeRect.top - containerRect.top - container.clientHeight / 3,
+  );
+  if (behavior === "smooth" && typeof container.scrollTo === "function") {
+    container.scrollTo({ top, behavior });
+  } else {
+    container.scrollTop = top;
+  }
+  return true;
+}
+
 export function scrollContainerByRatio(
   container: HTMLElement | null,
   scrollRatio: number,

@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   scrollContainerByRatio,
   scrollElementWithinContainer,
+  scrollRangeIntoContainer,
   scrollToOffsetWithinElement,
 } from "./scroll";
 
@@ -95,6 +96,26 @@ describe("vertical writing axis branch (plan-vertical-writing VW-D5)", () => {
     expect(scrollElementWithinContainer(container, target)).toBe(true);
     expect(container.scrollTop).toBe(340);
     expect(scrollIntoView).not.toHaveBeenCalled();
+    container.remove();
+  });
+
+  it("delegates range jumps to scrollIntoView in vertical containers", () => {
+    const container = document.createElement("div");
+    container.dataset.writing = "vertical";
+    const target = document.createElement("span");
+    target.textContent = "命中";
+    container.append(target);
+    document.body.append(container);
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    const scrollIntoView = vi.fn();
+    target.scrollIntoView = scrollIntoView;
+    expect(scrollRangeIntoContainer(container, range, "auto")).toBe(true);
+    expect(scrollIntoView).toHaveBeenCalledWith({
+      block: "start",
+      inline: "nearest",
+      behavior: "auto",
+    });
     container.remove();
   });
 });

@@ -586,12 +586,15 @@ export const useReaderStore = create<ReaderState>()(
             if (THEME_META[state.theme].series === series) return {};
             return {
               theme: setSeries(state.theme, series),
-              // D4: the new series' typography preset lands with the switch;
-              // manual overrides afterwards stick until the next series switch.
-              readingSettings: normalizeReadingSettings(
-                { fontFamily: SERIES_FONT_PRESET[series] },
-                state.readingSettings,
-              ),
+              // D4: theme-managed typography follows a real series switch.
+              // Explicit curated/custom font choices remain theme-resistant.
+              readingSettings:
+                state.readingSettings.fontMode === "theme"
+                  ? normalizeReadingSettings(
+                      { fontFamily: SERIES_FONT_PRESET[series] },
+                      state.readingSettings,
+                    )
+                  : state.readingSettings,
             };
           });
         },

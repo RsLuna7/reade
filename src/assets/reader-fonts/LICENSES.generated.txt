@@ -1,0 +1,721 @@
+Reade generated reader font pack
+================================
+
+Generated from the local unified font library. This notice is an inventory aid,
+not an independent legal opinion. Embedded metadata remains in converted fonts;
+detected local license files are reproduced verbatim below.
+
+- Charter (charter)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/charter
+  Local license files: 01-衬线宋体/Charter/Charter 210112/Charter license.txt
+  Warning: none
+  Embedded copyright:
+    (c) Copyright 1989-1992, Bitstream Inc., Cambridge, MA. You are hereby granted permission under all Bitstream propriety rights to use, copy, modify, sublicense, sell, and redistribute the 4 Bitstream Charter (r) Type 1 outline fonts and the 4 Courier Type 1 outline fonts for any purpose and without restriction; provided, that this notice is left intact on all copies of such fonts and that Bitstream's trademark is acknowledged as shown below on all unmodified copies of the 4 Charter Type 1 fonts: 'BITSTREAM CHARTER is a registered trademark of Bitstream Inc.'
+
+- Crimson Pro (crimson-pro)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/crimson-pro
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2018 The Crimson Pro Project Authors (https://github.com/Fonthausen/CrimsonPro)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL
+  Embedded license URL: https://scripts.sil.org/OFL
+
+- EB Garamond (eb-garamond)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/eb-garamond
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2017 The EB Garamond Project Authors (https://github.com/octaviopardo/EBGaramond12)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license URL: https://openfontlicense.org
+
+- Libre Baskerville (libre-baskerville)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/libre-baskerville
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2012 The Libre Baskerville Project Authors (https://github.com/impallari/Libre-Baskerville)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license URL: https://openfontlicense.org
+
+- Lora (lora)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/lora
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2011 The Lora Project Authors (https://github.com/cyrealtype/Lora-Cyrillic), with Reserved Font Name "Lora".
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL
+  Embedded license URL: https://scripts.sil.org/OFL
+
+- Roboto Slab (roboto-slab)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/roboto-slab
+  Local license files: none detected
+  Warning: 正文密度偏高，优先用于标题或技术编辑风格
+  Embedded copyright:
+    Copyright 2018 The Roboto Slab Project Authors (https://github.com/googlefonts/robotoslab)
+  Embedded license description:
+    Licensed under the Apache License, Version 2.0
+  Embedded license URL: http://www.apache.org/licenses/LICENSE-2.0
+
+- Alegreya (alegreya)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/alegreya
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2011 The Alegreya Project Authors (https://github.com/huertatipografica/Alegreya)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- Atkinson Hyperlegible (atkinson-hyperlegible)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/atkinson-hyperlegible
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2020 Braille Institute of America, Inc.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL
+  Embedded license URL: https://scripts.sil.org/OFL
+
+- IBM Plex Serif (ibm-plex-serif)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/ibm-plex-serif
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2020 IBM Corp. All rights reserved.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- Literata (literata)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/literata
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2017 The Literata Project Authors (https://github.com/googlefonts/literata)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL
+  Embedded license URL: https://scripts.sil.org/OFL
+
+- Merriweather (merriweather)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/merriweather
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2024 The Merriweather Project Authors (https://github.com/EbenSorkin/Merriweather4) with Reserved Font Name "Merriweather".
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license URL: https://openfontlicense.org
+
+- Newsreader (newsreader)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/newsreader
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2020 The Newsreader Project Authors (http://github.com/productiontype/Newsreader)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- Noto Serif (noto-serif)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/noto-serif
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2022 The Noto Project Authors (https://github.com/notofonts/latin-greek-cyrillic)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://scripts.sil.org/OFL
+  Embedded license URL: https://openfontlicense.org
+  Embedded license URL: https://scripts.sil.org/OFL
+
+- PT Serif (pt-serif)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/pt-serif
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright © 2010 ParaType Ltd. All rights reserved.
+  Embedded license description:
+    Copyright (c) 2010, ParaType Ltd. (http://www.paratype.com/public), with Reserved Font Names "PT Sans", "PT Serif" and "ParaType".
+    
+    This Font Software is licensed under the Open Font License, Version 1.1 This license is copied below, and is also available with a FAQ at: http://scripts.sil.org/OFL
+    
+    -----------------------------------------------------------
+    SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+    -----------------------------------------------------------
+    
+    PREAMBLE
+    The goals of the Open Font License (OFL) are to stimulate worldwide development of collaborative font projects, to support the font creation efforts of academic and linguistic communities, and to provide a free and open framework in which fonts may be shared and improved in partnership with others.
+    
+    The OFL allows the licensed fonts to be used, studied, modified and redistributed freely as long as they are not sold by themselves. The fonts, including any derivative works, can be bundled, embedded, redistributed and/or sold with any software provided that any reserved names are not used by derivative works. The fonts and derivatives, however, cannot be released under any other type of license. The requirement for fonts to remain under this license does not apply to any document created using the fonts or their derivatives.
+    
+    DEFINITIONS
+    "Font Software" refers to the set of files released by the Copyright Holder(s) under this license and clearly marked as such. This may include source files, build scripts and documentation.
+    
+    "Reserved Font Name" refers to any names specified as such after the copyright statement(s).
+    
+    "Original Version" refers to the collection of Font Software components as distributed by the Copyright Holder(s).
+    
+    "Modified Version" refers to any derivative made by adding to, deleting, or substituting -- in part or in whole -- any of the components of the Original Version, by changing formats or by porting the Font Software to a new environment.
+    
+    "Author" refers to any designer, engineer, programmer, technical writer or other person who contributed to the Font Software.
+    
+    PERMISSION & CONDITIONS
+    Permission is hereby granted, free of charge, to any person obtaining a copy of the Font Software, to use, study, copy, merge, embed, modify, redistribute, and sell modified and unmodified copies of the Font Software, subject to the following conditions:
+    
+    1) Neither the Font Software nor any of its individual components, in Original or Modified Versions, may be sold by itself.
+    
+    2) Original or Modified Versions of the Font Software may be bundled, redistributed and/or sold with any software, provided that each copy contains the above copyright notice and this license. These can be included either as stand-alone text files, human-readable headers or in the appropriate machine-readable metadata fields within text or binary files as long as those fields can be easily viewed by the user.
+    
+    3) No Modified Version of the Font Software may use the Reserved Font Name(s) unless explicit written permission is granted by the corresponding Copyright Holder. This restriction only applies to the primary font name as presented to the users.
+    
+    4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font Software shall not be used to promote, endorse or advertise any Modified Version, except to acknowledge the contribution(s) of the Copyright Holder(s) and the Author(s) or with their explicit written
+    permission. 
+    
+    5) The Font Software, modified or unmodified, in part or in whole, must be distributed entirely under this license, and must not be distributed under any other license. The requirement for fonts to remain under this license does not apply to any document created using the Font Software.
+    
+    TERMINATION
+    This license becomes null and void if any of the above conditions are not met.
+    
+    DISCLAIMER
+    THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM OTHER DEALINGS IN THE FONT SOFTWARE.
+  Embedded license URL: http://scripts.sil.org/OFL_web
+
+- Source Serif 4 (source-serif-4)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/source-serif-4
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    © 2014 - 2021 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name ‘Source’.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: http://scripts.sil.org/OFL. This Font Software is distributed on an ‘AS IS’ BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- Spectral (spectral)
+  Status: verified-local-or-embedded
+  Collection: library/02-现代衬线与屏幕优化/spectral
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2017 The Spectral Project Authors (https://github.com/productiontype/Spectral)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license URL: https://openfontlicense.org
+
+- 京华老宋体 (kinghwa-old-song)
+  Status: claimed-by-local-index-unverified
+  Collection: library/01-衬线宋体/京华老宋体
+  Local license files: none detected
+  Warning: 重新分发证据未独立核实；层级有限，适合明确的复古阅读方向
+  Embedded copyright:
+    Font © Copyright 2022 TerryWang.All rights reserved.
+
+- 思源宋体 SC (source-han-serif-sc)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/思源宋体sc
+  Local license files: 01-衬线宋体/思源宋体SC/LICENSE.txt
+  Warning: none
+  Embedded copyright:
+    © 2017-2024 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- 源样明体 (genyo-min)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/源样明体
+  Local license files: 01-衬线宋体/源样明体/SIL_Open_Font_License_1.1.txt
+  Warning: 区域字形偏台湾，不作为 zh-CN 默认候选
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- 源流明体 (genryu-min)
+  Status: verified-local-or-embedded
+  Collection: library/01-衬线宋体/源流明体
+  Local license files: 01-衬线宋体/源流明体/SIL_Open_Font_License_1.1.txt
+  Warning: 区域字形偏台湾，不作为 zh-CN 默认候选
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- MiSans (misans)
+  Status: claimed-by-local-index-unverified
+  Collection: library/03-无衬线黑体/misans
+  Local license files: none detected
+  Warning: 重新分发证据未独立核实
+  Embedded copyright:
+    Copyright (c)  2020-2021  Beijing Xiaomi Mobile Software Co.,Ltd. All Rights Reserved.
+
+- 思源黑体 CN (source-han-sans-cn)
+  Status: verified-local-or-embedded
+  Collection: library/03-无衬线黑体/思源黑体cn
+  Local license files: 03-无衬线黑体/思源黑体CN/LICENSE.txt
+  Warning: none
+  Embedded copyright:
+    © 2014-2025 Adobe (http://www.adobe.com/), with Reserved Font Name 'Source'.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: http://scripts.sil.org/OFL
+
+- 更纱黑体 SC (sarasa-gothic-sc)
+  Status: claimed-by-local-index-unverified
+  Collection: library/03-无衬线黑体/更纱黑体sc
+  Local license files: none detected
+  Warning: 第三方 SC 转包；重新分发证据未独立核实
+  Embedded copyright:
+    Copyright (c) 2015-2024, Renzhi Li (aka. Belleve Invis, belleve@typeof.net). Portions Copyright (c) 2016-2020 The Inter Project Authors. Portions Copyright (c) 2014, 2015 Adobe Systems Incorporated (http://www.adobe.com/). Portions Copyright (c) 2012 Google Inc.
+
+- 汇文明朝体 (huiwen-mincho)
+  Status: claimed-by-local-index-unverified
+  Collection: library/04-楷体手写/汇文明朝体
+  Local license files: none detected
+  Warning: 重新分发证据未独立核实；单一字重
+  Embedded copyright:
+    Public Domain
+
+- 霞鹜文楷 (lxgw-wenkai)
+  Status: verified-local-or-embedded
+  Collection: library/04-楷体手写/霞鹜文楷
+  Local license files: none detected
+  Warning: none
+  Embedded copyright:
+    Copyright 2021-2026 LXGW (https://github.com/lxgw/LxgwWenKai)
+    Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This license is available with a FAQ at: https://openfontlicense.org
+  Embedded license URL: https://openfontlicense.org
+
+- 得意黑 (smiley-sans)
+  Status: verified-local-or-embedded
+  Collection: library/05-特殊展示/得意黑
+  Local license files: none detected
+  Warning: 源 face 为固定斜切造型并映射为 CSS normal；仅建议用于标题，高级选择正文时需明确承担可读性风险
+  Embedded copyright:
+    Copyright © 2022–2024 atelierAnchor. All rights reserved.
+  Embedded license description:
+    This Font Software is licensed under the SIL Open Font License, Version 1.1. This Font Software is distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied. See the SIL Open Font License for the specific language, permissions and limitations governing your use of this Font Software.
+  Embedded license URL: https://scripts.sil.org/OFL
+
+
+Detected local license texts
+============================
+
+--- library:01-衬线宋体/Charter/Charter 210112/Charter license.txt ---
+This is a copy of the Charter fonts which Bitstream contributed to the X consortium. This is the original notice included with the fonts: 
+
+(c) Copyright 1989-1992, Bitstream Inc., Cambridge, MA. You are hereby granted permission under all Bitstream propriety rights to use, copy, modify, sublicense, sell, and redistribute the 4 Bitstream Charter (r) Type 1 outline fonts and the 4 Courier Type 1 outline fonts for any purpose and without restriction; provided, that this notice is left intact on all copies of such fonts and that Bitstream's trademark is acknowledged as shown below on all unmodified copies of the 4 Charter Type 1 fonts. BITSTREAM CHARTER is a registered trademark of Bitstream Inc.
+
+--- library:01-衬线宋体/思源宋体SC/LICENSE.txt ---
+Copyright 2017-2022 Adobe (http://www.adobe.com/), with Reserved Font
+Name 'Source'. Source is a trademark of Adobe in the United States
+and/or other countries.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1.
+
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font
+creation efforts of academic and linguistic communities, and to
+provide a free and open framework in which fonts may be shared and
+improved in partnership with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply to
+any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software
+components as distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to,
+deleting, or substituting -- in part or in whole -- any of the
+components of the Original Version, by changing formats or by porting
+the Font Software to a new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed,
+modify, redistribute, and sell modified and unmodified copies of the
+Font Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components, in
+Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the
+corresponding Copyright Holder. This restriction only applies to the
+primary font name as presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created using
+the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+--- library:01-衬线宋体/源样明体/SIL_Open_Font_License_1.1.txt ---
+Copyright 2014-2019 Adobe (http://www.adobe.com/), with Reserved Font
+Name 'Source'. Source is a trademark of Adobe in the United States
+and/or other countries.
+
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+--- library:01-衬线宋体/源流明体/SIL_Open_Font_License_1.1.txt ---
+Copyright 2014-2019 Adobe (http://www.adobe.com/), with Reserved Font
+Name 'Source'. Source is a trademark of Adobe in the United States
+and/or other countries.
+
+
+This Font Software is licensed under the SIL Open Font License, Version 1.1.
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font creation
+efforts of academic and linguistic communities, and to provide a free and
+open framework in which fonts may be shared and improved in partnership
+with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded, 
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply
+to any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software components as
+distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to, deleting,
+or substituting -- in part or in whole -- any of the components of the
+Original Version, by changing formats or by porting the Font Software to a
+new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed, modify,
+redistribute, and sell modified and unmodified copies of the Font
+Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components,
+in Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the corresponding
+Copyright Holder. This restriction only applies to the primary font name as
+presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created
+using the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+
+--- library:03-无衬线黑体/思源黑体CN/LICENSE.txt ---
+Copyright 2014-2025 Adobe (http://www.adobe.com/), with Reserved Font
+Name 'Source'. Source is a trademark of Adobe in the United States
+and/or other countries.
+
+This Font Software is licensed under the SIL Open Font License,
+Version 1.1.
+
+This license is copied below, and is also available with a FAQ at:
+http://scripts.sil.org/OFL
+
+-----------------------------------------------------------
+SIL OPEN FONT LICENSE Version 1.1 - 26 February 2007
+-----------------------------------------------------------
+
+PREAMBLE
+The goals of the Open Font License (OFL) are to stimulate worldwide
+development of collaborative font projects, to support the font
+creation efforts of academic and linguistic communities, and to
+provide a free and open framework in which fonts may be shared and
+improved in partnership with others.
+
+The OFL allows the licensed fonts to be used, studied, modified and
+redistributed freely as long as they are not sold by themselves. The
+fonts, including any derivative works, can be bundled, embedded,
+redistributed and/or sold with any software provided that any reserved
+names are not used by derivative works. The fonts and derivatives,
+however, cannot be released under any other type of license. The
+requirement for fonts to remain under this license does not apply to
+any document created using the fonts or their derivatives.
+
+DEFINITIONS
+"Font Software" refers to the set of files released by the Copyright
+Holder(s) under this license and clearly marked as such. This may
+include source files, build scripts and documentation.
+
+"Reserved Font Name" refers to any names specified as such after the
+copyright statement(s).
+
+"Original Version" refers to the collection of Font Software
+components as distributed by the Copyright Holder(s).
+
+"Modified Version" refers to any derivative made by adding to,
+deleting, or substituting -- in part or in whole -- any of the
+components of the Original Version, by changing formats or by porting
+the Font Software to a new environment.
+
+"Author" refers to any designer, engineer, programmer, technical
+writer or other person who contributed to the Font Software.
+
+PERMISSION & CONDITIONS
+Permission is hereby granted, free of charge, to any person obtaining
+a copy of the Font Software, to use, study, copy, merge, embed,
+modify, redistribute, and sell modified and unmodified copies of the
+Font Software, subject to the following conditions:
+
+1) Neither the Font Software nor any of its individual components, in
+Original or Modified Versions, may be sold by itself.
+
+2) Original or Modified Versions of the Font Software may be bundled,
+redistributed and/or sold with any software, provided that each copy
+contains the above copyright notice and this license. These can be
+included either as stand-alone text files, human-readable headers or
+in the appropriate machine-readable metadata fields within text or
+binary files as long as those fields can be easily viewed by the user.
+
+3) No Modified Version of the Font Software may use the Reserved Font
+Name(s) unless explicit written permission is granted by the
+corresponding Copyright Holder. This restriction only applies to the
+primary font name as presented to the users.
+
+4) The name(s) of the Copyright Holder(s) or the Author(s) of the Font
+Software shall not be used to promote, endorse or advertise any
+Modified Version, except to acknowledge the contribution(s) of the
+Copyright Holder(s) and the Author(s) or with their explicit written
+permission.
+
+5) The Font Software, modified or unmodified, in part or in whole,
+must be distributed entirely under this license, and must not be
+distributed under any other license. The requirement for fonts to
+remain under this license does not apply to any document created using
+the Font Software.
+
+TERMINATION
+This license becomes null and void if any of the above conditions are
+not met.
+
+DISCLAIMER
+THE FONT SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO ANY WARRANTIES OF
+MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT
+OF COPYRIGHT, PATENT, TRADEMARK, OR OTHER RIGHT. IN NO EVENT SHALL THE
+COPYRIGHT HOLDER BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+INCLUDING ANY GENERAL, SPECIAL, INDIRECT, INCIDENTAL, OR CONSEQUENTIAL
+DAMAGES, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+FROM, OUT OF THE USE OR INABILITY TO USE THE FONT SOFTWARE OR FROM
+OTHER DEALINGS IN THE FONT SOFTWARE.
+

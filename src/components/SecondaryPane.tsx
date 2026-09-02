@@ -34,6 +34,7 @@ import {
 } from "react";
 import { X } from "lucide-react";
 import {
+  APP_RUNTIME,
   openExternalLink,
   readDocument,
   type Annotation,
@@ -50,9 +51,13 @@ import {
 } from "../lib/splitView";
 import { normalizeMarkdownUrlKey, resolveMarkdownImageSrc } from "../lib/markdownImages";
 import { useMarkdownImageAssets } from "../lib/useMarkdownImageAssets";
+import { useDocumentFind } from "../lib/useDocumentFind";
+import { FindBar } from "./FindBar";
 import { EpubReader } from "./EpubReader";
 import { MarkdownRenderer } from "./MarkdownRenderer";
 import type { PdfPagePosition, PdfReaderHandle } from "./PdfReader";
+
+const IS_WEB_RUNTIME = APP_RUNTIME === "web";
 
 const PdfReader = lazy(() =>
   import("./PdfReader").then((module) => ({ default: module.PdfReader })),
@@ -118,6 +123,52 @@ export function SecondaryPane({
   const pdfPositionMemory = pdfPositionMemoryProp ?? internalPdfMemory.current;
   const pdfHandleRef = useRef<PdfReaderHandle | null>(null);
   const pendingHash = useRef<string | null>(null);
+  const [pdfViewMode, setPdfViewMode] = useState<"original" | "reading">("original");
+  const paneReadyPath = pane?.status === "ready" ? pane.path : null;
+  const paneContentKind = pane?.status === "ready" ? pane.content.kind : null;
+  const paneFind = useDocumentFind({
+    enabled: !IS_WEB_RUNTIME && pane?.status === "ready",
+    currentPath: paneReadyPath,
+    contentKind: paneContentKind,
+    pdfMode: paneContentKind === "pdf" ? pdfViewMode : null,
+    readerRef: scrollRef,
+    articleRef,
+    motionLevel,
+    jumpToPage: (page) => pdfHandleRef.current?.jumpToPage(page),
+  });
+  const {
+    open: paneFindOpen,
+    openFind: openPaneFind,
+    closeFind: closePaneFind,
+    query: paneFindQuery,
+    activeIndex: paneFindActiveIndex,
+    matches: paneFindMatches,
+    status: paneFindStatus,
+    inputRef: paneFindInputRef,
+    setQuery: setPaneFindQuery,
+    nextMatch: paneFindNextMatch,
+    previousMatch: paneFindPreviousMatch,
+  } = paneFind;
+
+  useEffect(() => {
+    if (IS_WEB_RUNTIME) return;
+    const inPane = (target: EventTarget | null): boolean =>
+      target instanceof HTMLElement && Boolean(target.closest(".secondary-pane"));
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.ctrlKey || event.metaKey)) {
+        if (event.key === "Escape" && paneFindOpen) {
+          closePaneFind();
+        }
+        return;
+      }
+      if (event.key.toLowerCase() !== "f" || event.shiftKey || event.altKey) return;
+      if (!inPane(event.target) && !inPane(document.activeElement)) return;
+      event.preventDefault();
+      openPaneFind();
+    };
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [closePaneFind, openPaneFind, paneFindOpen]);
 
   // A new request from the owner overrides any self-navigation.
   useEffect(() => {
@@ -385,6 +436,7 @@ export function SecondaryPane({
           annotations={EMPTY_ANNOTATIONS}
           readerRef={pdfHandleRef}
           libraryRoot={libraryRoot}
+          onModeChange={setPdfViewMode}
           onTocChange={NOOP_TOC_CHANGE}
           onActiveChange={NOOP_ACTIVE_CHANGE}
         />
@@ -411,6 +463,19 @@ export function SecondaryPane({
         <div className="secondary-pane-notice" role="status">
           {notice}
         </div>
+      )}
+      {paneFindOpen && (
+        <FindBar
+          query={paneFindQuery}
+          activeIndex={paneFindActiveIndex}
+          matchCount={paneFindMatches.length}
+          status={paneFindStatus}
+          inputRef={paneFindInputRef}
+          onQueryChange={setPaneFindQuery}
+          onPrevious={paneFindPreviousMatch}
+          onNext={paneFindNextMatch}
+          onClose={closePaneFind}
+        />
       )}
       <div
         className="reading-scroll secondary-pane-scroll"
