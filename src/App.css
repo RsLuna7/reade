@@ -2721,6 +2721,26 @@ a:focus-visible {
   font-size: 11px;
 }
 
+.toc-list-wrap {
+  position: relative;
+}
+
+/* 单根滑动光标：色走 --accent（朱红等主题强调色），动效跟 data-motion。 */
+.toc-active-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  pointer-events: none;
+  transition:
+    top var(--motion-standard) var(--motion-ease),
+    height var(--motion-standard) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
+}
+
 .toc-list {
   padding: 0;
   margin: 0;
@@ -2736,7 +2756,7 @@ a:focus-visible {
   display: block;
   padding: 5px 8px 5px calc(10px + (var(--toc-depth, 1) - 1) * 11px);
   overflow: hidden;
-  /* 未读节左缘透明(plan-heatmap-toc §3.3);勿用连续灰轨,否则 accent 活动线像叠在滚动条上。 */
+  /* 未读节左缘透明(plan-heatmap-toc §3.3);活动线改由 .toc-active-indicator 承担。 */
   border-left: 1px solid transparent;
   color: var(--muted);
   font-size: 11px;
@@ -2755,8 +2775,7 @@ a:focus-visible {
 
 .toc-link.active,
 .toc-link[aria-current="location"] {
-  /* 当前位置用 inset accent;未读条目左缘保持透明,不画贯穿列表的灰轨。 */
-  box-shadow: inset 2px 0 0 var(--accent);
+  /* 左缘滑动条见 .toc-active-indicator；此处只保留朱色字重。 */
   color: var(--accent-ink);
   font-weight: 650;
 }

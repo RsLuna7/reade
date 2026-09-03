@@ -115,10 +115,19 @@ describe("application CSS isolation", () => {
     );
   });
 
-  it("marks only the active TOC item with an accent inset, without a coverage rail", () => {
+  it("marks the active TOC item with a sliding accent cursor, without a coverage rail", () => {
     expect(css).toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+transparent/s);
     expect(css).toMatch(
-      /\.toc-link\.active\s*,\s*\.toc-link\[aria-current="location"\]\s*\{[^}]*box-shadow:\s*inset\s+2px\s+0\s+0\s+var\(--accent\)/s,
+      /\.toc-active-indicator\s*\{[^}]*background:\s*var\(--accent\)/s,
+    );
+    expect(css).toMatch(
+      /\.toc-active-indicator\s*\{[^}]*transition:[^}]*top\s+var\(--motion-standard\)/s,
+    );
+    expect(css).toMatch(
+      /\.toc-link\.active\s*,\s*\.toc-link\[aria-current="location"\]\s*\{[^}]*color:\s*var\(--accent-ink\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.toc-link\.active\s*,\s*\.toc-link\[aria-current="location"\]\s*\{[^}]*box-shadow:\s*inset/s,
     );
     expect(css).not.toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+var\(--line\)/s);
     expect(css).not.toMatch(/\.toc-list\[data-coverage\]/);

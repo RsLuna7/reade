@@ -1607,19 +1607,52 @@ describe("TOC heat wiring (T1)", () => {
     { id: "beta", title: "Beta", level: 2 },
   ];
 
-  it("renders the legacy TOC DOM byte-for-byte without a heat prop", () => {
+  it("renders TOC links without heat DOM, and a sliding cursor when active", () => {
+    const rect = (top: number, height: number): DOMRect => ({
+      x: 0,
+      y: top,
+      width: 200,
+      height,
+      top,
+      left: 0,
+      bottom: top + height,
+      right: 200,
+      toJSON() {
+        return {};
+      },
+    });
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("toc-list-wrap")) return rect(100, 300);
+        if (this.classList.contains("toc-link") && this.classList.contains("active")) {
+          return rect(140, 28);
+        }
+        return rect(0, 0);
+      });
+
     const { container } = render(
       <TocNavigation items={tocItems} activeId="alpha" onSelect={() => undefined} />,
     );
-    // 向后兼容契约:无 heat 数据时不得出现任何附加 DOM 或属性。
     expect(container.querySelector(".toc-heat")).toBeNull();
     expect(container.querySelector(".toc-unassigned")).toBeNull();
-    expect(container.innerHTML).toBe(
-      '<div class="toc-section"><ol class="toc-list">' +
-        '<li><a class="toc-link active" style="--toc-depth: 1;" href="#alpha" aria-current="location" title="Alpha">Alpha</a></li>' +
-        '<li><a class="toc-link" style="--toc-depth: 2;" href="#beta" title="Beta">Beta</a></li>' +
-        "</ol></div>",
+    expect(container.querySelector(".toc-list-wrap")).not.toBeNull();
+    const cursor = container.querySelector(".toc-active-indicator");
+    expect(cursor).not.toBeNull();
+    expect(cursor).toHaveStyle({ top: "40px", height: "28px" });
+    expect(container.querySelector(".toc-link.active")).toHaveAttribute(
+      "aria-current",
+      "location",
     );
+    expect(container.querySelector('.toc-link[href="#beta"]')).not.toHaveClass("active");
+    rectSpy.mockRestore();
+  });
+
+  it("hides the sliding cursor when nothing is active", () => {
+    const { container } = render(
+      <TocNavigation items={tocItems} activeId={null} onSelect={() => undefined} />,
+    );
+    expect(container.querySelector(".toc-active-indicator")).toBeNull();
   });
 
   it("renders the estimate line only when provided (TE §3.3)", () => {
