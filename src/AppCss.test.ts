@@ -339,3 +339,31 @@ describe("annotation color tokens", () => {
     );
   });
 });
+
+describe("reader heading ladder", () => {
+  it("keeps markdown and EPUB headings bold and sized, not thinned or greyed", () => {
+    expect(css).toContain("--reader-h3-weight: 700");
+    expect(css).toContain("--reader-h4-weight: 700");
+    expect(css).toContain("--reader-h3-color: var(--ink)");
+    expect(css).toContain("--reader-h4-color: var(--ink)");
+    expect(css).toMatch(
+      /\.markdown-body h3\s*\{[^}]*font-weight:\s*var\(--reader-h3-weight\)/s,
+    );
+    expect(css).toMatch(
+      /\.markdown-body h4\s*\{[^}]*font-weight:\s*var\(--reader-h4-weight\)/s,
+    );
+    expect(css).toMatch(
+      /\.epub-reader h3\s*\{[^}]*font-weight:\s*var\(--reader-h3-weight\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.reader-shell\[data-heading-weights="binary"\]\s*\{[^}]*--reader-h4-weight:\s*400/s,
+    );
+  });
+
+  it("keeps inline strong from competing with headings", () => {
+    expect(css).toMatch(/\.markdown-body strong\s*\{[^}]*color:\s*inherit/s);
+    expect(css).not.toMatch(
+      /\.markdown-body strong\s*\{[^}]*color-mix\(in srgb,\s*var\(--ink\)/s,
+    );
+  });
+});

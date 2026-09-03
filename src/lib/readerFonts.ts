@@ -50,6 +50,63 @@ export interface ResolvedReaderFontSelection {
   warnings: readonly string[];
 }
 
+/** Heading ladder the current face can actually render (not the family catalogue). */
+export type HeadingWeightLadder = "full" | "sans600" | "medium" | "binary" | "regular";
+
+const HEADING_LADDER_WEIGHTS = [400, 500, 600, 700] as const;
+
+/**
+ * Static faces emitted into `reader-fonts.generated.css`.
+ * Family `availableWeights` lists the source collection; most CJK cuts still
+ * pack only Regular/Bold. Extra 500/600 files are listed here when shipped.
+ */
+const PACKED_STATIC_WEIGHTS: Partial<Record<ReaderFontId, readonly number[]>> = {
+  "source-han-serif-sc": [400, 500, 600, 700],
+  "lxgw-wenkai": [400, 500],
+  "kinghwa-old-song": [400],
+  "huiwen-mincho": [400],
+  "smiley-sans": [400],
+};
+
+function weightAxis(font: GeneratedReaderFont) {
+  return font.variableAxes.find((axis) => axis.tag === "wght");
+}
+
+/** Weights the loaded @font-face set can hit without synthesis. */
+export function packedHeadingWeights(font: GeneratedReaderFont): number[] {
+  const axis = weightAxis(font);
+  if (axis) {
+    return HEADING_LADDER_WEIGHTS.filter((weight) => weight >= axis.min && weight <= axis.max);
+  }
+  const packed = PACKED_STATIC_WEIGHTS[font.id];
+  if (packed) return [...packed];
+  if (!font.hasRealStrong) return [400];
+  return [400, 700];
+}
+
+function hasPackedWeight(weights: readonly number[], weight: number): boolean {
+  return weights.includes(weight);
+}
+
+/**
+ * Pick the heading ladder from the CJK face (Chinese titles use it).
+ * Theme mode uses system CJK, which on Windows is almost always Regular/Bold.
+ */
+export function headingWeightLadder(
+  selection: ResolvedReaderFontSelection,
+): HeadingWeightLadder {
+  if (selection.mode === "theme") return "binary";
+  const cjk = selection.fonts.find((font) => font.script === "cjk");
+  if (!cjk) return "binary";
+  const packed = packedHeadingWeights(cjk);
+  const has = (weight: number) => hasPackedWeight(packed, weight);
+  if (has(400) && has(500) && has(600) && has(700)) return "full";
+  if (has(400) && has(500) && has(700) && !has(600)) return "sans600";
+  if (has(400) && has(500) && !has(700)) return "medium";
+  if (has(400) && !has(700)) return "regular";
+  return "binary";
+}
+
 export function isReaderFontId(value: unknown): value is ReaderFontId {
   return typeof value === "string" && FONT_IDS.has(value);
 }
@@ -156,8 +213,8 @@ function ensureReaderFontStyles(): Promise<void> {
 }
 
 /**
- * Register the desktop-only @font-face catalog, then request only the selected
- * Chinese/Latin families and the regular/strong weights used by reflowable text.
+ * Register the desktop-only @font-face catalog, then request the selected
+ * Chinese/Latin families at every heading-ladder weight those faces pack.
  */
 export async function loadResolvedReaderFonts(
   selection: ResolvedReaderFontSelection,
@@ -168,7 +225,7 @@ export async function loadResolvedReaderFonts(
   const requests = selection.fonts.flatMap((font) => {
     const sample = font.script === "cjk" ? "汉字标题" : "Reader heading";
     const family = `"${font.cssFamily}"`;
-    const weights = font.hasRealStrong ? [400, 700] : [400];
+    const weights = packedHeadingWeights(font);
     return weights.map((weight) => document.fonts.load(`${weight} 1em ${family}`, sample));
   });
   await Promise.allSettled(requests);

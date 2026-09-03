@@ -43,7 +43,7 @@ import {
 } from "./readerWheelSpeed";
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
-export const READER_PREFERENCES_VERSION = 5;
+export const READER_PREFERENCES_VERSION = 7;
 
 export type AnnotationColorPreference = "yellow" | "green" | "blue" | "pink";
 export type LibraryViewMode = "tree" | "shelf";
@@ -60,9 +60,9 @@ export interface ReadingSettings {
    * 1 = system native speed; values other than 1 intercept wheel and scale deltas.
    */
   wheelSpeed: number;
-  /** Theme-series font preset, retained for the existing reading style. */
+  /** Theme-series font preset, used when fontMode is "theme". */
   fontFamily: ReaderFontFamily;
-  /** Desktop custom fonts are opt-in; theme preserves pre-integration behavior. */
+  /** Desktop bundled fonts stay opt-in; theme keeps the system stacks. */
   fontMode: ReaderFontMode;
   fontPairId: ReaderFontPairId;
   cjkFontId: ReaderFontId;
@@ -302,9 +302,34 @@ export function pickPersistedPreferences(state: ReaderPreferences): PersistedRea
   };
 }
 
+function migrateReadingSettings(
+  readingSettings: unknown,
+  fromVersion: number,
+): unknown {
+  if (!readingSettings || typeof readingSettings !== "object") {
+    return readingSettings;
+  }
+
+  const next = { ...(readingSettings as Record<string, unknown>) };
+  if (fromVersion < 5 && next.fontMode == null) {
+    next.fontMode = "theme";
+  }
+  // v6 briefly promoted factory 系统均衡 onto 现代书卷. Put those installs
+  // back; explicit custom fonts and non-default pairs stay.
+  if (
+    fromVersion === 6 &&
+    next.fontMode === "pair" &&
+    (next.fontPairId == null || next.fontPairId === "balanced-modern-book") &&
+    (next.fontFamily == null || next.fontFamily === "system")
+  ) {
+    next.fontMode = "theme";
+  }
+  return next;
+}
+
 export function migrateReaderPreferences(
   persistedState: unknown,
-  _version: number,
+  fromVersion: number,
 ): PersistedReaderPreferences {
   if (!persistedState || typeof persistedState !== "object") return {};
 
@@ -314,11 +339,12 @@ export function migrateReaderPreferences(
     typeof rawTheme === "string" && rawTheme in LEGACY_THEME_ID_MAP
       ? LEGACY_THEME_ID_MAP[rawTheme]
       : rawTheme;
+  const readingSettings = migrateReadingSettings(state.readingSettings, fromVersion);
 
   return {
     ...(isReaderTheme(theme) ? { theme } : {}),
-    ...(state.readingSettings && typeof state.readingSettings === "object"
-      ? { readingSettings: state.readingSettings }
+    ...(readingSettings && typeof readingSettings === "object"
+      ? { readingSettings: readingSettings as ReadingSettings }
       : {}),
     ...(Array.isArray(state.expandedPaths) ? { expandedPaths: state.expandedPaths } : {}),
     ...(MOTION_LEVELS.has(state.motionLevel as ReaderMotionLevel)

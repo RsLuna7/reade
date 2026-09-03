@@ -312,6 +312,7 @@ import {
   READER_FONT_PAIRS,
   READER_LATIN_FONTS,
   loadResolvedReaderFonts,
+  headingWeightLadder,
   resolveReaderFontSelection,
   type ReaderFontId,
   type ReaderFontPairId,
@@ -1399,8 +1400,9 @@ export function ThemeStylePicker({
       });
     }
     setThemeSeries(series);
+    const fontMode = useReaderStore.getState().readingSettings.fontMode;
     setHint(
-      SERIES_FONT_PRESET[series] === "serif"
+      fontMode === "theme" && SERIES_FONT_PRESET[series] === "serif"
         ? "已切换为书刊衬线，可在阅读设置中调整"
         : null,
     );
@@ -5782,7 +5784,12 @@ function App() {
   }, [motionLevel, retryCurrentDocumentIndex, showNotice]);
 
   return (
-    <div className="reader-shell" data-motion={motionLevel} style={readerStyle}>
+    <div
+      className="reader-shell"
+      data-motion={motionLevel}
+      data-heading-weights={headingWeightLadder(resolvedReaderFonts)}
+      style={readerStyle}
+    >
       <aside
         className="library-sidebar"
         aria-label="文档库"

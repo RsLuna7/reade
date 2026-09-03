@@ -16,6 +16,26 @@
   --reader-measure: none;
   --reader-gutter-inline: 40px;
   --reader-gutter-toc: 24px;
+  /* Headings stay bold so they read as titles. Rank comes from size, not
+     from thinning the face or greying the ink. */
+  --reader-h1-size: 1.85em;
+  --reader-h2-size: 1.55em;
+  --reader-h3-size: 1.26em;
+  --reader-h4-size: 1.08em;
+  --reader-h5-size: 0.94em;
+  --reader-h6-size: 0.88em;
+  --reader-h1-weight: 700;
+  --reader-h2-weight: 700;
+  --reader-h3-weight: 700;
+  --reader-h4-weight: 700;
+  --reader-h5-weight: 700;
+  --reader-h6-weight: 700;
+  --reader-h1-color: var(--ink);
+  --reader-h2-color: var(--ink);
+  --reader-h3-color: var(--ink);
+  --reader-h4-color: var(--ink);
+  --reader-h5-color: var(--ink);
+  --reader-h6-color: var(--ink);
   --motion-fast: 0ms;
   --motion-standard: 0ms;
   --motion-slow: 0ms;
@@ -2114,7 +2134,27 @@ a:focus-visible {
 .epub-chapter-heading > .reade-motion-locator-highlight { z-index: 0; inset: -10px -12px; }
 .epub-chapter-heading > :not(.reade-motion-locator-highlight) { position: relative; z-index: 1; }
 .epub-reader p { margin: calc(var(--reader-paragraph-spacing) * 1em) 0; }
-.epub-reader h1, .epub-reader h2, .epub-reader h3, .epub-reader h4, .epub-reader h5, .epub-reader h6 { margin: 2em 0 .8em; line-height: 1.4; scroll-margin-top: 80px; }
+.epub-reader h1,
+.epub-reader h2,
+.epub-reader h3,
+.epub-reader h4,
+.epub-reader h5,
+.epub-reader h6 {
+  margin: 2em 0 0.8em;
+  color: var(--ink);
+  font-family: var(--reader-font-family);
+  letter-spacing: -0.012em;
+  line-height: 1.42;
+  scroll-margin-top: 80px;
+  text-wrap: balance;
+}
+
+.epub-reader h1 { font-size: var(--reader-h1-size); font-weight: var(--reader-h1-weight); color: var(--reader-h1-color); }
+.epub-reader h2 { font-size: var(--reader-h2-size); font-weight: var(--reader-h2-weight); color: var(--reader-h2-color); }
+.epub-reader h3 { font-size: var(--reader-h3-size); font-weight: var(--reader-h3-weight); color: var(--reader-h3-color); }
+.epub-reader h4 { font-size: var(--reader-h4-size); font-weight: var(--reader-h4-weight); color: var(--reader-h4-color); }
+.epub-reader h5 { font-size: var(--reader-h5-size); font-weight: var(--reader-h5-weight); color: var(--reader-h5-color); }
+.epub-reader h6 { font-size: var(--reader-h6-size); font-weight: var(--reader-h6-weight); color: var(--reader-h6-color); }
 .epub-reader a { color: var(--accent-ink); text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 3px; }
 .epub-link-blocked { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
 .epub-reader blockquote { padding: 2px 18px; margin: 1.8em 0; border-left: 3px solid var(--accent); color: var(--ink-soft); }
@@ -2138,6 +2178,24 @@ a:focus-visible {
   word-break: normal;
 }
 
+.reader-shell[data-heading-weights="medium"] {
+  --reader-h1-weight: 500;
+  --reader-h2-weight: 500;
+  --reader-h3-weight: 500;
+  --reader-h4-weight: 500;
+  --reader-h5-weight: 500;
+  --reader-h6-weight: 500;
+}
+
+.reader-shell[data-heading-weights="regular"] {
+  --reader-h1-weight: 400;
+  --reader-h2-weight: 400;
+  --reader-h3-weight: 400;
+  --reader-h4-weight: 400;
+  --reader-h5-weight: 400;
+  --reader-h6-weight: 400;
+}
+
 .markdown-body > :first-child {
   margin-top: 0 !important;
 }
@@ -2148,9 +2206,7 @@ a:focus-visible {
 .markdown-body h4,
 .markdown-body h5,
 .markdown-body h6 {
-  color: var(--ink);
   font-family: var(--reader-font-family);
-  font-weight: 700;
   letter-spacing: -0.012em;
   line-height: 1.42;
   scroll-margin-top: 28px;
@@ -2159,14 +2215,18 @@ a:focus-visible {
 
 .markdown-body h1 {
   margin: 2.2em 0 0.78em;
-  font-size: 2em;
+  color: var(--reader-h1-color);
+  font-size: var(--reader-h1-size);
+  font-weight: var(--reader-h1-weight);
 }
 
 .markdown-body h2 {
   position: relative;
   padding-top: 0.9em;
   margin: 2.4em 0 0.85em;
-  font-size: 1.55em;
+  color: var(--reader-h2-color);
+  font-size: var(--reader-h2-size);
+  font-weight: var(--reader-h2-weight);
 }
 
 .markdown-body h2::before {
@@ -2181,12 +2241,30 @@ a:focus-visible {
 
 .markdown-body h3 {
   margin: 2em 0 0.68em;
-  font-size: 1.26em;
+  color: var(--reader-h3-color);
+  font-size: var(--reader-h3-size);
+  font-weight: var(--reader-h3-weight);
 }
 
 .markdown-body h4 {
   margin: 1.75em 0 0.62em;
-  font-size: 1.08em;
+  color: var(--reader-h4-color);
+  font-size: var(--reader-h4-size);
+  font-weight: var(--reader-h4-weight);
+}
+
+.markdown-body h5 {
+  margin: 1.55em 0 0.5em;
+  color: var(--reader-h5-color);
+  font-size: var(--reader-h5-size);
+  font-weight: var(--reader-h5-weight);
+}
+
+.markdown-body h6 {
+  margin: 1.4em 0 0.45em;
+  color: var(--reader-h6-color);
+  font-size: var(--reader-h6-size);
+  font-weight: var(--reader-h6-weight);
 }
 
 .markdown-body p {
@@ -2194,7 +2272,7 @@ a:focus-visible {
 }
 
 .markdown-body strong {
-  color: color-mix(in srgb, var(--ink) 92%, var(--accent));
+  color: inherit;
   font-weight: 700;
 }
 

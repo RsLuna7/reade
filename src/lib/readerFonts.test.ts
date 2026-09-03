@@ -7,6 +7,8 @@ import {
   READER_FONTS,
   READER_FONT_PAIRS,
   READER_LATIN_FONTS,
+  headingWeightLadder,
+  packedHeadingWeights,
   normalizeReaderFontId,
   normalizeReaderFontMode,
   normalizeReaderFontPairId,
@@ -68,5 +70,42 @@ describe("reader font registry", () => {
     expect(normalizeReaderFontId("unknown", DEFAULT_CJK_READER_FONT_ID)).toBe(
       DEFAULT_CJK_READER_FONT_ID,
     );
+  });
+
+  it("picks a heading ladder from packed faces, not the family catalogue", () => {
+    expect(headingWeightLadder(resolveReaderFontSelection(defaults))).toBe("binary");
+
+    const pair = resolveReaderFontSelection({ ...defaults, fontMode: "pair" });
+    expect(headingWeightLadder(pair)).toBe("full");
+    expect(packedHeadingWeights(pair.fonts[1]!)).toEqual([400, 500, 600, 700]);
+
+    const wenkai = resolveReaderFontSelection({
+      ...defaults,
+      fontMode: "custom",
+      cjkFontId: "lxgw-wenkai",
+      latinFontId: "lora",
+    });
+    expect(headingWeightLadder(wenkai)).toBe("medium");
+    expect(packedHeadingWeights(wenkai.fonts[1]!)).toEqual([400, 500]);
+
+    const sourceSerif = READER_FONTS.find((font) => font.id === "source-serif-4")!;
+    expect(packedHeadingWeights(sourceSerif)).toEqual([400, 500, 600, 700]);
+
+    const sourceHanSans = resolveReaderFontSelection({
+      ...defaults,
+      fontMode: "custom",
+      cjkFontId: "source-han-sans-cn",
+      latinFontId: "atkinson-hyperlegible",
+    });
+    expect(headingWeightLadder(sourceHanSans)).toBe("binary");
+    expect(packedHeadingWeights(sourceHanSans.fonts[1]!)).toEqual([400, 700]);
+
+    const oldSong = resolveReaderFontSelection({
+      ...defaults,
+      fontMode: "custom",
+      cjkFontId: "kinghwa-old-song",
+      latinFontId: "eb-garamond",
+    });
+    expect(headingWeightLadder(oldSong)).toBe("regular");
   });
 });

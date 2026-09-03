@@ -1,0 +1,18 @@
+/* Extra Source Han Serif SC cuts for the heading weight ladder.
+   The generated pack still ships Regular/Bold; these faces are added here. */
+
+@font-face {
+  font-family: "Reade source-han-serif-sc";
+  src: url("../assets/reader-fonts/source-han-serif-sc-normal-500.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 500;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Reade source-han-serif-sc";
+  src: url("../assets/reader-fonts/source-han-serif-sc-normal-600.woff2") format("woff2");
+  font-style: normal;
+  font-weight: 600;
+  font-display: swap;
+}

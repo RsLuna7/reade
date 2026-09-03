@@ -2,6 +2,7 @@
 // web builds while emitting the generated @font-face catalog and license notice
 // for desktop builds.
 import "../styles/reader-fonts.generated.css";
+import "../styles/reader-heading-faces.css";
 import licenseNoticeUrl from "../assets/reader-fonts/LICENSES.generated.txt?url";
 
 export { licenseNoticeUrl };

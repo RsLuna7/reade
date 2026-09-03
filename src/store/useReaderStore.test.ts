@@ -342,6 +342,119 @@ describe("reading settings", () => {
     });
   });
 
+  it("keeps v5 factory theme+system fonts on 系统均衡, and undoes the v6 pair promotion", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        state: {
+          theme: "paper-light",
+          readingSettings: {
+            fontSize: 17,
+            lineHeight: 1.9,
+            contentWidth: 1600,
+            paragraphSpacing: 1,
+            fontFamily: "system",
+            fontMode: "theme",
+            fontPairId: "balanced-modern-book",
+            cjkFontId: "source-han-serif-sc",
+            latinFontId: "source-serif-4",
+          },
+        },
+      }),
+    );
+
+    await useReaderStore.persist.rehydrate();
+
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "theme",
+      fontPairId: "balanced-modern-book",
+      fontFamily: "system",
+    });
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 6,
+        state: {
+          readingSettings: {
+            fontFamily: "system",
+            fontMode: "pair",
+            fontPairId: "balanced-modern-book",
+            cjkFontId: "source-han-serif-sc",
+            latinFontId: "source-serif-4",
+          },
+        },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readingSettings.fontMode).toBe("theme");
+  });
+
+  it("keeps v5 theme+serif and custom fonts off the heading-pair migration", async () => {
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        state: {
+          readingSettings: {
+            fontFamily: "serif",
+            fontMode: "theme",
+            fontPairId: "balanced-modern-book",
+            cjkFontId: "source-han-serif-sc",
+            latinFontId: "source-serif-4",
+          },
+        },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readingSettings.fontMode).toBe("theme");
+    expect(useReaderStore.getState().readingSettings.fontFamily).toBe("serif");
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 5,
+        state: {
+          readingSettings: {
+            fontFamily: "system",
+            fontMode: "custom",
+            fontPairId: "balanced-modern-book",
+            cjkFontId: "lxgw-wenkai",
+            latinFontId: "lora",
+          },
+        },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "custom",
+      cjkFontId: "lxgw-wenkai",
+      latinFontId: "lora",
+    });
+
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: 6,
+        state: {
+          readingSettings: {
+            fontFamily: "system",
+            fontMode: "pair",
+            fontPairId: "warm-essay",
+            cjkFontId: "source-han-serif-sc",
+            latinFontId: "source-serif-4",
+          },
+        },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().readingSettings).toMatchObject({
+      fontMode: "pair",
+      fontPairId: "warm-essay",
+    });
+  });
+
   it("drops an unknown persisted theme id instead of inventing one", async () => {
     localStorage.setItem(
       READER_PREFERENCES_STORAGE_KEY,

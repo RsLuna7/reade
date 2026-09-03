@@ -26,6 +26,7 @@ import {
   createExcerpt,
   listDocumentAnnotations,
   upsertReflection,
+  updateExcerptAppearance,
   upsertAnnotation,
   type Annotation,
   type ReadingSession,
@@ -47,6 +48,26 @@ vi.mock("./lib/backend", async () => {
     ...actual,
     listAnnotations: vi.fn(async () => []),
     upsertAnnotation: vi.fn(async (annotation) => annotation),
+    updateExcerptAppearance: vi.fn(async (id, appearance) => ({
+      id,
+      relativePath: "guide.md",
+      sourceText: "Body",
+      anchor: {
+        format: "markdown" as const,
+        quote: { exact: "Body", prefix: "", suffix: "" },
+        headingId: null,
+      },
+      appearance,
+      sortIndex: "M|00000|00000000",
+      sourceRevision: null,
+      createdAt: 1,
+      updatedAt: 2,
+      deletedAt: null,
+      legacyKind: appearance.style,
+      legacyColor: appearance.tone === "slate" ? "blue" : "yellow",
+      legacyTitle: null,
+      legacySelectedText: "Body",
+    })),
     createExcerpt: vi.fn(async (draft, reflectionBody) => {
       const excerpt = {
         ...draft,
@@ -186,6 +207,26 @@ beforeEach(() => {
   });
   vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(upsertAnnotation).mockReset().mockImplementation(async (annotation) => annotation);
+  vi.mocked(updateExcerptAppearance).mockReset().mockImplementation(async (id, appearance) => ({
+    id,
+    relativePath: "guide.md",
+    sourceText: "Body",
+    anchor: {
+      format: "markdown",
+      quote: { exact: "Body", prefix: "", suffix: "" },
+      headingId: null,
+    },
+    appearance,
+    sortIndex: "M|00000|00000000",
+    sourceRevision: null,
+    createdAt: 1,
+    updatedAt: 2,
+    deletedAt: null,
+    legacyKind: appearance.style,
+    legacyColor: appearance.tone === "slate" ? "blue" : "yellow",
+    legacyTitle: null,
+    legacySelectedText: "Body",
+  }));
   vi.mocked(createExcerpt).mockReset().mockImplementation(async (draft, reflectionBody) => {
     const excerpt = {
       ...draft,
@@ -320,6 +361,10 @@ describe("motion integration", () => {
       />,
     );
 
+    expect(screen.getByRole("button", { name: "跟随主题" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
     fireEvent.click(screen.getByRole("button", { name: "搭配预设" }));
     fireEvent.change(screen.getByRole("combobox", { name: "字体搭配预设" }), {
       target: { value: "warm-essay" },
@@ -618,8 +663,9 @@ describe("annotation mark editing (B1)", () => {
 
     fireEvent.click(screen.getByRole("button", { name: "改为墨蓝" }));
     await waitFor(() => {
-      expect(upsertAnnotation).toHaveBeenCalledWith(
-        expect.objectContaining({ id: "ann-body", color: "blue" }),
+      expect(updateExcerptAppearance).toHaveBeenCalledWith(
+        "ann-body",
+        expect.objectContaining({ style: "highlight", tone: "slate" }),
       );
     });
 
