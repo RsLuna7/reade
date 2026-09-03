@@ -115,12 +115,15 @@ describe("application CSS isolation", () => {
     );
   });
 
-  it("uses per-item inset markers for TOC active and reached states, not a continuous left rail", () => {
+  it("marks only the active TOC item with an accent inset, without a coverage rail", () => {
     expect(css).toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+transparent/s);
     expect(css).toMatch(
       /\.toc-link\.active\s*,\s*\.toc-link\[aria-current="location"\]\s*\{[^}]*box-shadow:\s*inset\s+2px\s+0\s+0\s+var\(--accent\)/s,
     );
     expect(css).not.toMatch(/\.toc-link\s*\{[^}]*border-left:\s*1px\s+solid\s+var\(--line\)/s);
+    expect(css).not.toMatch(/\.toc-list\[data-coverage\]/);
+    expect(css).not.toMatch(/--toc-coverage/);
+    expect(css).not.toMatch(/\.toc-link\.is-reached/);
   });
 
   it("keeps the right TOC panel from clipping annotation cards horizontally", () => {

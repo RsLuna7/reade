@@ -1689,7 +1689,7 @@ a:focus-visible {
   background: transparent;
 }
 
-/* 变更块的左缘 accent 细线(.toc-link.is-reached inset 线族先例);
+/* 变更块的左缘 accent 细线(.toc-link.active inset 线族先例);
    markdown 段级与 EPUB 章级共用,新增段线色更实。 */
 .markdown-body [data-reread-changed],
 .epub-chapter[data-reread-changed] {
@@ -2677,7 +2677,7 @@ a:focus-visible {
 
 .toc-link.active,
 .toc-link[aria-current="location"] {
-  /* 与 .is-reached 同族 inset 线,避免 border 灰轨与 accent 段重叠。 */
+  /* 当前位置用 inset accent;未读条目左缘保持透明,不画贯穿列表的灰轨。 */
   box-shadow: inset 2px 0 0 var(--accent);
   color: var(--accent-ink);
   font-weight: 650;
@@ -2731,12 +2731,6 @@ a:focus-visible {
 .toc-heat[data-level="2"] { background: var(--stats-scale-2); }
 .toc-heat[data-level="3"] { background: var(--stats-scale-3); }
 .toc-heat[data-level="4"] { background: var(--stats-scale-4); }
-
-/* T2 已读覆盖:已达节的左缘 2px 强线。用 inset shadow 而非加宽边框,
-   避免 1px 文本位移;活动项维持既有 accent 边框样式。 */
-.toc-link.is-reached:not(.active):not([aria-current="location"]) {
-  box-shadow: inset 2px 0 0 var(--line-strong);
-}
 
 .side-panel-tabs {
   display: flex;

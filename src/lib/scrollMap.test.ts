@@ -89,7 +89,7 @@ describe("truncateScrollMapLabel", () => {
   });
 });
 
-// ---- DOM collectors (rect-stubbed like tocCoverage.test) ----
+// ---- DOM collectors (rect-stubbed like measureHeadingRatios tests) ----
 
 function stubRect(element: HTMLElement, top: number, height = 0): void {
   vi.spyOn(element, "getBoundingClientRect").mockReturnValue({

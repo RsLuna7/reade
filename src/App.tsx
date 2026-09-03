@@ -281,11 +281,6 @@ import {
 } from "./lib/readNext";
 import { documentTreeName } from "./lib/tree";
 import { buildTocHeat, type TocHeatResult } from "./lib/tocHeat";
-import {
-  buildPdfTocCoverage,
-  coverageFromRatios,
-  measureHeadingRatios,
-} from "./lib/tocCoverage";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 // Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
 // 高亮复用朗读同款 CSS Custom Highlight(第二注册名,零 DOM 侵入)。
@@ -1481,7 +1476,6 @@ export function TocNavigation({
   activeId,
   onSelect,
   heat,
-  reachedIds,
   onSelectTop,
   estimateLine,
 }: {
@@ -1490,8 +1484,6 @@ export function TocNavigation({
   onSelect: (id: string) => void;
   /** 方案三 T1 批注密度;不传时渲染与传统输出逐字节一致。 */
   heat?: TocHeatResult | null;
-  /** 方案三 T2 已读覆盖:已达条目集合;缓存未就绪传 null 即全部未达。 */
-  reachedIds?: ReadonlySet<string> | null;
   /** 文首/失效章节说明行的跳转目标(滚动到文档顶部)。 */
   onSelectTop?: () => void;
   /** 阅读时间预估(plan-reading-time-estimate §3.3):目录顶部一行;
@@ -1511,13 +1503,12 @@ export function TocNavigation({
           {items.map((item, index) => {
             const heatEntry = heat?.byId.get(item.id);
             const heatLabel = heatEntry ? `本节 ${heatEntry.count} 条标注` : null;
-            const reached = Boolean(reachedIds?.has(item.id));
             return (
               <li key={`${item.id}:${index}`}>
                 <a
                   className={`toc-link${activeId === item.id ? " active" : ""}${
-                    reached ? " is-reached" : ""
-                  }${heatEntry ? " has-heat" : ""}`}
+                    heatEntry ? " has-heat" : ""
+                  }`}
                   style={{ "--toc-depth": item.level } as CSSProperties}
                   href={`#${item.id}`}
                   aria-current={activeId === item.id ? "location" : undefined}
@@ -1557,7 +1548,6 @@ function SidePanel({
   activeId,
   onSelectHeading,
   tocHeat,
-  tocReachedIds,
   onSelectDocumentTop,
   tocEstimateLine,
   annotations,
@@ -1585,7 +1575,6 @@ function SidePanel({
   activeId: string | null;
   onSelectHeading: (id: string) => void;
   tocHeat?: TocHeatResult | null;
-  tocReachedIds?: ReadonlySet<string> | null;
   onSelectDocumentTop?: () => void;
   tocEstimateLine?: string | null;
   annotations: Annotation[];
@@ -1639,7 +1628,6 @@ function SidePanel({
           activeId={activeId}
           onSelect={onSelectHeading}
           heat={tocHeat}
-          reachedIds={tocReachedIds}
           onSelectTop={onSelectDocumentTop}
           estimateLine={tocEstimateLine}
         />
@@ -2204,13 +2192,10 @@ function App() {
     });
   }, [annotations, currentContent, epubChapterTocIds, toc]);
 
-  // 方案三 T2:已读覆盖。持久化高水位(maxScrollRatio/maxPage)进内存 state,
-  // 500ms 落盘节流时同步推进;标题纵向位置渲染后一次性测量并缓存。
+  // PDF 主线 / 高水位:持久化 maxPage 进内存 state,供战术翻页「主线」按钮使用。
+  // 目录侧不再绘制已读覆盖轨,只保留当前小节 accent 跟随。
   const [readingHighWater, setReadingHighWater] = useState<
     { path: string; maxScrollRatio: number; maxPage: number } | null
-  >(null);
-  const [headingRatios, setHeadingRatios] = useState<
-    { path: string; ratios: Map<string, number> } | null
   >(null);
 
   useEffect(() => {
@@ -2263,53 +2248,6 @@ function App() {
       maxPage: stored.maxPage,
     }));
   }, [currentPath, snapshot?.rootPath]);
-
-  // T2 测量点:渲染后在空闲期对 TOC 目标元素做一次 offset/scrollHeight 测量,
-  // 内容(toc/currentContent)或排版参数变化时缓存失效重测;滚动路径不测量。
-  useEffect(() => {
-    setHeadingRatios(null);
-    if (!currentPath || !toc.length) return;
-    if (!currentContent || currentContent.kind === "pdf") return;
-    // 竖排(§8):offsetTop/scrollHeight 测量在横向滚动轴上失真,
-    // 已读覆盖随位置记忆一并暂停。
-    if (verticalActive) return;
-    const path = currentPath;
-    const ids = toc.map((item) => item.id);
-    let cancelled = false;
-    const measure = () => {
-      if (cancelled) return;
-      const reader = readerRef.current;
-      if (!reader) return;
-      const ratios = measureHeadingRatios(reader, ids);
-      if (ratios) setHeadingRatios({ path, ratios });
-    };
-    if (typeof window.requestIdleCallback === "function") {
-      const handle = window.requestIdleCallback(() => measure());
-      return () => {
-        cancelled = true;
-        window.cancelIdleCallback(handle);
-      };
-    }
-    const handle = window.setTimeout(measure, 60);
-    return () => {
-      cancelled = true;
-      window.clearTimeout(handle);
-    };
-  }, [currentContent, currentPath, readingSettings, toc, verticalActive]);
-
-  const tocReachedIds = useMemo<ReadonlySet<string> | null>(() => {
-    if (!currentPath || !readingHighWater || readingHighWater.path !== currentPath) {
-      return null;
-    }
-    if (currentContent?.kind === "pdf") {
-      return buildPdfTocCoverage(
-        toc,
-        readingHighWater.maxPage > 0 ? readingHighWater.maxPage : null,
-      );
-    }
-    if (!headingRatios || headingRatios.path !== currentPath) return null;
-    return coverageFromRatios(headingRatios.ratios, readingHighWater.maxScrollRatio);
-  }, [currentContent?.kind, currentPath, headingRatios, readingHighWater, toc]);
 
   const scrollToDocumentTop = useCallback(() => {
     const reader = readerRef.current;
@@ -6415,7 +6353,6 @@ function App() {
                 activeId={activeHeading}
                 onSelectHeading={scrollToHeading}
                 tocHeat={tocHeat}
-                tocReachedIds={tocReachedIds}
                 onSelectDocumentTop={scrollToDocumentTop}
                 tocEstimateLine={tocEstimateLine}
                 annotations={sortedAnnotations}
@@ -6563,7 +6500,6 @@ function App() {
               setCompactTocOpen(false);
             }}
             tocHeat={tocHeat}
-            tocReachedIds={tocReachedIds}
             onSelectDocumentTop={scrollToDocumentTop}
             tocEstimateLine={tocEstimateLine}
             annotations={sortedAnnotations}

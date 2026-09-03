@@ -1544,7 +1544,7 @@ describe("highlight caret preference", () => {
   });
 });
 
-/* --------------------- TOC heat & coverage (方案三) --------------------- */
+/* --------------------- TOC heat (方案三 T1) --------------------- */
 
 describe("TOC heat wiring (T1)", () => {
   const tocItems = [
@@ -1556,10 +1556,9 @@ describe("TOC heat wiring (T1)", () => {
     const { container } = render(
       <TocNavigation items={tocItems} activeId="alpha" onSelect={() => undefined} />,
     );
-    // 向后兼容契约:无 heat/coverage 数据时不得出现任何附加 DOM 或属性。
+    // 向后兼容契约:无 heat 数据时不得出现任何附加 DOM 或属性。
     expect(container.querySelector(".toc-heat")).toBeNull();
     expect(container.querySelector(".toc-unassigned")).toBeNull();
-    expect(container.querySelector(".is-reached")).toBeNull();
     expect(container.innerHTML).toBe(
       '<div class="toc-section"><ol class="toc-list">' +
         '<li><a class="toc-link active" style="--toc-depth: 1;" href="#alpha" aria-current="location" title="Alpha">Alpha</a></li>' +
@@ -1638,75 +1637,6 @@ describe("TOC heat wiring (T1)", () => {
       screen.getAllByRole("button", { name: "文首或已变更章节另有 1 条标注" })[0],
     );
     expect(reader.scrollTop).toBe(0);
-  });
-});
-
-describe("TOC read coverage (T2)", () => {
-  const COVERAGE_ROOT = "D:\\coverage-lib";
-
-  function setCoverageState() {
-    const guide = markdownDocument("guide.md", "Guide");
-    useReaderStore.setState({
-      snapshot: { rootPath: COVERAGE_ROOT, documents: [guide] },
-      documents: [guide],
-      currentPath: "guide.md",
-      currentContent: {
-        kind: "markdown",
-        relativePath: "guide.md",
-        markdown: "## Early section\n\nBody\n\n## Late section\n\nMore",
-      },
-      motionLevel: "off",
-    });
-  }
-
-  it("marks sections up to the persisted high-water mark and remeasures on layout changes", async () => {
-    writeReadingPosition(COVERAGE_ROOT, "guide.md", { kind: "scroll", scrollRatio: 0.62 });
-    setCoverageState();
-
-    const view = render(<App />);
-    await waitFor(() => {
-      expect(view.container.querySelector(".markdown-body")).not.toBeNull();
-    });
-
-    // jsdom 无布局:给滚动容器与标题手工布置几何(空闲测量将读取它们)。
-    const reader = view.container.querySelector<HTMLElement>(".reading-scroll")!;
-    Object.defineProperty(reader, "scrollHeight", { configurable: true, value: 1000 });
-    Object.defineProperty(reader, "clientHeight", { configurable: true, value: 200 });
-    vi.spyOn(reader, "getBoundingClientRect").mockReturnValue({ top: 0 } as DOMRect);
-    const early = view.container.querySelector<HTMLElement>("#early-section")!;
-    const late = view.container.querySelector<HTMLElement>("#late-section")!;
-    vi.spyOn(early, "getBoundingClientRect").mockReturnValue({ top: 100 } as DOMRect);
-    const lateRect = vi
-      .spyOn(late, "getBoundingClientRect")
-      .mockReturnValue({ top: 900 } as DOMRect);
-
-    await waitFor(() => {
-      expect(screen.getAllByRole("link", { name: "Early section" })[0]).toHaveClass(
-        "is-reached",
-      );
-    });
-    expect(screen.getAllByRole("link", { name: "Late section" })[0]).not.toHaveClass(
-      "is-reached",
-    );
-
-    // 排版参数变化 → 缓存失效并重测:Late 上移到 40% 处后进入已达区。
-    lateRect.mockReturnValue({ top: 400 } as DOMRect);
-    useReaderStore.getState().updateReadingSettings({ fontSize: 20 });
-    await waitFor(() => {
-      expect(screen.getAllByRole("link", { name: "Late section" })[0]).toHaveClass(
-        "is-reached",
-      );
-    });
-  });
-
-  it("renders everything as unreached without errors while the cache is not ready", async () => {
-    // 无持久化位置、jsdom 布局全零 → 测量返回 null,全部按未达渲染。
-    setCoverageState();
-    const view = render(<App />);
-    await waitFor(() => {
-      expect(screen.getAllByRole("link", { name: "Early section" }).length).toBeGreaterThan(0);
-    });
-    expect(view.container.querySelector(".toc-link.is-reached")).toBeNull();
   });
 });
 

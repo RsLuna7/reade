@@ -2,7 +2,7 @@
  * Scroll-map tick model for the rich scrollbar
  * (docs/plan-rich-scrollbar.md §3.1): pure offset→ratio mapping with
  * dedup/cap on one side, DOM measurement collectors on the other. The
- * collectors take elements as arguments (the `tocCoverage` discipline) so
+ * collectors take elements as arguments (the measurement discipline) so
  * jsdom tests can stub `getBoundingClientRect`.
  *
  * Position sources (RS-D2/RS-D9): painted `[data-annotation-id]` marks
