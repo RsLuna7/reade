@@ -286,6 +286,15 @@ afterEach(() => {
   Reflect.deleteProperty(HTMLElement.prototype, "animate");
 });
 
+describe("reading wheel speed setting", () => {
+  it("exposes a wheel-speed slider that updates reading preferences", () => {
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+    const slider = screen.getByRole("slider", { name: "滚轮速度" });
+    fireEvent.change(slider, { target: { value: "1.5" } });
+    expect(useReaderStore.getState().readingSettings.wheelSpeed).toBe(1.5);
+  });
+});
+
 describe("motion integration", () => {
   it("keeps the settings panel mounted and inert while closed", () => {
     const view = render(<ReadingSettingsPanel open={false} onClose={() => undefined} onNotice={() => undefined} />);

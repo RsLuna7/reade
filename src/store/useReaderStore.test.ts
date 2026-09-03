@@ -91,6 +91,7 @@ describe("reading settings", () => {
         lineHeight: 0,
         contentWidth: 2000,
         paragraphSpacing: Number.NaN,
+        wheelSpeed: 99,
       }),
     ).toEqual({
       ...DEFAULT_READING_SETTINGS,
@@ -98,6 +99,7 @@ describe("reading settings", () => {
       lineHeight: 1.4,
       contentWidth: 1600,
       paragraphSpacing: 0.5,
+      wheelSpeed: 3,
     });
   });
 

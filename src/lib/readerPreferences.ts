@@ -37,6 +37,10 @@ import {
   type ReaderFontMode,
   type ReaderFontPairId,
 } from "./readerFonts";
+import {
+  clampWheelSpeed,
+  WHEEL_SPEED_DEFAULT,
+} from "./readerWheelSpeed";
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
 export const READER_PREFERENCES_VERSION = 5;
@@ -51,6 +55,11 @@ export interface ReadingSettings {
   /** Max article width in px. At CONTENT_WIDTH_MAX the measure is fluid (no cap). */
   contentWidth: number;
   paragraphSpacing: number;
+  /**
+   * Relative mouse-wheel / trackpad scroll multiplier for the reading pane.
+   * 1 = system native speed; values other than 1 intercept wheel and scale deltas.
+   */
+  wheelSpeed: number;
   /** Theme-series font preset, retained for the existing reading style. */
   fontFamily: ReaderFontFamily;
   /** Desktop custom fonts are opt-in; theme preserves pre-integration behavior. */
@@ -69,6 +78,7 @@ export const DEFAULT_READING_SETTINGS: ReadingSettings = {
   lineHeight: 1.9,
   contentWidth: CONTENT_WIDTH_MAX,
   paragraphSpacing: 1,
+  wheelSpeed: WHEEL_SPEED_DEFAULT,
   fontFamily: "system",
   fontMode: "theme",
   fontPairId: DEFAULT_READER_FONT_PAIR_ID,
@@ -155,6 +165,7 @@ export function normalizeReadingSettings(
       0.5,
       2,
     ),
+    wheelSpeed: clampWheelSpeed(settings.wheelSpeed ?? current.wheelSpeed),
     fontFamily:
       settings.fontFamily && FONT_FAMILIES.has(settings.fontFamily)
         ? settings.fontFamily

@@ -298,6 +298,14 @@ import {
   clearSentenceHighlight,
 } from "./lib/sentenceHighlight";
 import { adjustFontSize, wheelZoomDirection } from "./lib/readerWheelZoom";
+import {
+  isDefaultWheelSpeed,
+  scaleWheelDelta,
+  WHEEL_SPEED_MAX,
+  WHEEL_SPEED_MIN,
+  WHEEL_SPEED_STEP,
+  wheelDeltaPixels,
+} from "./lib/readerWheelSpeed";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
 import {
   READER_CJK_FONTS,
@@ -847,7 +855,7 @@ export function ReadingSettingsPanel({
   }, [annotationColorNames]);
 
   const numericSetting =
-    (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing") =>
+    (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing" | "wheelSpeed") =>
     (event: ChangeEvent<HTMLInputElement>) => {
       update({ [key]: Number(event.target.value) });
     };
@@ -930,6 +938,22 @@ export function ReadingSettingsPanel({
           step="0.1"
           value={settings.paragraphSpacing}
           onChange={numericSetting("paragraphSpacing")}
+        />
+      </label>
+
+      <label className="setting-row">
+        <span className="setting-label">
+          <span>滚轮速度</span>
+          <span className="setting-value">{settings.wheelSpeed.toFixed(1)}×</span>
+        </span>
+        <input
+          type="range"
+          min={WHEEL_SPEED_MIN}
+          max={WHEEL_SPEED_MAX}
+          step={WHEEL_SPEED_STEP}
+          value={settings.wheelSpeed}
+          onChange={numericSetting("wheelSpeed")}
+          aria-label="滚轮速度"
         />
       </label>
 
@@ -1943,15 +1967,19 @@ function App() {
 
   // 滚轮换轴(VW-D5):竖排容器的滚动轴是横向,把主导的 deltaY 映射为
   // scrollLeft 递减(vertical-rl 前进方向向左);触控板横向手势走原生。
+  // 滚轮速度倍率一并乘上(默认 1× 与原先一致)。
   useEffect(() => {
     if (!verticalActive) return;
     const reader = readerRef.current;
     if (!reader) return;
     const onWheel = (event: WheelEvent) => {
-      if (event.ctrlKey) return;
+      if (event.ctrlKey || event.metaKey) return;
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
       event.preventDefault();
-      reader.scrollLeft -= event.deltaY;
+      const settings = useReaderStore.getState().readingSettings;
+      const lineHeightPx = settings.fontSize * settings.lineHeight;
+      const { y } = wheelDeltaPixels(event, lineHeightPx, reader.clientHeight);
+      reader.scrollLeft -= scaleWheelDelta(y, settings.wheelSpeed);
     };
     reader.addEventListener("wheel", onWheel, { passive: false });
     return () => reader.removeEventListener("wheel", onWheel);
@@ -4777,6 +4805,36 @@ function App() {
     typewriterSuspended: autoPace.playing,
     motionLevel,
   });
+
+  // 滚轮速度倍率:非默认时拦截阅读区 wheel,按倍率滚动。
+  // 放在 autoPace 之后注册,以便 playing 时 autoPace 先 preventDefault,本处理器让路。
+  // 竖排由上方 VW-D5 处理器接管;Ctrl/Meta 留给缩放。
+  useEffect(() => {
+    if (verticalActive) return;
+    if (overlayViewOpen) return;
+    const speed = readingSettings.wheelSpeed;
+    if (isDefaultWheelSpeed(speed)) return;
+    const reader = readerRef.current;
+    if (!reader) return;
+    const onWheel = (event: WheelEvent) => {
+      if (event.ctrlKey || event.metaKey) return;
+      if (event.defaultPrevented) return;
+      event.preventDefault();
+      const settings = useReaderStore.getState().readingSettings;
+      const lineHeightPx = settings.fontSize * settings.lineHeight;
+      const { x, y } = wheelDeltaPixels(event, lineHeightPx, reader.clientHeight);
+      reader.scrollTop += scaleWheelDelta(y, settings.wheelSpeed);
+      reader.scrollLeft += scaleWheelDelta(x, settings.wheelSpeed);
+    };
+    reader.addEventListener("wheel", onWheel, { passive: false });
+    return () => reader.removeEventListener("wheel", onWheel);
+  }, [
+    verticalActive,
+    overlayViewOpen,
+    readingSettings.wheelSpeed,
+    currentPath,
+    currentContent,
+  ]);
 
   // ---- 读完接着读(plan-read-next) ----
   // 哨兵可见 + 高水位 ≥0.98 + 800ms 驻留才出卡(RN-D2);dismiss 是
