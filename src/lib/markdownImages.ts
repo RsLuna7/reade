@@ -31,6 +31,75 @@ export function isAllowedRemoteImageUrl(source: string): boolean {
 }
 
 /**
+ * 阅读栏友好的远程缩略图宽度。博客/新闻稿常见 `mw=80` 级邮票尺寸，
+ * 原样渲染会缩成豆粒；向 CDN 要更大一档即可（不改文档原文）。
+ */
+export const REMOTE_IMAGE_READING_WIDTH = 960;
+/** 仅当 URL 明确声明小于此宽度时才抬升，避免误动已经够大的图。 */
+const TINY_REMOTE_WIDTH_CEILING = 240;
+
+/**
+ * 把已知「故意写得很小」的远程缩略图 URL 抬到阅读宽度。
+ * 目前覆盖 Vimeo CDN 的 `mw=`；解析失败或未知主机原样返回。
+ */
+export function upgradeRemoteImageUrlForReading(source: string): string {
+  const trimmed = source.trim();
+  if (!REMOTE_HTTPS.test(trimmed)) return source;
+  try {
+    const url = new URL(trimmed);
+    if (!/(^|\.)vimeocdn\.com$/i.test(url.hostname)) return source;
+    const raw = url.searchParams.get("mw");
+    if (raw === null) return source;
+    const width = Number.parseInt(raw, 10);
+    if (!Number.isFinite(width) || width <= 0 || width >= TINY_REMOTE_WIDTH_CEILING) {
+      return source;
+    }
+    url.searchParams.set("mw", String(REMOTE_IMAGE_READING_WIDTH));
+    return url.toString();
+  } catch {
+    return source;
+  }
+}
+
+/**
+ * Vimeo CDN 缩略图路径形如 `/video/{id}-{privacyHash}-d`。
+ * 未列出视频不能用 `vimeo.com/{id}`（404），要用带 hash 的分享链才能在浏览器里直接看。
+ */
+const VIMEO_CDN_THUMB =
+  /\/video\/(\d+)-([a-f0-9]+)-d\/?$/i;
+
+export function vimeoWatchUrlFromThumbnail(source: string): string | null {
+  const trimmed = source.trim();
+  if (!REMOTE_HTTPS.test(trimmed)) return null;
+  try {
+    const url = new URL(trimmed);
+    if (!/(^|\.)vimeocdn\.com$/i.test(url.hostname)) return null;
+    const match = url.pathname.match(VIMEO_CDN_THUMB);
+    if (!match) return null;
+    return `https://vimeo.com/${match[1]}/${match[2]}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 图包链接常见写法：`[![...](vimeo-cdn缩略图)](文章页)`。
+ * 点开只会到文章首页，视频还得往下翻；若缩略图能还原未列出观看链，则优先跳观看页。
+ * 作者若已链到 vimeo.com，则尊重原文。
+ */
+export function preferLinkedVideoHref(
+  href: string,
+  imageSources: readonly string[],
+): string {
+  if (/vimeo\.com/i.test(href)) return href;
+  for (const source of imageSources) {
+    const watch = vimeoWatchUrlFromThumbnail(source);
+    if (watch) return watch;
+  }
+  return href;
+}
+
+/**
  * Resolve a markdown image source against the local asset map and the
  * remote-image preference. Data URLs pass through; http(s) URLs require
  * `allowRemoteImages` and HTTPS; everything else looks up the asset map
@@ -43,7 +112,8 @@ export function resolveMarkdownImageSrc(
 ): string | null {
   if (source.startsWith("data:image/")) return source;
   if (isRemoteHttpUrl(source)) {
-    return allowRemoteImages && isAllowedRemoteImageUrl(source) ? source : null;
+    if (!(allowRemoteImages && isAllowedRemoteImageUrl(source))) return null;
+    return upgradeRemoteImageUrlForReading(source);
   }
   const key = normalizeMarkdownUrlKey(source);
   return assetUrls[key] ?? assetUrls[source] ?? null;

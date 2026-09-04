@@ -5,7 +5,11 @@ import {
   isRemoteHttpUrl,
   isSafeImageMimeType,
   normalizeMarkdownUrlKey,
+  preferLinkedVideoHref,
+  REMOTE_IMAGE_READING_WIDTH,
   resolveMarkdownImageSrc,
+  upgradeRemoteImageUrlForReading,
+  vimeoWatchUrlFromThumbnail,
 } from "./markdownImages";
 
 describe("normalizeMarkdownUrlKey", () => {
@@ -50,6 +54,58 @@ describe("resolveMarkdownImageSrc", () => {
     expect(resolveMarkdownImageSrc(https, {}, false)).toBeNull();
     expect(resolveMarkdownImageSrc(https, {}, true)).toBe(https);
     expect(resolveMarkdownImageSrc(http, {}, true)).toBeNull();
+  });
+
+  it("upgrades stamp-size Vimeo thumbnails when remote images are allowed", () => {
+    const tiny =
+      "https://i.vimeocdn.com/video/abc-d?mw=80&q=85";
+    const resolved = resolveMarkdownImageSrc(tiny, {}, true);
+    expect(resolved).toContain(`mw=${REMOTE_IMAGE_READING_WIDTH}`);
+    expect(resolved).toContain("q=85");
+    expect(resolveMarkdownImageSrc(tiny, {}, false)).toBeNull();
+  });
+});
+
+describe("upgradeRemoteImageUrlForReading", () => {
+  it("raises tiny Vimeo mw= values and leaves larger or unrelated URLs alone", () => {
+    const tiny =
+      "https://i.vimeocdn.com/video/2195538769-abc-d?mw=80&q=85";
+    expect(upgradeRemoteImageUrlForReading(tiny)).toBe(
+      `https://i.vimeocdn.com/video/2195538769-abc-d?mw=${REMOTE_IMAGE_READING_WIDTH}&q=85`,
+    );
+    expect(
+      upgradeRemoteImageUrlForReading(
+        "https://i.vimeocdn.com/video/x-d?mw=720&q=85",
+      ),
+    ).toBe("https://i.vimeocdn.com/video/x-d?mw=720&q=85");
+    expect(
+      upgradeRemoteImageUrlForReading("https://images.example/hero.png?w=80"),
+    ).toBe("https://images.example/hero.png?w=80");
+    expect(upgradeRemoteImageUrlForReading("./local.png")).toBe("./local.png");
+  });
+});
+
+describe("preferLinkedVideoHref / vimeoWatchUrlFromThumbnail", () => {
+  const thumb =
+    "https://i.vimeocdn.com/video/2195538769-a8d89ce5bda40fc4f6d23dbd38955486f8c618e58119473b72b45b341e1f1663-d?mw=80&q=85";
+  const watch =
+    "https://vimeo.com/2195538769/a8d89ce5bda40fc4f6d23dbd38955486f8c618e58119473b72b45b341e1f1663";
+
+  it("builds the unlisted Vimeo watch URL from a CDN thumbnail", () => {
+    expect(vimeoWatchUrlFromThumbnail(thumb)).toBe(watch);
+    expect(vimeoWatchUrlFromThumbnail("https://cdn.example/a.png")).toBeNull();
+  });
+
+  it("rewrites article-page image links to the watch URL, but keeps author vimeo links", () => {
+    expect(
+      preferLinkedVideoHref("https://openai.com/index/gpt-6-astra/", [thumb]),
+    ).toBe(watch);
+    expect(
+      preferLinkedVideoHref("https://vimeo.com/2195538769/custom", [thumb]),
+    ).toBe("https://vimeo.com/2195538769/custom");
+    expect(preferLinkedVideoHref("https://openai.com/page", [])).toBe(
+      "https://openai.com/page",
+    );
   });
 });
 

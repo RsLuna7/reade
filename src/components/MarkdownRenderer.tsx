@@ -21,7 +21,7 @@ import {
   countMermaidEdges,
   safeUrlTransform,
 } from "../lib/markdown";
-import { isRemoteHttpUrl, normalizeMarkdownUrlKey } from "../lib/markdownImages";
+import { isRemoteHttpUrl, normalizeMarkdownUrlKey, preferLinkedVideoHref } from "../lib/markdownImages";
 import { sanitizeMermaidSvg } from "../lib/mermaidSvg";
 
 export interface MarkdownRendererProps {
@@ -453,6 +453,33 @@ function resolvedUrl(value: string, resolver?: (value: string) => string | null)
   return resolved === null ? null : safeUrlTransform(resolved);
 }
 
+/** 从 react-markdown 交给 `a` 的 hast 节点里收集所含 `img` 的原始 src。 */
+function imageSourcesFromLinkNode(node: unknown): string[] {
+  const sources: string[] = [];
+  const visit = (value: unknown) => {
+    if (!value || typeof value !== "object") return;
+    const element = value as {
+      type?: string;
+      tagName?: string;
+      properties?: { src?: unknown };
+      children?: unknown[];
+    };
+    if (
+      element.type === "element" &&
+      element.tagName === "img" &&
+      typeof element.properties?.src === "string" &&
+      element.properties.src
+    ) {
+      sources.push(element.properties.src);
+    }
+    if (Array.isArray(element.children)) {
+      for (const child of element.children) visit(child);
+    }
+  };
+  visit(node);
+  return sources;
+}
+
 /**
  * 库内 .svg 资产:上层已经 sanitizeLibrarySvg 消毒,这里只负责以
  * 行内元素承载(Mermaid 图表同一信任模型),不经过 URL 策略。
@@ -535,32 +562,34 @@ export function MarkdownRenderer({
       );
     },
     a: ({ node, href, children, ...props }) => {
-      void node;
       const resolved = typeof href === "string" ? resolvedUrl(href, resolveLinkHref) : null;
       if (resolved === null) {
         return <span className="markdown-link-blocked">{children}</span>;
       }
 
+      // 图包链接：若内含 Vimeo CDN 缩略图，优先跳未列出观看页，而不是文章首页。
+      const target = preferLinkedVideoHref(resolved, imageSourcesFromLinkNode(node));
+
       return (
         <a
           {...props}
-          href={resolved}
-          rel={/^https?:/i.test(resolved) ? "noopener noreferrer" : props.rel}
+          href={target}
+          rel={/^https?:/i.test(target) ? "noopener noreferrer" : props.rel}
           onClick={(event) => {
             if (onNavigate) {
               event.preventDefault();
-              onNavigate(resolved, event);
+              onNavigate(target, event);
             }
           }}
           onMouseEnter={
             onLinkPreview
-              ? (event) => onLinkPreview(resolved, event.currentTarget, "hover")
+              ? (event) => onLinkPreview(target, event.currentTarget, "hover")
               : undefined
           }
           onMouseLeave={onLinkPreviewCancel}
           onFocus={
             onLinkPreview
-              ? (event) => onLinkPreview(resolved, event.currentTarget, "focus")
+              ? (event) => onLinkPreview(target, event.currentTarget, "focus")
               : undefined
           }
           onBlur={onLinkPreviewCancel}
@@ -602,7 +631,13 @@ export function MarkdownRenderer({
               <button
                 type="button"
                 className="markdown-image-blocked-action"
-                onClick={onAllowRemoteImages}
+                onClick={(event) => {
+                  // 占位可能包在 [![...](img)](url) 的 <a> 里；阻止冒泡，
+                  // 避免「允许加载」同时触发外链确认。
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onAllowRemoteImages();
+                }}
               >
                 允许加载
               </button>
@@ -611,7 +646,18 @@ export function MarkdownRenderer({
         );
       }
 
-      return <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" decoding="async" />;
+      // draggable=false：WebView2/Chromium 点图包链接时容易启动拖图，
+      // 吞掉 click，表现为「缩略图点了没跳转」。
+      return (
+        <img
+          {...props}
+          src={resolved}
+          alt={alt ?? ""}
+          loading="lazy"
+          decoding="async"
+          draggable={false}
+        />
+      );
     },
   };
 

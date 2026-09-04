@@ -167,10 +167,47 @@ describe("MarkdownRenderer", () => {
       />,
     );
 
-    expect(container.querySelector("img")).toHaveAttribute(
-      "src",
-      "https://cdn.example/diagram.png",
+    const image = container.querySelector("img");
+    expect(image).toHaveAttribute("src", "https://cdn.example/diagram.png");
+    expect(image).toHaveAttribute("draggable", "false");
+  });
+
+  it("opens the wrapping link when a linked thumbnail is activated", () => {
+    const onNavigate = vi.fn();
+    const { container } = render(
+      <MarkdownRenderer
+        content={
+          "[![发布短片缩略图](https://i.vimeocdn.com/video/2195538769-a8d89ce5bda40fc4f6d23dbd38955486f8c618e58119473b72b45b341e1f1663-d?mw=80&q=85)](https://openai.com/index/gpt-6-astra/)"
+        }
+        resolveImageSrc={(source) => source}
+        onNavigate={onNavigate}
+      />,
     );
+
+    const watch =
+      "https://vimeo.com/2195538769/a8d89ce5bda40fc4f6d23dbd38955486f8c618e58119473b72b45b341e1f1663";
+    const anchor = container.querySelector("a");
+    expect(anchor).toHaveAttribute("href", watch);
+    expect(container.querySelector("img")).toHaveAttribute("draggable", "false");
+    anchor?.click();
+    expect(onNavigate).toHaveBeenCalledWith(watch, expect.any(Object));
+  });
+
+  it("keeps allow-remote action from also opening the wrapping link", () => {
+    const onNavigate = vi.fn();
+    const onAllowRemoteImages = vi.fn();
+    const { container } = render(
+      <MarkdownRenderer
+        content={"[![thumb](https://cdn.example/a.png)](https://example.com/video)"}
+        resolveImageSrc={() => null}
+        onNavigate={onNavigate}
+        onAllowRemoteImages={onAllowRemoteImages}
+      />,
+    );
+
+    within(container).getByRole("button", { name: "允许加载" }).click();
+    expect(onAllowRemoteImages).toHaveBeenCalledTimes(1);
+    expect(onNavigate).not.toHaveBeenCalled();
   });
 
   it("adds stable unique heading ids and exposes source lines for TOC extraction", () => {

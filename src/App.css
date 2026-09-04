@@ -2364,6 +2364,22 @@ a:focus-visible {
   margin: 2.2em auto;
   border-radius: 10px;
   box-shadow: 0 12px 32px rgba(42, 40, 34, 0.09);
+  /* 禁止拖出图片，否则图链的 click 常被拖拽手势吞掉。 */
+  -webkit-user-drag: none;
+  user-drag: none;
+}
+
+/* 图包链接（视频封面等）：整块可点，避免 inline <a> 包 block <img> 点不中。 */
+.markdown-body a:has(> img),
+.markdown-body a:has(> .markdown-image-blocked),
+.markdown-body a:has(> .markdown-image-svg) {
+  display: block;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.markdown-body a:has(> img) img {
+  cursor: pointer;
 }
 
 .markdown-body code:not(pre code) {
