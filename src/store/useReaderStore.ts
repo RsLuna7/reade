@@ -46,7 +46,13 @@ import {
   setSeries,
   toggleThemeMode,
 } from "../lib/themes";
-import { buildDocumentTree, findChildNodes, reconcileExpandedPaths } from "../lib/tree";
+import {
+  buildDocumentTree,
+  directoryAncestorPaths,
+  findChildNodes,
+  normalizeRelativePath,
+  reconcileExpandedPaths,
+} from "../lib/tree";
 import {
   type LibraryTreeLayout,
   buildLaidOutDocumentTree,
@@ -58,6 +64,14 @@ import {
   unpinNode,
   writeTreeLayout,
 } from "../lib/treeLayout";
+import {
+  markRead,
+  readReadMarks,
+  reconcileReadMarks,
+  unmarkRead,
+  writeReadMarks,
+  type LibraryReadMarks,
+} from "../lib/readMarks";
 // 竖排模式（plan-vertical-writing VW-D1）：每文档记忆的读写在 lib，
 // store 只持有"当前文档是否竖排"的会话镜像。
 import { readVerticalPreference, writeVerticalPreference } from "../lib/verticalWriting";
@@ -220,10 +234,26 @@ interface ReaderState {
   libraryViewMode: LibraryViewMode;
   expandedPaths: string[];
   /**
+   * 面包屑/文件夹聚焦：左侧库只显示该目录子树（session-only）。
+   * `null` 表示显示整库。
+   */
+  treeScopePath: string | null;
+  /**
+   * 面包屑「在文档树中定位」请求（session-only）。
+   * `path` 为目录相对路径；`null` 表示定位到书库根（树顶部）。
+   * `nonce` 保证对同一路径重复点击也会触发 DocumentTree 消费。
+   */
+  treeReveal: { path: string | null; nonce: number } | null;
+  /**
    * 当前书库文档树的置顶/手排（独立键 `reade-tree-layout`）。
    * Session 镜像；切换/刷新书库时从存储读取并 reconcile。
    */
   treeLayout: LibraryTreeLayout;
+  /**
+   * 当前书库手动「已阅」标记（独立键 `reade-read-marks`）。
+   * Session 镜像；切换/刷新书库时从存储读取并 reconcile。
+   */
+  readMarks: LibraryReadMarks;
   /** Session-only; intentionally left out of the persisted preferences. */
   activeView: ReaderView;
   /** Daily reading goal in minutes; 0 disables the goal. Persisted. */
@@ -297,10 +327,19 @@ interface ReaderState {
   navForward: (current: NavLocation | null) => NavLocation | null;
   resetReaderPreferences: () => void;
   toggleDirectory: (path: string) => void;
+  /**
+   * 将左侧文档库收窄到某目录（或 `null` 恢复整库），并展开定位。
+   * 不打开文档；会清搜索、必要时切回树视图。
+   */
+  revealInDocumentTree: (directoryPath: string | null) => void;
+  setTreeScopePath: (directoryPath: string | null) => void;
+  clearTreeReveal: () => void;
   pinTreeNode: (parentPath: string, nodeKey: string) => void;
   unpinTreeNode: (parentPath: string, nodeKey: string) => void;
   moveTreeNode: (parentPath: string, nodeKey: string, toIndex: number) => void;
   resetFolderTreeLayout: (parentPath: string) => void;
+  markDocumentRead: (relativePath: string) => void;
+  unmarkDocumentRead: (relativePath: string) => void;
   clearError: () => void;
 }
 
@@ -313,6 +352,7 @@ let libraryRequest = 0;
 let activeLibraryGeneration = 0;
 let documentRequest = 0;
 let searchRequest = 0;
+let treeRevealNonce = 0;
 
 export const useReaderStore = create<ReaderState>()(
   persist(
@@ -343,6 +383,22 @@ export const useReaderStore = create<ReaderState>()(
         set({ treeLayout: next });
       };
 
+      const loadReadMarksForLibrary = (
+        rootPath: string,
+        documents: DocumentInfo[],
+      ): LibraryReadMarks => {
+        const next = reconcileReadMarks(readReadMarks(rootPath), documents);
+        writeReadMarks(rootPath, next);
+        return next;
+      };
+
+      const commitReadMarks = (next: LibraryReadMarks) => {
+        const rootPath = get().snapshot?.rootPath;
+        if (!rootPath) return;
+        writeReadMarks(rootPath, next);
+        set({ readMarks: next });
+      };
+
       const openLibrary = async (rootPath: string) => {
         const trimmedPath = rootPath.trim();
         if (!trimmedPath) return;
@@ -366,8 +422,11 @@ export const useReaderStore = create<ReaderState>()(
             searchResults: [],
             expandedPaths,
             treeLayout: loadTreeLayout(snapshot.rootPath, tree),
+            readMarks: loadReadMarksForLibrary(snapshot.rootPath, snapshot.documents),
             // 切换书库清空跳转历史:栈里的相对路径只对旧库有意义。
             navHistory: EMPTY_NAV_HISTORY,
+            treeReveal: null,
+            treeScopePath: null,
             // 当前文档被清空,竖排镜像随之复位。
             verticalWriting: false,
           });
@@ -390,7 +449,10 @@ export const useReaderStore = create<ReaderState>()(
         searchResults: [],
         ...createDefaultReaderPreferences(preferredTheme()),
         annotationTool: "view",
+        treeReveal: null,
+        treeScopePath: null,
         treeLayout: {},
+        readMarks: {},
         activeView: "reader",
         navHistory: EMPTY_NAV_HISTORY,
         verticalWriting: false,
@@ -428,6 +490,7 @@ export const useReaderStore = create<ReaderState>()(
               documents: snapshot.documents,
               expandedPaths: reconcileExpandedPaths(get().expandedPaths, tree),
               treeLayout: loadTreeLayout(snapshot.rootPath, tree),
+              readMarks: loadReadMarksForLibrary(snapshot.rootPath, snapshot.documents),
               ...(currentStillExists
                 ? {}
                 : {
@@ -753,6 +816,56 @@ export const useReaderStore = create<ReaderState>()(
           }));
         },
 
+        revealInDocumentTree: (directoryPath) => {
+          const normalized =
+            directoryPath === null || directoryPath === ""
+              ? null
+              : normalizeRelativePath(directoryPath);
+          const nonce = ++treeRevealNonce;
+          set((state) => {
+            const nextExpanded =
+              normalized === null
+                ? state.expandedPaths
+                : [
+                    ...new Set([
+                      ...state.expandedPaths,
+                      ...directoryAncestorPaths(normalized),
+                    ]),
+                  ];
+            return {
+              searchQuery: "",
+              searchResults: [],
+              libraryViewMode: "tree" as const,
+              expandedPaths: nextExpanded,
+              treeScopePath: normalized,
+              treeReveal: { path: normalized, nonce },
+            };
+          });
+        },
+
+        setTreeScopePath: (directoryPath) => {
+          const normalized =
+            directoryPath === null || directoryPath === ""
+              ? null
+              : normalizeRelativePath(directoryPath);
+          set((state) => ({
+            treeScopePath: normalized,
+            expandedPaths:
+              normalized === null
+                ? state.expandedPaths
+                : [
+                    ...new Set([
+                      ...state.expandedPaths,
+                      ...directoryAncestorPaths(normalized),
+                    ]),
+                  ],
+          }));
+        },
+
+        clearTreeReveal: () => {
+          if (get().treeReveal !== null) set({ treeReveal: null });
+        },
+
         pinTreeNode: (parentPath, nodeKey) => {
           const next = pinNode(get().treeLayout, parentPath, nodeKey);
           if (next !== get().treeLayout) commitTreeLayout(next);
@@ -777,6 +890,19 @@ export const useReaderStore = create<ReaderState>()(
         resetFolderTreeLayout: (parentPath) => {
           const next = resetFolderLayout(get().treeLayout, parentPath);
           if (next !== get().treeLayout) commitTreeLayout(next);
+        },
+
+        markDocumentRead: (relativePath) => {
+          if (!get().documents.some((document) => document.relativePath === relativePath)) {
+            return;
+          }
+          const next = markRead(get().readMarks, relativePath);
+          if (next !== get().readMarks) commitReadMarks(next);
+        },
+
+        unmarkDocumentRead: (relativePath) => {
+          const next = unmarkRead(get().readMarks, relativePath);
+          if (next !== get().readMarks) commitReadMarks(next);
         },
 
         clearError: () => set({ error: null }),

@@ -10,7 +10,7 @@ use library::{
     list_document_links, open_document, open_library, probe_library_path, read_asset,
     read_document_preview, read_document_range, read_document_thumbnail, read_epub_asset,
     read_pdf_reading_mode, read_snapshot_diff, refresh_library, retry_document_index,
-    search_documents, store_document_thumbnail, AppState,
+    reveal_in_file_manager, search_documents, store_document_thumbnail, AppState,
 };
 use stats::{list_reading_sessions, record_reading_session, StatsState};
 use tauri::Manager;
@@ -55,6 +55,7 @@ pub fn run() {
             open_library,
             probe_library_path,
             refresh_library,
+            reveal_in_file_manager,
             open_document,
             read_document_range,
             read_pdf_reading_mode,

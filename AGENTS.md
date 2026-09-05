@@ -1,5 +1,7 @@
 # AGENTS.md
 
+<!-- reade-agents v:1 -->
+
 > Reade 项目的 AI coding agent 工作约定。保持本文短小、可执行；较长说明写入 `docs/` 或 `README.md`。
 > 当 agent 反复误解同一约束时更新本文，不要把临时任务要求永久化。
 
@@ -58,7 +60,9 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 ├── public/sw.js                   # Web PWA service worker（手写零依赖，桌面不注册）
 ├── examples/demo-library/         # 手工验收用文档库
 ├── scripts/                       # Web 静态文档库生成器及测试
-├── docs/                          # WEB_DEPLOY.md、USER_GUIDE.md、roadmap-innovations.md、plan-*.md
+├── docs/                          # WEB_DEPLOY.md、USER_GUIDE.md、roadmap-innovations.md、plan-*.md、agent-skills-loop.md
+├── .agents/                       # 按需 Skills 与 learnings 暂存（非 always-on）
+├── tools/skills/                  # 已安装领域 Skills 的源文件；其内禁止再放 AGENTS.md
 ├── .github/workflows/             # 仅有 Pages 构建部署，不跑测试与 Rust 检查
 ├── output/playwright/             # 已有视觉基线截图
 ├── package.json
@@ -80,6 +84,8 @@ Reade 是一款个人使用的本地优先长文阅读器。Windows 桌面版只
 - 影响排版或响应式行为时，用真实 Tauri 窗口或浏览器截图做视觉检查；不能只依赖测试通过。
 - 保持 TypeScript 与 `ES2020` 兼容，不使用未配置 polyfill 的新 API。
 - 重型渲染能力继续按需加载，避免把全部 Shiki grammar 或 Mermaid 提前打入首屏路径。
+- 同类失误能用测试抓住时，先补回归测试，再考虑写入 Learned guidelines；测试已覆盖的行为不必再写成教条。
+- 你纠正 Agent 时，可以提议把可泛化原则写入 Learned guidelines 或 `.agents/learnings.md`，**等确认后再改 `AGENTS.md`**。
 
 ## Web 版封存
 
@@ -102,6 +108,8 @@ Web 版（`--mode web`、GitHub Pages、`pnpm generate:web` / `dev:web` / `build
 - 不虚构 `pnpm lint`；本项目当前没有 ESLint script。
 - 不把内容目录中的任意文件都公开；生成器只允许 Markdown 和明确列出的安全图片格式。
 - 不为 Web 版增加功能或专属体验；Web 已封存，见上文。
+- 不整篇重写 `AGENTS.md`；不把 Cursor Memory 或单次任务的口味写进公约。
+- 不把长流程 Skill 贴进本文或嵌套 `AGENTS.md`（Cursor 会 always-on 注入）。组件组合用 `vercel-composition-patterns` Skill，设计评审用 impeccable 等，仅在任务匹配时读取。
 
 ## 命令
 
@@ -156,6 +164,15 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 
 无法验证时，明确说明未验证的项目和原因。
 
+## 智能体闭环
+
+分层说明见 `docs/agent-skills-loop.md`。
+
+- **内层**：本文是唯一 always-on 公约。长流程放 `.agents/skills/` 与 `tools/skills/`，按描述匹配后加载。
+- **Skills ≠ Memory**：Skills 是人审后才改的程序；Cursor Memory 是易变缓存，不能当仓库规范。
+- **外层**：蒸馏用 `/improve-reade-agents`。只对 `## Learned guidelines` 做增量（增/改/删一条），信号弱则空跑；禁止自行提交。
+- 原始纠错暂存 `.agents/learnings.md`（不进 always-on 上下文）。
+
 ## 测试
 
 行为发生变化时：
@@ -174,7 +191,7 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 
 ## 高风险区域
 
-- **IPC 契约**：全部 commands 注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 里（当前 56 个，分布于 `library.rs`、`user_store.rs`、`stats.rs`、`transfer.rs`）——动手前先读那份清单，不要凭记忆假设命令名。Rust 使用 snake_case 参数，前端 `invoke` 传 camelCase；前端一律经 `src/lib/backend.ts` 的 facade 调用，桌面落到 `tauriBackend.ts`、Web 落到 `webLibrary.ts` 等实现；改一端必须同步另一端和类型。名称集合由 `src/lib/tauriBackend.test.ts` 的机械对账测试守护。
+- **IPC 契约**：全部 commands 注册在 `src-tauri/src/lib.rs` 的 `generate_handler!` 里（当前 57 个，分布于 `library.rs`、`user_store.rs`、`stats.rs`、`transfer.rs`）——动手前先读那份清单，不要凭记忆假设命令名。Rust 使用 snake_case 参数，前端 `invoke` 传 camelCase；前端一律经 `src/lib/backend.ts` 的 facade 调用，桌面落到 `tauriBackend.ts`、Web 落到 `webLibrary.ts` 等实现；改一端必须同步另一端和类型。名称集合由 `src/lib/tauriBackend.test.ts` 的机械对账测试守护。
 - **渲染安全**：raw HTML 保持禁用；Mermaid 使用 `securityLevel: "strict"`（不要改回 sandbox iframe：`data:` iframe 会被 CSP `frame-src` 拦截，WebView2 显示“已阻止此内容”），50,000 字符和 500 条连线限制；`mermaid.render` 的结果经 `sanitizeMermaidSvg` 后再注入。
 - **文件边界**：Markdown 上限 10 MiB（超限文件在扫描阶段就被跳过，不会出现在文档树），本地资源 25 MiB，PDF/EPUB 128 MiB，单次 PDF Range 4 MiB，封面缩略图 512 KiB / 640 px；禁止绝对路径、父目录逃逸和跟随符号链接越界。
 - **外链与图片**：外链只允许 `http:`、`https:`、`mailto:` 且需用户确认；远程图片默认拦截；Markdown 文本里的 SVG data URL 不允许。库内 `.svg` 文件经 `read_asset` 读出后走 `sanitizeLibrarySvg`（与 Mermaid 同一消毒管线）再以内联 SVG 渲染，绝不生成 `data:image/svg+xml`。注意 `read_asset` 的 MIME 由扩展名推断、Rust 侧不做白名单；`MarkdownRenderer.tsx` 的 `resolvedUrl` 在 resolver 前后各做一次 `safeUrlTransform`，第二次那道校验挡的正是"SVG data URL 被当作 URL 渲染"，不可删。
@@ -203,8 +220,14 @@ CI（`.github/workflows/deploy-pages.yml`）只在 push 到 main 时构建并发
 
 - 桌面版发现 `.md`、`.markdown`、`.mdx`、`.pdf`、`.epub`；`.mdx` 仅按普通 Markdown 安全展示；Web 版只发布 Markdown。
 - 桌面扫描遵守 `.gitignore`，不跟随符号链接，并排除常见构建/依赖目录；Web 生成器不读 `.gitignore`，改用扩展名白名单，两者语义不同。
-- 前端 localStorage 只存偏好与轻量位置：`reade-reader-preferences`、`reade-library-mru`、`reade-reading-positions`、`reade-vertical-writing`、`reade-home-baseline`、`reade-device-id`；文档正文和索引不进前端存储。Web 版的标注与合集存 IndexedDB。
-- 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Ctrl+滚轮` 放大/缩小阅读（Markdown/EPUB 调字号，PDF 原版式调页面缩放）、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
+- 前端 localStorage 只存偏好与轻量位置：`reade-reader-preferences`、`reade-library-mru`、`reade-reading-positions`、`reade-tree-layout`、`reade-read-marks`、`reade-vertical-writing`、`reade-home-baseline`、`reade-device-id`；文档正文和索引不进前端存储。Web 版的标注与合集存 IndexedDB。
+- 快捷键：`Ctrl+O` 选择文档库（桌面）、`Ctrl+K` 聚焦搜索、`Ctrl+P` 命令面板、`Ctrl+Shift+O` 本夹文档全名列表、`Ctrl+B` 书签、`Ctrl+Z` 撤销标注、`Ctrl+滚轮` 放大/缩小阅读（Markdown/EPUB 调字号，PDF 原版式调页面缩放）、`Alt+←/→` 阅读回退栈、`Esc` 关闭浮层；改动时同步可访问名称和界面提示。
 - `examples/demo-library/` 用于功能联调，`output/playwright/` 只作为视觉参考，不是源码或自动化测试结果的替代品。
 - `docs/roadmap-innovations.md` 末尾有一份尚未完成的人工验收清单（桌面真机 9 项、Web 真实部署 4 项）。碰到桌面清单里的功能时，别把"测试通过"当成已验收。Web 真实部署 4 项不再推进。
 - `APP_RUNTIME` 由 Vite mode 决定：默认/production 是 desktop，`--mode web` 是 Web；不得用浏览器特征猜运行时。Web 版功能已封存，日常开发以桌面为准。
+
+## Learned guidelines
+
+Improver 只维护本节。最多 12 条；每条一条祈使句并括号写 Why；与旧条冲突则改旧不堆新；一次性补丁写进 `.agents/learnings.md`，不要写进这里。变更本节时把文首 `reade-agents v:N` 加一。
+
+（暂无。）

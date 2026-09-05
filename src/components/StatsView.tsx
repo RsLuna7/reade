@@ -53,6 +53,7 @@ import { highWaterCoverage } from "../lib/readingTimeEstimate";
 // 库覆盖率知识地图(plan-coverage-treemap):布局与聚合纯函数在 lib/treemap。
 import { CoverageTreemap } from "./CoverageTreemap";
 import { listLibraryReadingPositions } from "../lib/readingPositions";
+import { isMarkedRead } from "../lib/readMarks";
 import {
   aggregateByDocument,
   aggregateByHour,
@@ -795,6 +796,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
   const setDailyGoalMinutes = useReaderStore((state) => state.setDailyGoalMinutes);
   const selectDocument = useReaderStore((state) => state.selectDocument);
   const setActiveView = useReaderStore((state) => state.setActiveView);
+  const readMarks = useReaderStore((state) => state.readMarks);
 
   const [sessions, setSessions] = useState<ReadingSession[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1011,11 +1013,25 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
     [documents],
   );
 
-  // 读完清单:库内文档 × 阅读位置高水位,覆盖率达标者按最近读完倒序。
+  // 读完清单:库内文档 × 阅读位置高水位或手动已阅,覆盖率达标者按最近读完倒序。
   const finishedDocuments = useMemo<FinishedDocument[]>(() => {
     const result: FinishedDocument[] = [];
     for (const document of documents) {
       const position = readingPositions[document.relativePath];
+      const marked = isMarkedRead(readMarks, document.relativePath);
+      if (marked) {
+        result.push({
+          relativePath: document.relativePath,
+          title: document.title,
+          format: document.format,
+          coverage: 1,
+          updatedAt: Math.max(
+            position?.updatedAt ?? 0,
+            readMarks[document.relativePath] ?? 0,
+          ),
+        });
+        continue;
+      }
       if (!position) continue;
       const coverage = highWaterCoverage(
         position,
@@ -1031,7 +1047,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
       });
     }
     return result.sort((a, b) => b.updatedAt - a.updatedAt);
-  }, [documents, extents, readingPositions]);
+  }, [documents, extents, readMarks, readingPositions]);
 
   const loading = sessions === null;
   const empty = !loading && loaded.length === 0;
@@ -1635,7 +1651,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
       {finishedOpen && (
         <StatsDrawer
           title="读完的文档"
-          subtitle={`阅读进度达 ${Math.round(FINISHED_COVERAGE * 100)}% 以上 · ${finishedDocuments.length} 篇`}
+          subtitle={`阅读进度达 ${Math.round(FINISHED_COVERAGE * 100)}% 以上或已标记已阅 · ${finishedDocuments.length} 篇`}
           motionLevel={motionLevel}
           onClose={() => setFinishedOpen(false)}
         >

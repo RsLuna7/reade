@@ -342,6 +342,12 @@ export async function readPdfReadingMode(relativePath: string): Promise<PdfReadi
 export async function readEpubAsset(relativePath: string, assetId: number): Promise<Uint8Array> {
   return (await getTauriBackend()).readEpubAsset(relativePath, assetId);
 }
+export async function revealInFileManager(relativePath: string): Promise<void> {
+  if (APP_RUNTIME === "web") {
+    throw new Error("Web 版无法打开本地资源管理器");
+  }
+  return (await getTauriBackend()).revealInFileManager(relativePath);
+}
 export async function retryDocumentIndex(relativePath: string): Promise<void> {
   if (APP_RUNTIME !== "web") await (await getTauriBackend()).retryDocumentIndex(relativePath);
 }

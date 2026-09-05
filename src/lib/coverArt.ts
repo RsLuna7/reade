@@ -108,7 +108,9 @@ export function thumbnailDimensions(
 export function shelfProgressLabel(
   position: ReadingPosition | null | undefined,
   segmentCount?: number | null,
+  markedRead = false,
 ): string | null {
+  if (markedRead) return "已阅";
   if (!position) return null;
   if (position.kind === "scroll") {
     const percent = Math.round(Math.min(1, Math.max(0, position.maxScrollRatio)) * 100);

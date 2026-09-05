@@ -371,6 +371,24 @@ pub async fn refresh_library(
     Ok(snapshot)
 }
 
+/// Opens the system file manager and selects a library file or folder.
+/// The frontend only sends a relative path; canonicalize + library-root
+/// containment happen here so the UI never learns or opens arbitrary paths.
+#[tauri::command]
+pub async fn reveal_in_file_manager(
+    relative_path: String,
+    state: State<'_, AppState>,
+) -> CommandResult<()> {
+    let root = current_root(&state)?;
+    run_blocking(move || reveal_path_in_file_manager(&root, &relative_path)).await
+}
+
+fn reveal_path_in_file_manager(root: &Path, relative_path: &str) -> CommandResult<()> {
+    let path = resolve_existing_in_root(root, relative_path)?;
+    tauri_plugin_opener::reveal_item_in_dir(&path)
+        .map_err(|error| format!("Cannot reveal path in file manager: {error}"))
+}
+
 #[tauri::command]
 pub async fn open_document(
     relative_path: String,
@@ -4370,6 +4388,30 @@ mod tests {
         )
         .is_err());
         assert!(resolve_existing_in_root(&canonical_root, "inside.md").is_ok());
+    }
+
+    #[test]
+    fn reveal_resolves_nested_file_and_folder_inside_the_library() {
+        let library = tempdir().expect("temp library");
+        let nested = library.path().join("notes");
+        fs::create_dir(&nested).expect("create nested folder");
+        fs::write(nested.join("inside.md"), "# Inside").expect("write fixture");
+        let canonical_root = canonical_library_root(library.path()).expect("canonical root");
+
+        let file = resolve_existing_in_root(&canonical_root, "notes/inside.md")
+            .expect("nested file should resolve");
+        assert_eq!(
+            file.file_name().and_then(|name| name.to_str()),
+            Some("inside.md")
+        );
+        let folder = resolve_existing_in_root(&canonical_root, "notes")
+            .expect("nested folder should resolve");
+        assert_eq!(
+            folder.file_name().and_then(|name| name.to_str()),
+            Some("notes")
+        );
+        assert!(resolve_existing_in_root(&canonical_root, "").is_err());
+        assert!(resolve_existing_in_root(&canonical_root, "notes/../outside.md").is_err());
     }
 
     #[test]

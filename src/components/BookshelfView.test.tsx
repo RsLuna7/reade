@@ -56,6 +56,7 @@ function setLibrary(documents: DocumentInfo[]) {
     documents,
     currentPath: null,
     loading: false,
+    readMarks: {},
   });
 }
 
@@ -81,6 +82,7 @@ function seedPosition(path: string, maxScrollRatio: number) {
 beforeEach(() => {
   localStorage.clear();
   vi.mocked(readDocumentThumbnail).mockReset().mockResolvedValue(null);
+  useReaderStore.setState({ readMarks: {} });
 });
 
 afterEach(cleanup);
@@ -114,6 +116,14 @@ describe("BookshelfView (plan-bookshelf-covers §3.3)", () => {
     const art = view.container.querySelector<HTMLElement>(".bookshelf__cover-art");
     expect(art?.style.background).toContain("linear-gradient");
     expect(art?.style.background).toContain("var(--");
+  });
+
+  it("shows 已阅 on a marked document even without a reading position", () => {
+    setLibrary([documentInfo("guide.md", { title: "指南" })]);
+    useReaderStore.setState({ readMarks: { "guide.md": Date.now() } });
+    const view = render(<BookshelfView />);
+    expect(view.getByText("已阅")).toBeInTheDocument();
+    expect(view.getByRole("button", { name: "指南，已阅" })).toBeInTheDocument();
   });
 
   it("shows the reading-progress badge from the position high-water mark", () => {

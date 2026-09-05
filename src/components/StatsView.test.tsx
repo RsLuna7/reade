@@ -120,6 +120,7 @@ function setStatsState(documents: DocumentInfo[]): void {
     dailyGoalMinutes: 0,
     loading: false,
     error: null,
+    readMarks: {},
   });
 }
 
@@ -174,6 +175,23 @@ describe("StatsView footprint card", () => {
     const drawer = await screen.findByRole("dialog", { name: "读完的文档" });
     expect(within(drawer).getByText("读完的书")).toBeInTheDocument();
     expect(within(drawer).getByText("100%")).toBeInTheDocument();
+  });
+
+  it("counts a manually marked document as finished", async () => {
+    setStatsState([doc("marked.md", { title: "手动已阅" }), doc("b.md")]);
+    useReaderStore.setState({ readMarks: { "marked.md": Date.now() } });
+    const now = Date.now();
+    const loadSessions = vi.fn(async () => [session("b.md", now - HOUR_MS)]);
+
+    render(<StatsView loadSessions={loadSessions} />);
+
+    const card = await screen.findByRole("region", { name: "阅读足迹" });
+    await waitFor(() => {
+      expect(within(card).getByText("读完").parentElement).toHaveTextContent("读完1篇");
+    });
+    fireEvent.click(within(card).getByRole("button", { name: /读完/ }));
+    const drawer = await screen.findByRole("dialog", { name: "读完的文档" });
+    expect(within(drawer).getByText("手动已阅")).toBeInTheDocument();
   });
 
   it("navigates to the annotation hub from the notes entry", async () => {

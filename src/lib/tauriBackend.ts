@@ -53,6 +53,9 @@ export async function chooseLibraryDirectory(): Promise<string | null> {
 export function openLibrary(rootPath: string): Promise<DocumentInfo[]> { return invoke("open_library", { rootPath }); }
 export function probeLibraryPath(path: string): Promise<boolean> { return invoke("probe_library_path", { path }); }
 export function refreshLibrary(): Promise<DocumentInfo[]> { return invoke("refresh_library"); }
+export function revealInFileManager(relativePath: string): Promise<void> {
+  return invoke("reveal_in_file_manager", { relativePath });
+}
 export function openDocument(relativePath: string): Promise<DocumentContent> { return invoke("open_document", { relativePath }); }
 export async function readDocumentRange(relativePath: string, offset: number, length: number): Promise<Uint8Array> {
   return asBytes(await invoke("read_document_range", { relativePath, offset, length }));

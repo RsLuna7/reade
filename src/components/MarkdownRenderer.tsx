@@ -646,18 +646,7 @@ export function MarkdownRenderer({
         );
       }
 
-      // draggable=false：WebView2/Chromium 点图包链接时容易启动拖图，
-      // 吞掉 click，表现为「缩略图点了没跳转」。
-      return (
-        <img
-          {...props}
-          src={resolved}
-          alt={alt ?? ""}
-          loading="lazy"
-          decoding="async"
-          draggable={false}
-        />
-      );
+      return <img {...props} src={resolved} alt={alt ?? ""} loading="lazy" decoding="async" />;
     },
   };
 

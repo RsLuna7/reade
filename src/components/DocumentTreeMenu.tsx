@@ -6,9 +6,15 @@ export interface DocumentTreeMenuProps {
   y: number;
   pinned: boolean;
   canReset: boolean;
+  canReveal: boolean;
+  canMarkRead: boolean;
+  markedRead: boolean;
   onPin: () => void;
   onUnpin: () => void;
   onReset: () => void;
+  onReveal: () => void;
+  onMarkRead: () => void;
+  onUnmarkRead: () => void;
   onClose: () => void;
 }
 
@@ -17,9 +23,15 @@ export function DocumentTreeMenu({
   y,
   pinned,
   canReset,
+  canReveal,
+  canMarkRead,
+  markedRead,
   onPin,
   onUnpin,
   onReset,
+  onReveal,
+  onMarkRead,
+  onUnmarkRead,
   onClose,
 }: DocumentTreeMenuProps) {
   const ref = useRef<HTMLDivElement>(null);
@@ -108,6 +120,37 @@ export function DocumentTreeMenu({
           置顶
         </button>
       )}
+      {canReveal ? (
+        <button
+          type="button"
+          role="menuitem"
+          className="document-tree-menu__item"
+          onClick={() => activate(onReveal)}
+        >
+          在资源管理器中显示
+        </button>
+      ) : null}
+      {canMarkRead ? (
+        markedRead ? (
+          <button
+            type="button"
+            role="menuitem"
+            className="document-tree-menu__item"
+            onClick={() => activate(onUnmarkRead)}
+          >
+            取消已阅
+          </button>
+        ) : (
+          <button
+            type="button"
+            role="menuitem"
+            className="document-tree-menu__item"
+            onClick={() => activate(onMarkRead)}
+          >
+            已阅
+          </button>
+        )
+      ) : null}
       {canReset ? (
         <button
           type="button"

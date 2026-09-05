@@ -23,6 +23,7 @@ import {
   removeCollectionItem,
   renameCollection,
   reorderCollectionItems,
+  revealInFileManager,
 } from "./tauriBackend";
 
 beforeEach(() => {
@@ -261,6 +262,16 @@ describe("v6 annotation IPC wrappers", () => {
   });
 });
 
+describe("reveal in file manager IPC wrapper", () => {
+  it("sends the camelCase relative path", async () => {
+    invokeMock.mockResolvedValueOnce(undefined);
+    await revealInFileManager("notes/a.md");
+    expect(invokeMock).toHaveBeenCalledWith("reveal_in_file_manager", {
+      relativePath: "notes/a.md",
+    });
+  });
+});
+
 describe("IPC command name parity with Rust generate_handler", () => {
   it("keeps tauriBackend invoke names equal to lib.rs handler names", async () => {
     const { readFile } = await import("node:fs/promises");
@@ -279,6 +290,6 @@ describe("IPC command name parity with Rust generate_handler", () => {
     );
 
     expect([...new Set(tsCommands)].sort()).toEqual([...new Set(rustCommands)].sort());
-    expect(new Set(tsCommands).size).toBe(56);
+    expect(new Set(tsCommands).size).toBe(57);
   });
 });

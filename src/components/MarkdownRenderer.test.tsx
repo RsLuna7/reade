@@ -169,7 +169,6 @@ describe("MarkdownRenderer", () => {
 
     const image = container.querySelector("img");
     expect(image).toHaveAttribute("src", "https://cdn.example/diagram.png");
-    expect(image).toHaveAttribute("draggable", "false");
   });
 
   it("opens the wrapping link when a linked thumbnail is activated", () => {
@@ -188,7 +187,6 @@ describe("MarkdownRenderer", () => {
       "https://vimeo.com/2195538769/a8d89ce5bda40fc4f6d23dbd38955486f8c618e58119473b72b45b341e1f1663";
     const anchor = container.querySelector("a");
     expect(anchor).toHaveAttribute("href", watch);
-    expect(container.querySelector("img")).toHaveAttribute("draggable", "false");
     anchor?.click();
     expect(onNavigate).toHaveBeenCalledWith(watch, expect.any(Object));
   });

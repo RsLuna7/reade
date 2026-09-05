@@ -59,6 +59,7 @@ describe("application CSS isolation", () => {
     );
     expect(css).toMatch(/\.document-tree__name\s*\{[^}]*min-width:\s*0/s);
     expect(css).toMatch(/\.document-tree__estimate\s*\{[^}]*white-space:\s*nowrap/s);
+    expect(css).toMatch(/\.document-tree__read-mark\s*\{/s);
   });
 
   it("styles tree drag handles and the context menu", () => {
@@ -99,6 +100,21 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.library-sidebar\s*\{[^}]*overflow:\s*hidden/s);
     expect(css).toMatch(/\.sidebar-content\s*\{[^}]*overflow:\s*auto/s);
     expect(css).toMatch(/\.sidebar-footer\s*\{[^}]*flex-shrink:\s*0/s);
+  });
+
+  it("lets folder-docs titles wrap instead of truncating", () => {
+    expect(css).toMatch(
+      /\.folder-docs-option-title\s*\{[^}]*overflow-wrap:\s*anywhere/s,
+    );
+    expect(css).toMatch(
+      /\.folder-docs-option-title\s*\{[^}]*white-space:\s*normal/s,
+    );
+    expect(css).not.toMatch(
+      /\.folder-docs-option-title\s*\{[^}]*text-overflow:\s*ellipsis/s,
+    );
+    expect(css).not.toMatch(
+      /\.folder-docs-option-title\s*\{[^}]*line-clamp/s,
+    );
   });
 
   it("lets every sidebar footer control share the full width", () => {
@@ -369,10 +385,9 @@ describe("reader heading ladder", () => {
     );
   });
 
-  it("keeps inline strong from competing with headings", () => {
-    expect(css).toMatch(/\.markdown-body strong\s*\{[^}]*color:\s*inherit/s);
-    expect(css).not.toMatch(
-      /\.markdown-body strong\s*\{[^}]*color-mix\(in srgb,\s*var\(--ink\)/s,
+  it("tints inline strong with the theme accent", () => {
+    expect(css).toMatch(
+      /\.markdown-body strong\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--ink\) 92%,\s*var\(--accent\)\)/s,
     );
   });
 });

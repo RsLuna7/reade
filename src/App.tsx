@@ -101,7 +101,12 @@ import {
   type SearchResult,
 } from "./lib/backend";
 import { CommandPalette } from "./components/CommandPalette";
+import { FolderDocsPanel } from "./components/FolderDocsPanel";
 import type { PaletteEntry } from "./lib/commandPalette";
+import {
+  canOpenFolderDocs,
+  resolveFolderDocsDirectory,
+} from "./lib/folderDocsList";
 import { canNavBack, canNavForward, type NavLocation } from "./lib/navHistory";
 // 最近书库 MRU(plan-library-mru):localStorage 纯函数,打开动作仍走
 // openLibrary 的完整校验边界。
@@ -306,6 +311,7 @@ import {
 } from "./lib/sentenceHighlight";
 import { adjustFontSize, wheelZoomDirection } from "./lib/readerWheelZoom";
 import {
+  createWheelSpeedController,
   isDefaultWheelSpeed,
   scaleWheelDelta,
   WHEEL_SPEED_MAX,
@@ -1795,6 +1801,8 @@ function App() {
   // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
   const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
   const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
+  const treeScopePath = useReaderStore((state) => state.treeScopePath);
+  const setTreeScopePath = useReaderStore((state) => state.setTreeScopePath);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
   const setHighlightColor = useReaderStore((state) => state.setHighlightColor);
   const setUnderlineColor = useReaderStore((state) => state.setUnderlineColor);
@@ -1834,6 +1842,8 @@ function App() {
   // 命令面板(plan-command-palette):开关、打开时拉取的合集快照、
   // 以及"切换到合集"对侧栏分区的展开请求(CP-D2)。
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [folderDocsOpen, setFolderDocsOpen] = useState(false);
+  const [folderDocsPath, setFolderDocsPath] = useState<string | null>(null);
   const [paletteCollections, setPaletteCollections] = useState<CollectionSummary[]>([]);
   const [collectionsReveal, setCollectionsReveal] = useState<
     { id: string; token: number } | null
@@ -2045,6 +2055,7 @@ function App() {
     if (!verticalActive) return;
     const reader = readerRef.current;
     if (!reader) return;
+    const controller = createWheelSpeedController(reader);
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return;
       if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
@@ -2052,10 +2063,14 @@ function App() {
       const settings = useReaderStore.getState().readingSettings;
       const lineHeightPx = settings.fontSize * settings.lineHeight;
       const { y } = wheelDeltaPixels(event, lineHeightPx, reader.clientHeight);
-      reader.scrollLeft -= scaleWheelDelta(y, settings.wheelSpeed);
+      // vertical-rl 前进是 scrollLeft 递减。
+      controller.push(-scaleWheelDelta(y, settings.wheelSpeed), 0);
     };
     reader.addEventListener("wheel", onWheel, { passive: false });
-    return () => reader.removeEventListener("wheel", onWheel);
+    return () => {
+      reader.removeEventListener("wheel", onWheel);
+      controller.destroy();
+    };
   }, [verticalActive, currentPath]);
 
   const statsOpen = !IS_WEB_RUNTIME && activeView === "stats";
@@ -2512,6 +2527,7 @@ function App() {
       relatedPassages ||
       quoteCardSource ||
       commandPaletteOpen ||
+      folderDocsOpen ||
       noteDraft ||
       relocatePreview ||
       importReview,
@@ -2703,6 +2719,36 @@ function App() {
     };
   }, [commandPaletteOpen, collectionsVersion, snapshot]);
 
+  const openFolderDocsList = useCallback(() => {
+    const directory = resolveFolderDocsDirectory(treeScopePath, currentPath);
+    if (directory === undefined) {
+      showNotice("请先打开子文件夹中的文档，或从面包屑进入某文件夹。");
+      return;
+    }
+    setFolderDocsPath(directory);
+    setTreeScopePath(directory);
+    setCommandPaletteOpen(false);
+    setFolderDocsOpen(true);
+  }, [currentPath, setTreeScopePath, showNotice, treeScopePath]);
+
+  const handleNavigateFolderDocs = useCallback(
+    (path: string | null) => {
+      setFolderDocsPath(path);
+      setTreeScopePath(path);
+    },
+    [setTreeScopePath],
+  );
+
+  const handleSelectFolderDoc = useCallback(
+    (relativePath: string) => {
+      setFolderDocsOpen(false);
+      setMobileLibraryOpen(false);
+      recordNavDeparture();
+      void selectDocument(relativePath);
+    },
+    [recordNavDeparture, selectDocument],
+  );
+
   // 条目构建:文档 → 合集 → 命令(空查询默认顺序);命令只列当前可执行的
   // (CP-D3),动作全部复用既有回调,面板自身不新增任何能力。
   const paletteEntries = useMemo<AppPaletteEntry[]>(() => {
@@ -2766,6 +2812,16 @@ function App() {
               setActiveView(homeOpen ? "reader" : "home");
               setMobileLibraryOpen(false);
             },
+          }
+        : null,
+      canOpenFolderDocs(treeScopePath, currentPath)
+        ? {
+            kind: "command" as const,
+            id: "cmd:folder-docs",
+            title: "打开本夹文档列表",
+            keywords: "folder docs list 本夹 全名 列表 文件夹",
+            badge: "命令",
+            run: () => openFolderDocsList(),
           }
         : null,
       !IS_WEB_RUNTIME
@@ -2966,6 +3022,8 @@ function App() {
     statsOpen,
     themeMode,
     toggleTheme,
+    treeScopePath,
+    openFolderDocsList,
   ]);
 
   const handleExecutePaletteEntry = useCallback((entry: AppPaletteEntry) => {
@@ -4880,6 +4938,7 @@ function App() {
   });
 
   // 滚轮速度倍率:非默认时拦截阅读区 wheel,按倍率滚动。
+  // 触控板小步即时跟手,鼠标大格 rAF 缓动;避免 CSS smooth 与生硬跳格两端。
   // 放在 autoPace 之后注册,以便 playing 时 autoPace 先 preventDefault,本处理器让路。
   // 竖排由上方 VW-D5 处理器接管;Ctrl/Meta 留给缩放。
   useEffect(() => {
@@ -4889,6 +4948,7 @@ function App() {
     if (isDefaultWheelSpeed(speed)) return;
     const reader = readerRef.current;
     if (!reader) return;
+    const controller = createWheelSpeedController(reader);
     const onWheel = (event: WheelEvent) => {
       if (event.ctrlKey || event.metaKey) return;
       if (event.defaultPrevented) return;
@@ -4896,11 +4956,16 @@ function App() {
       const settings = useReaderStore.getState().readingSettings;
       const lineHeightPx = settings.fontSize * settings.lineHeight;
       const { x, y } = wheelDeltaPixels(event, lineHeightPx, reader.clientHeight);
-      reader.scrollTop += scaleWheelDelta(y, settings.wheelSpeed);
-      reader.scrollLeft += scaleWheelDelta(x, settings.wheelSpeed);
+      controller.push(
+        scaleWheelDelta(x, settings.wheelSpeed),
+        scaleWheelDelta(y, settings.wheelSpeed),
+      );
     };
     reader.addEventListener("wheel", onWheel, { passive: false });
-    return () => reader.removeEventListener("wheel", onWheel);
+    return () => {
+      reader.removeEventListener("wheel", onWheel);
+      controller.destroy();
+    };
   }, [
     verticalActive,
     overlayViewOpen,
@@ -5346,6 +5411,7 @@ function App() {
           setCollectionsPopoverOpen(false);
           setLibrarySwitcherOpen(false);
           setCommandPaletteOpen(false);
+          setFolderDocsOpen(false);
           setCompactTocOpen(false);
           setMobileLibraryOpen(false);
           setPendingSelection(null);
@@ -5374,10 +5440,13 @@ function App() {
         void handleUndoAnnotation();
         return;
       }
-      if (event.key.toLowerCase() === "o") {
+      if (event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) {
         if (IS_WEB_RUNTIME) return;
         event.preventDefault();
         void chooseAndOpenLibrary();
+      } else if (event.key.toLowerCase() === "o" && event.shiftKey && !event.altKey) {
+        event.preventDefault();
+        openFolderDocsList();
       } else if (event.key.toLowerCase() === "k") {
         event.preventDefault();
         searchRef.current?.focus();
@@ -5414,6 +5483,7 @@ function App() {
     handleUndoAnnotation,
     closeRelatedPassages,
     openFind,
+    openFolderDocsList,
     autoPace.barOpen,
     autoPace.stop,
     annotationTool,
@@ -5805,6 +5875,14 @@ function App() {
       ? "在线文档库"
       : "选择文档库";
   const pathParts = currentPath?.replace(/\\/g, "/").split("/") ?? [];
+  const revealInDocumentTree = useReaderStore((state) => state.revealInDocumentTree);
+  const handleBreadcrumbReveal = useCallback(
+    (directoryPath: string | null) => {
+      revealInDocumentTree(directoryPath);
+      if (compactLibraryLayout) setMobileLibraryOpen(true);
+    },
+    [compactLibraryLayout, revealInDocumentTree],
+  );
   const statusDetail = buildLibraryStatusDetail({
     searchQuery,
     searchResultCount: searchResults.length,
@@ -5990,12 +6068,15 @@ function App() {
               onOpenSecondary={handleOpenSecondary}
               onBeforeSelect={recordNavDeparture}
               extents={documentExtents}
+              onOpenFolderDocs={openFolderDocsList}
             />
           ) : (
             <DocumentTree
               onOpenSecondary={handleOpenSecondary}
               onBeforeSelect={recordNavDeparture}
               estimateForPath={treeEstimateForPath}
+              onNotice={showNotice}
+              onOpenFolderDocs={openFolderDocsList}
             />
           )}
         </div>
@@ -6085,7 +6166,7 @@ function App() {
 
       <main className="workspace">
         <header className="topbar" ref={topbarRef}>
-          <div
+          <nav
             className="breadcrumb"
             aria-label="当前文档路径"
             title={[libraryName, ...pathParts].join(" / ")}
@@ -6095,13 +6176,43 @@ function App() {
             ) : (
               <HardDrive size={14} aria-hidden="true" />
             )}
-            <span>{libraryName}</span>
-            {pathParts.map((part, index) => (
-              <span className={index === pathParts.length - 1 ? "current" : undefined} key={`${part}-${index}`}>
-                <span aria-hidden="true">/</span> {part}
-              </span>
-            ))}
-          </div>
+            {snapshot ? (
+              <button
+                type="button"
+                className="breadcrumb__crumb"
+                onClick={() => handleBreadcrumbReveal(null)}
+                title="在文档树中定位书库根目录"
+              >
+                {libraryName}
+              </button>
+            ) : (
+              <span>{libraryName}</span>
+            )}
+            {pathParts.map((part, index) => {
+              const isLast = index === pathParts.length - 1;
+              const directoryPath = pathParts.slice(0, index + 1).join("/");
+              return (
+                <span
+                  className={isLast ? "breadcrumb__segment current" : "breadcrumb__segment"}
+                  key={`${part}-${index}`}
+                >
+                  <span aria-hidden="true">/</span>{" "}
+                  {isLast || !snapshot ? (
+                    <span>{part}</span>
+                  ) : (
+                    <button
+                      type="button"
+                      className="breadcrumb__crumb"
+                      onClick={() => handleBreadcrumbReveal(directoryPath)}
+                      title={`在文档树中定位「${part}」`}
+                    >
+                      {part}
+                    </button>
+                  )}
+                </span>
+              );
+            })}
+          </nav>
           <div className="topbar-actions">
             <button
               className="icon-button"
@@ -6771,6 +6882,18 @@ function App() {
           entries={paletteEntries}
           onExecute={handleExecutePaletteEntry}
           onClose={() => setCommandPaletteOpen(false)}
+        />
+
+        <FolderDocsPanel
+          open={folderDocsOpen}
+          folderPath={folderDocsPath}
+          libraryLabel={libraryName}
+          documents={documents}
+          treeLayout={treeLayout}
+          currentPath={currentPath}
+          onSelect={handleSelectFolderDoc}
+          onNavigateFolder={handleNavigateFolderDocs}
+          onClose={() => setFolderDocsOpen(false)}
         />
 
 

@@ -7,8 +7,9 @@ import {
 } from "../lib/backend";
 import { generatedCover, shelfProgressLabel } from "../lib/coverArt";
 import { capturePdfCoverThumbnail, COVER_STORED_EVENT } from "../lib/coverCapture";
+import { isMarkedRead } from "../lib/readMarks";
 import { listLibraryReadingPositions, type ReadingPosition } from "../lib/readingPositions";
-import { documentTreeName, flattenDocumentsInTreeOrder } from "../lib/tree";
+import { documentTreeName, flattenDocumentsInTreeOrder, isDocumentUnderDirectory } from "../lib/tree";
 import { buildLaidOutDocumentTree } from "../lib/treeLayout";
 import { useReaderStore } from "../store/useReaderStore";
 
@@ -25,6 +26,8 @@ export interface BookshelfViewProps {
   onOpenSecondary?: (path: string) => void;
   /** 阅读时间预估的 extents（PDF 进度角标折算页数分母；可空）。 */
   extents?: ReadonlyMap<string, DocumentExtent> | null;
+  /** 打开「本夹文档」全名列表。 */
+  onOpenFolderDocs?: () => void;
 }
 
 /** PDF 封面串行渲染队列：防止多文档同时解码的内存峰值。 */
@@ -46,6 +49,7 @@ interface ShelfCardProps {
   extent: DocumentExtent | undefined;
   coverUrl: string | undefined;
   isCurrent: boolean;
+  markedRead: boolean;
   onVisible: (document: DocumentInfo) => void;
   onOpen: (path: string, altKey: boolean) => void;
 }
@@ -56,6 +60,7 @@ function ShelfCard({
   extent,
   coverUrl,
   isCurrent,
+  markedRead,
   onVisible,
   onOpen,
 }: ShelfCardProps) {
@@ -64,7 +69,9 @@ function ShelfCard({
   onVisibleRef.current = onVisible;
   const name = documentTreeName(document);
   const cover = useMemo(() => generatedCover(name), [name]);
-  const progress = shelfProgressLabel(position, extent?.segmentCount);
+  const progress = shelfProgressLabel(position, extent?.segmentCount, markedRead);
+  const progressLabel =
+    progress === "已阅" ? `${name}，已阅` : progress ? `${name}，已读 ${progress}` : name;
 
   useEffect(() => {
     const element = cardRef.current;
@@ -93,7 +100,7 @@ function ShelfCard({
       type="button"
       ref={cardRef}
       aria-current={isCurrent ? "page" : undefined}
-      aria-label={progress ? `${name}，已读 ${progress}` : name}
+      aria-label={progressLabel}
       title={document.relativePath}
       onClick={(event) => onOpen(document.relativePath, event.altKey)}
     >
@@ -126,18 +133,29 @@ function ShelfCard({
   );
 }
 
-export function BookshelfView({ onBeforeSelect, onOpenSecondary, extents }: BookshelfViewProps) {
+export function BookshelfView({
+  onBeforeSelect,
+  onOpenSecondary,
+  extents,
+  onOpenFolderDocs,
+}: BookshelfViewProps) {
   const documents = useReaderStore((state) => state.documents);
   const treeLayout = useReaderStore((state) => state.treeLayout);
+  const treeScopePath = useReaderStore((state) => state.treeScopePath);
+  const setTreeScopePath = useReaderStore((state) => state.setTreeScopePath);
   const snapshot = useReaderStore((state) => state.snapshot);
   const currentPath = useReaderStore((state) => state.currentPath);
   const loading = useReaderStore((state) => state.loading);
   const selectDocument = useReaderStore((state) => state.selectDocument);
+  const readMarks = useReaderStore((state) => state.readMarks);
 
-  const ordered = useMemo(
-    () => flattenDocumentsInTreeOrder(buildLaidOutDocumentTree(documents, treeLayout)),
-    [documents, treeLayout],
-  );
+  const ordered = useMemo(() => {
+    const all = flattenDocumentsInTreeOrder(buildLaidOutDocumentTree(documents, treeLayout));
+    if (!treeScopePath) return all;
+    return all.filter((document) =>
+      isDocumentUnderDirectory(document.relativePath, treeScopePath),
+    );
+  }, [documents, treeLayout, treeScopePath]);
   const rootPath = snapshot?.rootPath ?? null;
   const positions = useMemo(
     () => (rootPath ? listLibraryReadingPositions(rootPath) : {}),
@@ -227,7 +245,37 @@ export function BookshelfView({ onBeforeSelect, onOpenSecondary, extents }: Book
 
   return (
     <nav className="bookshelf" aria-label="书架">
-      <h2 className="document-tree__label">书架</h2>
+      {treeScopePath ? (
+        <div className="tree-scope-bar" role="status">
+          <div className="tree-scope-bar__path">
+            <span className="tree-scope-bar__label">正在浏览</span>
+            <strong className="tree-scope-bar__name">
+              {treeScopePath.split("/").pop() ?? treeScopePath}
+            </strong>
+          </div>
+          <div className="tree-scope-bar__actions">
+            {onOpenFolderDocs ? (
+              <button
+                type="button"
+                className="tree-scope-bar__button tree-scope-bar__button--primary"
+                onClick={onOpenFolderDocs}
+                title="以完整标题浏览本夹文档（Ctrl+Shift+O）"
+              >
+                全名列表
+              </button>
+            ) : null}
+            <button
+              type="button"
+              className="tree-scope-bar__button"
+              onClick={() => setTreeScopePath(null)}
+            >
+              全部
+            </button>
+          </div>
+        </div>
+      ) : (
+        <h2 className="document-tree__label">书架</h2>
+      )}
       {ordered.length > 0 ? (
         <div className="bookshelf__grid">
           {ordered.map((document) => (
@@ -238,6 +286,7 @@ export function BookshelfView({ onBeforeSelect, onOpenSecondary, extents }: Book
               extent={extents?.get(document.relativePath)}
               coverUrl={coverUrls[document.relativePath]}
               isCurrent={document.relativePath === currentPath}
+              markedRead={isMarkedRead(readMarks, document.relativePath)}
               onVisible={loadCover}
               onOpen={openDocument}
             />
@@ -245,7 +294,11 @@ export function BookshelfView({ onBeforeSelect, onOpenSecondary, extents }: Book
         </div>
       ) : (
         <p className="document-tree__empty" role="status">
-          {loading ? "正在读取文档库…" : "选择一个文件夹开始阅读"}
+          {loading
+            ? "正在读取文档库…"
+            : treeScopePath
+              ? "此文件夹下没有文档"
+              : "选择一个文件夹开始阅读"}
         </p>
       )}
     </nav>

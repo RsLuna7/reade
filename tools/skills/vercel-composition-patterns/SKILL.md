@@ -86,4 +86,5 @@ Each rule file contains:
 
 ## Full Compiled Document
 
-For the complete guide with all rules expanded: `AGENTS.md`
+For the complete guide with all rules expanded: `references/full-guide.md`.
+Load it only when a specific `rules/` file is not enough. Do not treat that file as always-on context.

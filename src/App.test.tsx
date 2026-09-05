@@ -311,6 +311,7 @@ beforeEach(() => {
     fuzzyAnnotationAnchoring: false,
     showHighlightCaret: false,
     expandedPaths: [],
+    treeScopePath: null,
     activeView: "reader",
     verticalWriting: false,
     annotationTool: "view",
@@ -2648,7 +2649,7 @@ describe("library MRU (plan-library-mru)", () => {
       expect(view.container.querySelector(".markdown-body")).not.toBeNull();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "library" }));
+    fireEvent.click(screen.getByTitle(/点击切换最近书库/));
     const dialog = await screen.findByRole("dialog", { name: "最近书库" });
 
     // 当前库带"当前"徽标与 aria-current;点它只收起菜单,不重扫。
@@ -2659,7 +2660,7 @@ describe("library MRU (plan-library-mru)", () => {
     expect(screen.queryByRole("dialog", { name: "最近书库" })).not.toBeInTheDocument();
 
     // 重新打开,走"选择新文件夹…"直达原目录对话框。
-    fireEvent.click(screen.getByRole("button", { name: "library" }));
+    fireEvent.click(screen.getByTitle(/点击切换最近书库/));
     fireEvent.click(
       within(await screen.findByRole("dialog", { name: "最近书库" })).getByRole("button", {
         name: /选择新文件夹/,
@@ -2807,5 +2808,69 @@ describe("topbar breadcrumb", () => {
       "title",
       `长文档库-根目录名字同样很长 / ${folder} / ${file}`,
     );
+  });
+
+  it("reveals the parent folder in the document tree when a breadcrumb crumb is clicked", async () => {
+    const relativePath = "正文/第一章/导论.md";
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library", documents: [] },
+      documents: [markdownDocument(relativePath, "导论")],
+      currentPath: relativePath,
+      currentContent: { kind: "markdown", relativePath, markdown: "# 导论\n\n正文" },
+      libraryViewMode: "shelf",
+      expandedPaths: [],
+      searchQuery: "旧",
+      motionLevel: "off",
+    });
+
+    render(<App />);
+
+    const breadcrumb = await screen.findByLabelText("当前文档路径");
+    fireEvent.click(within(breadcrumb).getByRole("button", { name: "正文" }));
+
+    expect(useReaderStore.getState().expandedPaths).toEqual(["正文"]);
+    expect(useReaderStore.getState().treeScopePath).toBe("正文");
+    expect(useReaderStore.getState().libraryViewMode).toBe("tree");
+    expect(useReaderStore.getState().searchQuery).toBe("");
+
+    fireEvent.click(within(breadcrumb).getByRole("button", { name: "第一章" }));
+    expect(useReaderStore.getState().expandedPaths).toEqual(["正文", "正文/第一章"]);
+    expect(useReaderStore.getState().treeScopePath).toBe("正文/第一章");
+  });
+});
+
+describe("folder docs panel", () => {
+  it("opens from the scope bar and lists this-level titles, not nested documents", async () => {
+    const relativePath = "正文/第一章/导论.md";
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library", documents: [] },
+      documents: [
+        markdownDocument(relativePath, "导论完整标题不应被截断"),
+        markdownDocument("正文/第一章/附录很长的名字.md", "附录这一章有一个非常完整的长标题"),
+        markdownDocument("正文/第一章/小节/隐藏.md", "嵌套文档不应出现在本层"),
+        markdownDocument("其他/无关.md", "无关"),
+      ],
+      currentPath: relativePath,
+      currentContent: { kind: "markdown", relativePath, markdown: "# 导论\n\n正文" },
+      treeScopePath: "正文/第一章",
+      libraryViewMode: "tree",
+      motionLevel: "off",
+    });
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole("button", { name: "全名列表" }));
+    const dialog = await screen.findByRole("dialog", { name: "本夹目录：第一章" });
+    expect(dialog).toBeInTheDocument();
+    expect(within(dialog).getByText("导论完整标题不应被截断")).toBeInTheDocument();
+    expect(within(dialog).getByText("附录这一章有一个非常完整的长标题")).toBeInTheDocument();
+    expect(within(dialog).getByRole("option", { name: "小节" })).toBeInTheDocument();
+    expect(within(dialog).queryByText("嵌套文档不应出现在本层")).not.toBeInTheDocument();
+    expect(within(dialog).queryByText("无关")).not.toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole("option", { name: "小节" }));
+    expect(useReaderStore.getState().treeScopePath).toBe("正文/第一章/小节");
+    expect(within(dialog).getByText("嵌套文档不应出现在本层")).toBeInTheDocument();
+    expect(within(dialog).queryByText("导论完整标题不应被截断")).not.toBeInTheDocument();
   });
 });

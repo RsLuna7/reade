@@ -3,7 +3,10 @@ import type { DocumentInfo } from "./backend";
 import {
   buildDocumentTree,
   collectDirectoryPaths,
+  directoryAncestorPaths,
+  findDirectoryNode,
   flattenDocumentsInTreeOrder,
+  isDocumentUnderDirectory,
   reconcileExpandedPaths,
 } from "./tree";
 
@@ -76,5 +79,38 @@ describe("expanded directory reconciliation", () => {
 
     expect(collectDirectoryPaths(tree)).toEqual(new Set(["正文", "附录"]));
     expect(reconcileExpandedPaths(["正文", "已删除", "正文"], tree)).toEqual(["正文"]);
+  });
+});
+
+describe("directoryAncestorPaths", () => {
+  it("lists every prefix including the target directory", () => {
+    expect(directoryAncestorPaths("正文/第一章/小节")).toEqual([
+      "正文",
+      "正文/第一章",
+      "正文/第一章/小节",
+    ]);
+  });
+
+  it("normalizes separators and ignores empty input", () => {
+    expect(directoryAncestorPaths("指南\\开始")).toEqual(["指南", "指南/开始"]);
+    expect(directoryAncestorPaths("")).toEqual([]);
+    expect(directoryAncestorPaths("///")).toEqual([]);
+  });
+});
+
+describe("findDirectoryNode and isDocumentUnderDirectory", () => {
+  it("finds nested directories and tests document membership", () => {
+    const tree = buildDocumentTree([
+      document("正文/第一章/导论.md", "导论"),
+      document("附录/索引.md", "索引"),
+    ]);
+    expect(findDirectoryNode(tree, "正文/第一章")).toMatchObject({
+      kind: "directory",
+      path: "正文/第一章",
+      name: "第一章",
+    });
+    expect(findDirectoryNode(tree, "不存在")).toBeNull();
+    expect(isDocumentUnderDirectory("正文/第一章/导论.md", "正文/第一章")).toBe(true);
+    expect(isDocumentUnderDirectory("附录/索引.md", "正文")).toBe(false);
   });
 });

@@ -132,6 +132,17 @@ describe("shelfProgressLabel", () => {
     expect(shelfProgressLabel(position, 4)).toBe("100%");
   });
 
+  it("returns 已阅 when the document was marked read", () => {
+    expect(
+      shelfProgressLabel(
+        { kind: "scroll", scrollRatio: 0.2, maxScrollRatio: 0.42, updatedAt: 1 },
+        null,
+        true,
+      ),
+    ).toBe("已阅");
+    expect(shelfProgressLabel(null, null, true)).toBe("已阅");
+  });
+
   it("returns null without a position", () => {
     expect(shelfProgressLabel(null)).toBeNull();
     expect(shelfProgressLabel(undefined, 12)).toBeNull();

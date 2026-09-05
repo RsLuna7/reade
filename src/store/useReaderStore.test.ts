@@ -32,6 +32,7 @@ import {
   TREE_LAYOUT_STORAGE_KEY,
   readTreeLayout,
 } from "../lib/treeLayout";
+import { READ_MARKS_STORAGE_KEY, readReadMarks } from "../lib/readMarks";
 
 function mockReducedMotion(matches: boolean): void {
   Object.defineProperty(window, "matchMedia", {
@@ -1331,6 +1332,96 @@ describe("document tree layout", () => {
     useReaderStore.setState({ treeLayout: {}, snapshot: null, documents: [] });
     await useReaderStore.getState().openLibrary("D:/books");
     expect(useReaderStore.getState().treeLayout[TREE_LAYOUT_ROOT]?.pinned).toEqual(["b.md"]);
+  });
+});
+
+describe("document read marks", () => {
+  const documents = [
+    {
+      relativePath: "a.md",
+      title: "Alpha",
+      size: 1,
+      modified: 1,
+      format: "markdown" as const,
+      indexStatus: "ready" as const,
+      indexError: null,
+    },
+  ];
+
+  beforeEach(() => {
+    backendMocks.openLibrary.mockReset().mockImplementation(async (rootPath) => ({
+      rootPath,
+      documents,
+    }));
+    useReaderStore.setState({
+      snapshot: null,
+      documents: [],
+      treeLayout: {},
+      readMarks: {},
+      error: null,
+    });
+  });
+
+  it("marks a document and reloads the stamp when the library opens again", async () => {
+    await useReaderStore.getState().openLibrary("D:/books");
+    useReaderStore.getState().markDocumentRead("a.md");
+    expect(useReaderStore.getState().readMarks["a.md"]).toEqual(expect.any(Number));
+    expect(readReadMarks("D:/books")["a.md"]).toEqual(expect.any(Number));
+    expect(localStorage.getItem(READ_MARKS_STORAGE_KEY)).toContain("a.md");
+
+    useReaderStore.setState({ readMarks: {}, snapshot: null, documents: [] });
+    await useReaderStore.getState().openLibrary("D:/books");
+    expect(useReaderStore.getState().readMarks["a.md"]).toEqual(expect.any(Number));
+  });
+});
+
+describe("revealInDocumentTree", () => {
+  beforeEach(() => {
+    useReaderStore.setState({
+      searchQuery: "旧查询",
+      searchResults: [
+        {
+          resultId: "1",
+          relativePath: "a.md",
+          title: "A",
+          snippet: "",
+          score: 1,
+          format: "markdown",
+          locator: null,
+        },
+      ],
+      libraryViewMode: "shelf",
+      expandedPaths: [],
+      treeReveal: null,
+    });
+  });
+
+  it("expands ancestors, switches to tree view, and clears search", () => {
+    useReaderStore.getState().revealInDocumentTree("正文/第一章");
+    const state = useReaderStore.getState();
+    expect(state.expandedPaths).toEqual(["正文", "正文/第一章"]);
+    expect(state.libraryViewMode).toBe("tree");
+    expect(state.searchQuery).toBe("");
+    expect(state.searchResults).toEqual([]);
+    expect(state.treeScopePath).toBe("正文/第一章");
+    expect(state.treeReveal).toEqual({ path: "正文/第一章", nonce: expect.any(Number) });
+  });
+
+  it("reveals the library root without expanding directories", () => {
+    useReaderStore.setState({ expandedPaths: ["正文"], treeScopePath: "正文" });
+    useReaderStore.getState().revealInDocumentTree(null);
+    const state = useReaderStore.getState();
+    expect(state.expandedPaths).toEqual(["正文"]);
+    expect(state.treeScopePath).toBeNull();
+    expect(state.treeReveal).toEqual({ path: null, nonce: expect.any(Number) });
+  });
+
+  it("bumps nonce so repeating the same path still notifies the tree", () => {
+    useReaderStore.getState().revealInDocumentTree("正文");
+    const first = useReaderStore.getState().treeReveal?.nonce;
+    useReaderStore.getState().clearTreeReveal();
+    useReaderStore.getState().revealInDocumentTree("正文");
+    expect(useReaderStore.getState().treeReveal?.nonce).not.toBe(first);
   });
 });
 

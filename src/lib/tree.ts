@@ -182,3 +182,50 @@ export function parentDirectoryPath(path: string): string | null {
   const separator = normalized.lastIndexOf("/");
   return separator < 0 ? null : normalized.slice(0, separator);
 }
+
+/**
+ * 目录路径的全部祖先（含自身），用于在文档树中展开并定位某一文件夹。
+ * 例：`正文/第一章` → `["正文", "正文/第一章"]`。
+ */
+export function directoryAncestorPaths(directoryPath: string): string[] {
+  const normalized = normalizeRelativePath(directoryPath);
+  if (!normalized) return [];
+  const segments = normalized.split("/");
+  const paths: string[] = [];
+  for (let index = 0; index < segments.length; index += 1) {
+    paths.push(segments.slice(0, index + 1).join("/"));
+  }
+  return paths;
+}
+
+/** 按相对路径查找目录节点；找不到返回 null。 */
+export function findDirectoryNode(
+  nodes: DocumentTreeNode[],
+  directoryPath: string,
+): DirectoryTreeNode | null {
+  const normalized = normalizeRelativePath(directoryPath);
+  if (!normalized) return null;
+
+  const visit = (items: DocumentTreeNode[]): DirectoryTreeNode | null => {
+    for (const item of items) {
+      if (item.kind !== "directory") continue;
+      if (item.path === normalized) return item;
+      const nested = visit(item.children);
+      if (nested) return nested;
+    }
+    return null;
+  };
+
+  return visit(nodes);
+}
+
+/** 文档是否位于某目录之下（不含目录路径本身撞名的同级文件）。 */
+export function isDocumentUnderDirectory(
+  relativePath: string,
+  directoryPath: string,
+): boolean {
+  const file = normalizeRelativePath(relativePath);
+  const directory = normalizeRelativePath(directoryPath);
+  if (!file || !directory) return false;
+  return file.startsWith(`${directory}/`);
+}
