@@ -113,3 +113,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 - `.mdx` 以安全的普通 Markdown 方式只读展示，不执行 JSX 或 import。
 - 外部链接需要用户确认后交给系统应用；远程图片默认不请求。
 - 安装包暂不签名，也不提供自动更新。
+
+## 许可证
+
+本项目以 [MIT License](LICENSE) 开源。

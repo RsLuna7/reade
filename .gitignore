@@ -22,6 +22,7 @@ artifacts/
 output/
 scratch/
 /reade.exe
+/reade.exe.old
 /uninstall.exe
 
 # Cursor editor debug logs

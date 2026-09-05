@@ -2,6 +2,11 @@
   "name": "reade",
   "private": true,
   "version": "0.2.0",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/RsLuna7/reade.git"
+  },
   "type": "module",
   "scripts": {
     "dev": "vite",
