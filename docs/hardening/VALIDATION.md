@@ -35,7 +35,7 @@
 | `cargo --version` / `rustc --version`（在 rust-toolchain.toml 下） | 0 | 解析为 1.94.0，工具链固定生效 |
 | `cargo install cargo-audit --version 0.22.2 --locked` | 0 | 本地安装成功 |
 | `cargo audit --file src-tauri/Cargo.lock --json` | 0 | 0 漏洞；17 unmaintained / 1 unsound / 1 yanked（信息级）；output/hardening/cargo-audit-baseline.json |
-| 远端 workflow 运行 | 已 push `feature/oxx` | 2026-09-06 推送 `origin/feature/oxx`（`692de0f`+）。本机 `gh` 未登录，未能 `gh pr create`。为触发 D01 设计的 PR 门禁，临时对 `feature/oxx` 增加 `on.push`（main 仍不双跑）。运行记录见 GitHub Actions。 |
+| 远端 workflow 运行 | 0 | [Verify #1](https://github.com/RsLuna7/reade/actions/runs/34037890510) `conclusion=success`（2026-09-06）。Frontend / Rust Windows（含 `dtolnay/rust-toolchain@1.94.0`）/ deps-audit（含 `taiki-e/install-action` `cargo-audit@0.22.2`）三作业全绿。本机 `gh` 未登录，PR 未开；compare：https://github.com/RsLuna7/reade/compare/main...feature/oxx |
 
 ## D10 性能基线首轮（2026-09-05，本机，5000 篇合成 MD / 141 MiB）
 

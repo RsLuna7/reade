@@ -50,7 +50,7 @@
 | clippy `-D warnings` / fmt | 0 |
 | `pnpm build` / `pnpm build:web` | 0 |
 | NSIS | `Reade_0.2.0_x64-setup.exe` SHA-256 `E0CE32736F02125CC3CA7BE58148CEE13A763D22951DA9486B7A7331E8C92F4C`；**未签名** |
-| 远端 `verify.yml` | 以 PR 首次运行为准（见 VALIDATION 更新） |
+| 远端 `verify.yml` | [run 34037890510](https://github.com/RsLuna7/reade/actions/runs/34037890510) success（含 rust-toolchain 1.94.0 与 cargo-audit 安装动作） |
 | A01–A20 | 见 VALIDATION；多项 NOT_RUN |
 
 ## 6. 未验证项与剩余风险
