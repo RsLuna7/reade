@@ -290,6 +290,6 @@ describe("IPC command name parity with Rust generate_handler", () => {
     );
 
     expect([...new Set(tsCommands)].sort()).toEqual([...new Set(rustCommands)].sort());
-    expect(new Set(tsCommands).size).toBe(57);
+    expect(new Set(tsCommands).size).toBe(59);
   });
 });

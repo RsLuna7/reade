@@ -545,20 +545,31 @@ export const useReaderStore = create<ReaderState>()(
         },
 
         applyDocumentIndexStatus: (event) => {
-          set((state) => ({
-            documents: state.documents.map((document) =>
-              document.relativePath === event.relativePath
-                ? { ...document, title: event.title, indexStatus: event.status, indexError: event.error }
-                : document,
-            ),
-            currentContent:
-              state.currentContent?.kind === "pdf" && state.currentContent.relativePath === event.relativePath
-                ? { ...state.currentContent, indexStatus: event.status, indexError: event.error }
-                : state.currentContent,
-          }));
+          set((state) => {
+            // D02: index events carry their library identity; an event from
+            // a previously open library must never update the same-named
+            // document in the current one.
+            if (state.snapshot?.rootKey !== event.libraryRoot) return {};
+            return {
+              documents: state.documents.map((document) =>
+                document.relativePath === event.relativePath
+                  ? { ...document, title: event.title, indexStatus: event.status, indexError: event.error }
+                  : document,
+              ),
+              currentContent:
+                state.currentContent?.kind === "pdf" && state.currentContent.relativePath === event.relativePath
+                  ? { ...state.currentContent, indexStatus: event.status, indexError: event.error }
+                  : state.currentContent,
+            };
+          });
         },
 
-        setIndexProgress: (indexProgress) => set({ indexProgress }),
+        setIndexProgress: (indexProgress) =>
+          set((state) =>
+            state.snapshot?.rootKey === indexProgress.libraryRoot
+              ? { indexProgress }
+              : {},
+          ),
 
         retryCurrentDocumentIndex: async () => {
           const relativePath = get().currentPath;

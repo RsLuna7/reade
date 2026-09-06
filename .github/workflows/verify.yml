@@ -1,0 +1,133 @@
+name: Verify
+
+# D01 验证门禁：
+# - pull_request：PR 变更跑前端测试/类型检查/桌面构建/Web 兼容构建 + Windows Rust 检查。
+# - workflow_call：由 deploy-pages.yml 在发布前调用，保证发布依赖同一提交的验证结果。
+# 主分支 push 的验证经由 deploy-pages.yml 的 verify 作业完成，避免同一提交重复运行。
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-${{ github.event_name == 'pull_request' && github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  frontend:
+    name: Frontend (test · typecheck · desktop build · web build compat)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm (version from package.json packageManager)
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Frontend tests
+        run: pnpm test
+
+      - name: TypeScript check
+        run: pnpm typecheck
+
+      - name: Desktop frontend build
+        run: pnpm build
+
+      # Web 封存：仅做冻结构建兼容检查，不是 Web 功能验收。
+      - name: Web build compat check
+        env:
+          READE_CONTENT_DIR: examples/demo-library
+          READE_SITE_TITLE: Reade
+        run: pnpm build:web
+
+  rust:
+    name: Rust on Windows (test · fmt · clippy)
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      # 工具链由根目录 rust-toolchain.toml 固定为 1.94.0。
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache cargo build
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: Rust tests
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml
+
+      - name: Rust format check
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust clippy
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
+
+  # D01 第 6 条：依赖审计入口。第一阶段只出报告不阻断；
+  # 例外清单与阻断策略在 2026-10-31 前评审（见 docs/hardening/TASKS.md D01）。
+  deps-audit:
+    name: Dependency audit (report-only until 2026-10-31)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v5
+
+      - name: Set up pnpm (version from package.json packageManager)
+        uses: pnpm/action-setup@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: pnpm audit (report)
+        id: pnpm_audit
+        continue-on-error: true
+        run: |
+          pnpm audit --audit-level=high --json > pnpm-audit.json || true
+          pnpm audit --audit-level=high || true
+
+      - name: Set up Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+
+      - name: Install cargo-audit (version pinned)
+        uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit@0.22.2
+
+      - name: cargo audit (report)
+        continue-on-error: true
+        run: cargo audit --file src-tauri/Cargo.lock --json > cargo-audit.json || true
+
+      - name: Upload audit reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit-reports
+          path: |
+            pnpm-audit.json
+            cargo-audit.json
+          if-no-files-found: warn

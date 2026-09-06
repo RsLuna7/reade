@@ -49,8 +49,8 @@ use crate::library::{
 };
 
 const USER_SCHEMA_VERSION: i64 = 7;
-const USER_DB_FILE: &str = "reade-user.sqlite3";
-const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
+pub(crate) const USER_DB_FILE: &str = "reade-user.sqlite3";
+pub(crate) const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
 /// Tombstoned annotations are physically purged 90 days after deletion.
 const TOMBSTONE_RETENTION_MS: u64 = 90 * 24 * 60 * 60 * 1000;
 
@@ -431,13 +431,27 @@ pub struct UserState {
     connection: Arc<Mutex<Connection>>,
 }
 
+impl std::fmt::Debug for UserState {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("UserState")
+    }
+}
+
 impl UserState {
-    pub fn new(directory: PathBuf) -> CommandResult<Self> {
-        fs::create_dir_all(&directory)
-            .map_err(|error| format!("Cannot create application data directory: {error}"))?;
+    /// `durable_directory` holds the primary user database (D04: under
+    /// `app_data_dir`, never cleared as derived cache). `legacy_cache_directory`
+    /// supplies, in order: the old cache-resident user database to migrate
+    /// from (`storage_migration.rs`) and the conversion-cache database the
+    /// v1 rescue reads from. The rescue must run before any cache rebuild —
+    /// that is why the durable database opens first in `lib.rs`.
+    pub fn new(durable_directory: PathBuf, legacy_cache_directory: PathBuf) -> CommandResult<Self> {
+        let durable = crate::storage_migration::prepare_durable_user_database(
+            &durable_directory,
+            &legacy_cache_directory,
+        )?;
         let connection = open_user_database(
-            &directory.join(USER_DB_FILE),
-            Some(&directory.join(LEGACY_CACHE_DB_FILE)),
+            &durable,
+            Some(&legacy_cache_directory.join(LEGACY_CACHE_DB_FILE)),
         )?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
@@ -1341,7 +1355,10 @@ fn lock_user<'a>(state: &'a State<'_, UserState>) -> CommandResult<MutexGuard<'a
     state.inner().lock()
 }
 
-fn open_user_database(path: &Path, legacy_cache: Option<&Path>) -> CommandResult<Connection> {
+pub(crate) fn open_user_database(
+    path: &Path,
+    legacy_cache: Option<&Path>,
+) -> CommandResult<Connection> {
     let connection = Connection::open(path)
         .map_err(|error| format!("Cannot open user data database: {error}"))?;
     initialize_user_database(connection, Some(path), legacy_cache)
@@ -3709,11 +3726,7 @@ fn excerpt_from_legacy_annotation(
     let (tone, legacy_color, created_at) = if let Some(existing) = existing {
         let incoming_tone = legacy_color_to_tone(annotation.color.as_ref());
         if incoming_tone != existing.appearance.tone {
-            (
-                incoming_tone,
-                annotation.color.clone(),
-                existing.created_at,
-            )
+            (incoming_tone, annotation.color.clone(), existing.created_at)
         } else {
             (
                 existing.appearance.tone.clone(),
@@ -6096,7 +6109,11 @@ mod tests {
     fn fresh_database_reaches_current_version_and_reopen_is_idempotent() {
         let directory = tempdir().expect("temp dir");
         {
-            let state = UserState::new(directory.path().to_path_buf()).expect("create");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("create");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -6117,7 +6134,11 @@ mod tests {
         // A fresh-install migration must not create a stray cache file.
         assert!(!directory.path().join(LEGACY_CACHE_DB_FILE).exists());
         for _ in 0..2 {
-            let state = UserState::new(directory.path().to_path_buf()).expect("reopen");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("reopen");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -6133,7 +6154,11 @@ mod tests {
         let directory = tempdir().expect("temp dir");
         let cache_path = build_legacy_cache(directory.path());
 
-        let state = UserState::new(directory.path().to_path_buf()).expect("migrate");
+        let state = UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        )
+        .expect("migrate");
         {
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
@@ -6169,7 +6194,11 @@ mod tests {
         drop(cache);
         drop(state);
 
-        let state = UserState::new(directory.path().to_path_buf()).expect("reopen");
+        let state = UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        )
+        .expect("reopen");
         let connection = locked(&state);
         assert_eq!(
             count_rows(&connection, "SELECT count(*) FROM annotations"),
@@ -6181,7 +6210,11 @@ mod tests {
     fn refuses_databases_from_newer_reade_without_wiping() {
         let directory = tempdir().expect("temp dir");
         {
-            let state = UserState::new(directory.path().to_path_buf()).expect("create");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("create");
             let connection = locked(&state);
             upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-1", "notes/a.md"))
                 .expect("insert");
@@ -6189,7 +6222,10 @@ mod tests {
                 .pragma_update(None, "user_version", 99)
                 .expect("simulate newer schema");
         }
-        let error = match UserState::new(directory.path().to_path_buf()) {
+        let error = match UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        ) {
             Ok(_) => panic!("newer schema must be refused"),
             Err(error) => error,
         };
@@ -6223,7 +6259,11 @@ mod tests {
                 .expect("mark v1");
         }
 
-        let state = UserState::new(directory.path().to_path_buf()).expect("upgrade");
+        let state = UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        )
+        .expect("upgrade");
         let connection = locked(&state);
         assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
         assert_eq!(
@@ -6317,7 +6357,11 @@ mod tests {
         let directory = tempdir().expect("temp dir");
         let now = now_millis();
         {
-            let state = UserState::new(directory.path().to_path_buf()).expect("create");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("create");
             let connection = locked(&state);
             upsert_annotation_row(&connection, ROOT, &sanitized_sample("ann-old", "a.md"))
                 .expect("insert old");
@@ -6333,7 +6377,11 @@ mod tests {
             tombstone_annotation(&connection, ROOT, "ann-fresh", now - 60_000)
                 .expect("fresh tombstone");
         }
-        let state = UserState::new(directory.path().to_path_buf()).expect("reopen");
+        let state = UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        )
+        .expect("reopen");
         let connection = locked(&state);
         assert_eq!(
             count_rows(
@@ -7021,7 +7069,11 @@ mod tests {
         }
 
         for _ in 0..2 {
-            let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("upgrade/reopen");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -7225,7 +7277,11 @@ mod tests {
         // The chain continues through v6, which materializes a suspended
         // compatibility review row but does not create an enrollment.
         for _ in 0..2 {
-            let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("upgrade/reopen");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -7325,7 +7381,11 @@ mod tests {
         // Upgrading and reopening are both idempotent: the collection
         // tables exist exactly once and every earlier table keeps its data.
         for _ in 0..2 {
-            let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("upgrade/reopen");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -7460,7 +7520,11 @@ mod tests {
         }
 
         for _ in 0..2 {
-            let state = UserState::new(directory.path().to_path_buf()).expect("upgrade/reopen");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("upgrade/reopen");
             let connection = locked(&state);
             assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
             assert_eq!(
@@ -8309,7 +8373,11 @@ mod tests {
         let directory = tempdir().expect("temp dir");
         let now = now_millis();
         {
-            let state = UserState::new(directory.path().to_path_buf()).expect("create");
+            let state = UserState::new(
+                directory.path().to_path_buf(),
+                directory.path().to_path_buf(),
+            )
+            .expect("create");
             let connection = locked(&state);
             for id in ["ann-old", "ann-fresh", "ann-live"] {
                 upsert_annotation_row(&connection, ROOT, &sanitized_sample(id, "a.md"))
@@ -8330,7 +8398,11 @@ mod tests {
                 .expect("fresh tombstone");
         }
 
-        let state = UserState::new(directory.path().to_path_buf()).expect("reopen");
+        let state = UserState::new(
+            directory.path().to_path_buf(),
+            directory.path().to_path_buf(),
+        )
+        .expect("reopen");
         let connection = locked(&state);
         // The expired tombstone and its review state are gone; the fresh
         // tombstone keeps its row so undoing the deletion restores progress;
@@ -9632,5 +9704,305 @@ mod tests {
             0,
             "v6-only writes must not touch legacy annotations"
         );
+    }
+
+    // ---- D04: 位置迁移（缓存目录 → 数据目录） ----
+
+    /// 旧缓存目录里有一个 v7 用户库（含一条摘录 + 文档指纹），数据目录为空：
+    /// 首次启动把库无损搬到数据目录，旧文件原地保留，迁移记录可复核。
+    #[test]
+    fn migrates_a_cache_resident_user_database_to_the_durable_location() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        let legacy = cache_dir.path().join(USER_DB_FILE);
+        {
+            let connection = open_user_database(&legacy, None).expect("seed legacy db");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+            let draft = sample_excerpt_draft("ex-migrate", "notes/a.md");
+            persist_excerpt(&connection, draft, 1_000);
+        }
+
+        let state = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("migrate on first launch");
+        {
+            let connection = locked(&state);
+            let excerpt = read_excerpt_row(&connection, ROOT, "ex-migrate")
+                .expect("read")
+                .expect("migrated excerpt");
+            assert_eq!(
+                excerpt.source_text,
+                sample_excerpt_draft("ex-migrate", "notes/a.md").source_text
+            );
+        }
+
+        // 旧文件原地保留（迁移不删除旧数据），迁移记录存在且指向旧库。
+        assert!(legacy.is_file(), "the old database must stay in place");
+        let record = data_dir.path().join("reade-user-location.json");
+        let record_text = fs::read_to_string(&record).expect("migration record");
+        assert!(record_text.contains(USER_DB_FILE));
+        assert!(!data_dir
+            .path()
+            .join("reade-user.sqlite3.migrating")
+            .exists());
+        assert!(!cache_dir.path().join("reade-user-migrate.lock").exists());
+    }
+
+    /// 第二次启动：旧文件仍在但未变化 → 直接使用新库，不重搬。
+    #[test]
+    fn second_launch_uses_the_durable_database_without_remigrating() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        {
+            let connection =
+                open_user_database(&cache_dir.path().join(USER_DB_FILE), None).expect("legacy");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+        }
+        let first = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("first launch");
+        drop(first);
+        let record_before =
+            fs::read(data_dir.path().join("reade-user-location.json")).expect("migration record");
+
+        let second = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("second launch");
+        drop(second);
+        let record_after =
+            fs::read(data_dir.path().join("reade-user-location.json")).expect("migration record");
+        assert_eq!(
+            record_before, record_after,
+            "a second launch must not rewrite (or redo) the migration"
+        );
+        assert!(
+            !data_dir
+                .path()
+                .join("reade-user.sqlite3.migrating")
+                .exists(),
+            "no temp file may survive a completed migration"
+        );
+    }
+
+    /// 迁移后旧库又被（旧版本程序）写入 → 拒绝启动，不自动择优。
+    #[test]
+    fn refuses_to_start_when_the_old_database_changed_after_migration() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        let legacy_path = cache_dir.path().join(USER_DB_FILE);
+        {
+            let connection = open_user_database(&legacy_path, None).expect("legacy");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+        }
+        let state = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("migrate");
+        drop(state);
+
+        // 旧库获得新写入（模拟回退到旧版本继续使用）。
+        {
+            let connection = Connection::open(&legacy_path).expect("reopen old");
+            insert_document_row(&connection, ROOT, "notes/b.md", "hash-2");
+        }
+
+        let error = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect_err("conflict must refuse to open");
+        assert!(
+            error.contains("changed after it was migrated"),
+            "unexpected error: {error}"
+        );
+    }
+
+    /// 两库都在但没有可信迁移记录（手工拷贝）→ 拒绝，保护两份数据。
+    #[test]
+    fn refuses_to_open_when_both_databases_exist_without_a_record() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        {
+            let connection =
+                open_user_database(&cache_dir.path().join(USER_DB_FILE), None).expect("legacy");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+        }
+        // 模拟用户手工把旧库拷到数据目录（没有迁移记录）。
+        fs::copy(
+            cache_dir.path().join(USER_DB_FILE),
+            data_dir.path().join(USER_DB_FILE),
+        )
+        .expect("manual copy");
+
+        let error = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect_err("must refuse");
+        assert!(error.contains("without a trusted migration record"));
+    }
+
+    /// 迁移中断留下的临时文件与陈旧锁 → 下次启动幂等地重做迁移。
+    #[test]
+    fn interrupted_migration_is_redone_on_the_next_start() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        {
+            let connection =
+                open_user_database(&cache_dir.path().join(USER_DB_FILE), None).expect("legacy");
+            let draft = sample_excerpt_draft("ex-stale", "notes/a.md");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+            persist_excerpt(&connection, draft, 1_000);
+        }
+        // 伪造一次中断：残留临时文件 + 内容已过期的锁文件。
+        fs::write(
+            data_dir.path().join("reade-user.sqlite3.migrating"),
+            b"junk",
+        )
+        .expect("stale temp");
+        fs::write(data_dir.path().join("reade-user-migrate.lock"), b"1").expect("stale lock");
+
+        let state = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("redo migration");
+        {
+            let connection = locked(&state);
+            let excerpt = read_excerpt_row(&connection, ROOT, "ex-stale")
+                .expect("read")
+                .expect("migrated after redo");
+            assert_eq!(excerpt.id, "ex-stale");
+        }
+        assert!(!data_dir
+            .path()
+            .join("reade-user.sqlite3.migrating")
+            .exists());
+        assert!(!data_dir.path().join("reade-user-migrate.lock").exists());
+    }
+
+    /// 旧库写入留在 WAL 未 checkpoint 时，VACUUM INTO 快照必须包含它们。
+    #[test]
+    fn migration_snapshot_includes_uncheckpointed_wal_commits() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        let legacy_path = cache_dir.path().join(USER_DB_FILE);
+        // 打开连接、关掉自动 checkpoint、写入后保持连接打开（WAL 不落主文件）。
+        let source = open_user_database(&legacy_path, None).expect("legacy");
+        source
+            .execute_batch("PRAGMA wal_autocheckpoint = 0;")
+            .expect("disable autocheckpoint");
+        insert_document_row(&source, ROOT, "notes/wal.md", "hash-wal");
+        let draft = sample_excerpt_draft("ex-wal", "notes/wal.md");
+        persist_excerpt(&source, draft, 1_000);
+
+        let state = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("migrate with live source");
+        {
+            let connection = locked(&state);
+            let excerpt = read_excerpt_row(&connection, ROOT, "ex-wal")
+                .expect("read")
+                .expect("WAL-committed excerpt must migrate");
+            assert_eq!(excerpt.id, "ex-wal");
+        }
+        drop(source);
+    }
+
+    /// 数据目录只读（目标不可写）→ 失败且源库完好，不产生半成品。
+    #[test]
+    fn read_only_destination_leaves_the_source_untouched() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        let legacy_path = cache_dir.path().join(USER_DB_FILE);
+        {
+            let connection = open_user_database(&legacy_path, None).expect("legacy");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+        }
+        let digest_before =
+            crate::storage_migration::tests_digest_for(&legacy_path).expect("digest before");
+
+        // 只读目录：Windows 上设置 FILE_ATTRIBUTE_READONLY 目录属性并不能
+        // 阻止创建文件，所以这里改为把"数据目录"指向一个普通文件路径，
+        // create_dir_all 必然失败。
+        let blocker = data_dir.path().join("occupied");
+        fs::write(&blocker, b"not a directory").expect("blocker file");
+
+        let error = UserState::new(blocker.clone(), cache_dir.path().to_path_buf())
+            .expect_err("read-only destination must fail");
+        assert!(
+            error.contains("Cannot create application data directory")
+                || error.contains("Not a directory")
+                || error.contains("Cannot"),
+            "unexpected error: {error}"
+        );
+        let digest_after =
+            crate::storage_migration::tests_digest_for(&legacy_path).expect("digest after");
+        assert_eq!(digest_before, digest_after, "source must stay untouched");
+        assert!(fs::read_dir(&blocker).is_err());
+    }
+
+    /// 没有旧用户库但转换缓存里有 v0 时代标注：救援链路必须在新位置正常
+    /// 运行。按 v7 既定语义（用户 2026-08-25 确认"升级清空标注"），救援
+    /// 数据最终被清空，v6-only 库以空状态落地；转换缓存文件本身不动。
+    #[test]
+    fn fresh_durable_location_runs_the_rescue_chain_and_lands_empty() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        build_legacy_cache(cache_dir.path());
+
+        let state = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("fresh durable with rescue chain");
+        {
+            let connection = locked(&state);
+            assert_eq!(user_version(&connection), USER_SCHEMA_VERSION);
+            // v1 救援 → v6 镜像 → v7 清空：现行链路的既定终点是空 v6-only。
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM annotations"),
+                0,
+                "v7 wipe clears rescued legacy rows"
+            );
+            assert_eq!(
+                count_rows(&connection, "SELECT count(*) FROM excerpts"),
+                0,
+                "v7 wipe clears v6 excerpts"
+            );
+            assert!(list_annotation_rows(&connection, ROOT, None)
+                .expect("list")
+                .is_empty());
+        }
+        // 转换缓存文件保持原样（它不是迁移的删除对象）。
+        assert!(cache_dir.path().join(LEGACY_CACHE_DB_FILE).is_file());
+    }
+
+    /// 数据目录与缓存目录解析为同一文件（目录重合）→ 不迁移不复制。
+    #[test]
+    fn same_resolved_file_is_used_directly_without_migration() {
+        let shared = tempdir().expect("shared dir");
+        {
+            let connection =
+                open_user_database(&shared.path().join(USER_DB_FILE), None).expect("db");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+        }
+        let state = UserState::new(shared.path().to_path_buf(), shared.path().to_path_buf())
+            .expect("same-dir layout opens directly");
+        {
+            let connection = locked(&state);
+            let documents = count_rows(&connection, "SELECT count(*) FROM documents");
+            assert_eq!(documents, 1, "existing rows must still be there");
+        }
+        assert!(!shared.path().join("reade-user-location.json").exists());
     }
 }

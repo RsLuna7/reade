@@ -238,11 +238,49 @@ pub struct ParsedEpub {
 
 pub fn parse_epub(bytes: &[u8], fallback_title: &str) -> Result<ParsedEpub, String> {
     inspect_epub_container(bytes)?;
-    let document = anydoc::to_document(bytes, anydoc::Format::Epub)
-        .map_err(|error| format!("EPUB 解析失败：{error}"))?;
+    let document =
+        anydoc::to_document(bytes, anydoc::Format::Epub).map_err(|error| match error {
+            // D08: anydoc 的硬限额（条目数/单条目与总量解压/XML 深度与节点/
+            // 资产总额）被触发时给出可识别的稳定文案；预算细节见
+            // anydoc::package::limits（不可配置，正常书籍远低于其下限）。
+            anydoc::ConvertError::ResourceLimit { limit, detail } => {
+                format!("EPUB 超出解析预算（RESOURCE_LIMIT）：{limit} — {detail}")
+            }
+            other => format!("EPUB 解析失败：{other}"),
+        })?;
     let mut parsed = convert_epub_document(document, fallback_title);
     apply_epub_nav_levels(bytes, &mut parsed.payload.chapters);
     Ok(parsed)
+}
+
+/// D08: 本包装层自己直接读取的 XML（container.xml/OPF/nav/ncx）的硬上限。
+/// anydoc 的限额只保护它内部的读取，这些直读必须自设上限，不能只依赖
+/// ZIP 元数据声明。
+const MAX_EPUB_XML_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Bounded copy used by the container pre-check: reads at most
+/// `MAX_EPUB_XML_BYTES + 1` bytes so an oversized entry is detectable
+/// without ever materializing it fully. `missing_error` is returned when
+/// the entry does not exist.
+fn read_bounded_xml_entry(
+    archive: &mut ZipArchive<Cursor<&[u8]>>,
+    path: &str,
+    missing_error: &str,
+) -> Result<String, String> {
+    let entry = archive
+        .by_name(path)
+        .map_err(|_| missing_error.to_owned())?;
+    let mut bytes = Vec::new();
+    entry
+        .take(MAX_EPUB_XML_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| format!("无法读取 EPUB {path}：{error}"))?;
+    if bytes.len() as u64 > MAX_EPUB_XML_BYTES {
+        return Err(format!(
+            "EPUB 超出解析预算（RESOURCE_LIMIT）：{path} 超过单文件 XML 上限（{MAX_EPUB_XML_BYTES} 字节）"
+        ));
+    }
+    String::from_utf8(bytes).map_err(|error| format!("无法解码 EPUB {path}：{error}"))
 }
 
 fn inspect_epub_container(bytes: &[u8]) -> Result<(), String> {
@@ -257,20 +295,14 @@ fn inspect_epub_container(bytes: &[u8]) -> Result<(), String> {
         }
     }
 
-    let mut container = String::new();
-    archive
-        .by_name("META-INF/container.xml")
-        .map_err(|_| "EPUB 缺少 META-INF/container.xml".to_owned())?
-        .read_to_string(&mut container)
-        .map_err(|error| format!("无法读取 EPUB container.xml：{error}"))?;
+    let container = read_bounded_xml_entry(
+        &mut archive,
+        "META-INF/container.xml",
+        "EPUB 缺少 META-INF/container.xml",
+    )?;
     let opf_path = attribute_value(&container, "full-path")
         .ok_or_else(|| "EPUB container.xml 未声明 OPF 路径".to_owned())?;
-    let mut opf = String::new();
-    archive
-        .by_name(&opf_path)
-        .map_err(|_| "EPUB 缺少 OPF 包描述".to_owned())?
-        .read_to_string(&mut opf)
-        .map_err(|error| format!("无法读取 EPUB OPF：{error}"))?;
+    let opf = read_bounded_xml_entry(&mut archive, &opf_path, "EPUB 缺少 OPF 包描述")?;
     let normalized = opf.to_ascii_lowercase();
     if normalized.contains("rendition:layout") && normalized.contains("pre-paginated") {
         return Err("暂不支持 fixed-layout EPUB".to_owned());
@@ -530,8 +562,22 @@ fn read_epub_nav_levels(bytes: &[u8]) -> Option<HashMap<String, u8>> {
 
 fn read_zip_entry(archive: &mut ZipArchive<Cursor<&[u8]>>, path: &str) -> Option<String> {
     let mut entry = archive.by_name(path).ok()?;
+    // D08：nav/ncx 是可选元数据，同样按 XML 上限有界读取；超限时视为
+    // 不存在（优雅降级到无层级目录），绝不完整解压超大条目。
     let mut bytes = Vec::new();
-    entry.read_to_end(&mut bytes).ok()?;
+    let mut chunk = [0u8; 64 * 1024];
+    let mut total: u64 = 0;
+    loop {
+        let read = entry.read(&mut chunk).ok()?;
+        if read == 0 {
+            break;
+        }
+        total += read as u64;
+        if total > MAX_EPUB_XML_BYTES {
+            return None;
+        }
+        bytes.extend_from_slice(&chunk[..read]);
+    }
     String::from_utf8(bytes).ok()
 }
 
@@ -921,5 +967,46 @@ mod tests {
         let bytes = minimal_epub(r#"<meta property="rendition:layout">pre-paginated</meta>"#);
         let error = parse_epub(&bytes, "Fixed").expect_err("fixed layout must fail");
         assert!(error.contains("fixed-layout"));
+    }
+
+    // ---- D08: 容器与解析资源预算 ----
+
+    /// OPF 超过单文件 XML 上限时，包装层的有界读取必须拒绝并给出稳定
+    /// 预算文案——绝不把超大条目完整解压进内存（anydoc 的限额只保护
+    /// 它内部的读取，container/OPF 的直读由本层自设上限）。
+    #[test]
+    fn rejects_an_oversized_opf_with_the_budget_error() {
+        let mut writer = zip::ZipWriter::new(Cursor::new(Vec::new()));
+        let options = zip::write::SimpleFileOptions::default();
+        let entries: Vec<(&str, Vec<u8>)> = vec![
+            ("mimetype", b"application/epub+zip".to_vec()),
+            (
+                "META-INF/container.xml",
+                br#"<?xml version="1.0"?><container xmlns="urn:oasis:names:tc:opendocument:xmlns:container"><rootfiles><rootfile full-path="OPS/content.opf" media-type="application/oebps-package+xml"/></rootfiles></container>"#.to_vec(),
+            ),
+            // 真实解压 5 MiB 的 OPF（超过 4 MiB 上限）。
+            ("OPS/content.opf", {
+                let mut opf = br#"<package xmlns="http://www.idpf.org/2007/opf" version="3.0"><metadata/><manifest/><spine/></package><!-- "#.to_vec();
+                opf.extend(std::iter::repeat_n(b'A', 5 * 1024 * 1024));
+                opf.extend_from_slice(b" -->");
+                opf
+            }),
+        ];
+        for (name, content) in entries {
+            writer.start_file(name, options).expect("start entry");
+            writer.write_all(&content).expect("write entry");
+        }
+        let bytes = writer.finish().expect("finish zip").into_inner();
+
+        let error = parse_epub(&bytes, "Bomb").expect_err("oversized OPF must fail");
+        assert!(error.contains("超出解析预算"), "unexpected error: {error}");
+        assert!(error.contains("RESOURCE_LIMIT"));
+    }
+
+    /// 正常图文 EPUB 在预算内照常解析（防"预算误拒正常书"）。
+    #[test]
+    fn normal_epub_still_parses_within_budgets() {
+        let parsed = parse_epub(&minimal_epub(""), "Normal").expect("parse");
+        assert_eq!(parsed.payload.chapters.len(), 1);
     }
 }

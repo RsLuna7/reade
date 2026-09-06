@@ -9,6 +9,8 @@ import {
   type AnnotationEntryKind,
   type DocumentAnnotationBundle,
   type Excerpt,
+  type ExcerptAppearance,
+  type ExcerptDraft,
   type Reflection,
   type ReviewEnrollment,
 } from "./annotationModel";
@@ -473,5 +475,317 @@ describe("callback stability", () => {
     expect(result.current.remove).toBe(initial.remove);
     expect(result.current.clearAll).toBe(initial.clearAll);
     expect(result.current.undo).toBe(initial.undo);
+  });
+});
+
+describe("mutation context protection (D03)", () => {
+  // Path-keyed server store: each document has its own v6 bundle, so tests
+  // can prove that a stale mutation lands in its own document only.
+  let bundles: Map<string, DocumentAnnotationBundle>;
+  const bundleFor = (path: string): DocumentAnnotationBundle => {
+    let bundle = bundles.get(path);
+    if (!bundle) {
+      bundle = emptyBundle();
+      bundles.set(path, bundle);
+    }
+    return bundle;
+  };
+  const excerptFrom = (annotation: Annotation): Excerpt => {
+    const migrated = migrateLegacyAnnotation(annotation);
+    if (!migrated.excerpt) throw new Error("expected an excerpt annotation");
+    return migrated.excerpt;
+  };
+  const findEntry = (id: string): { path: string; kind: AnnotationEntryKind } | null => {
+    for (const [path, bundle] of bundles) {
+      if (bundle.excerpts.some((item) => item.id === id)) return { path, kind: "excerpt" };
+      if (bundle.places.some((item) => item.id === id)) return { path, kind: "place" };
+    }
+    return null;
+  };
+
+  beforeEach(() => {
+    bundles = new Map();
+    backendMocks.listDocumentAnnotations.mockImplementation(async (path: string) => bundleFor(path));
+    backendMocks.upsertAnnotation.mockImplementation(async (annotation: Annotation) => {
+      const bundle = bundleFor(annotation.relativePath);
+      bundle.excerpts = bundle.excerpts.filter((item) => item.id !== annotation.id);
+      bundle.places = bundle.places.filter((item) => item.id !== annotation.id);
+      const migrated = migrateLegacyAnnotation(annotation);
+      if (migrated.excerpt) bundle.excerpts.unshift(migrated.excerpt);
+      if (migrated.place) bundle.places.unshift(migrated.place);
+      if (migrated.reflection) {
+        bundle.reflections = [
+          migrated.reflection,
+          ...bundle.reflections.filter((item) => item.entryId !== annotation.id),
+        ];
+      }
+      return annotation;
+    });
+    backendMocks.updateExcerptAppearance.mockImplementation(async (id: string, appearance: ExcerptAppearance) => {
+      const found = findEntry(id);
+      if (!found) throw new Error("Excerpt was not found");
+      const bundle = bundleFor(found.path);
+      const excerpt = bundle.excerpts.find((item) => item.id === id);
+      if (!excerpt) throw new Error("Excerpt was not found");
+      const updated = {
+        ...excerpt,
+        appearance: { ...appearance },
+        updatedAt: Date.now(),
+        legacyKind: appearance.style,
+        legacyColor: toneToLegacyColor(appearance.tone),
+      };
+      bundle.excerpts = bundle.excerpts.map((item) => (item.id === id ? updated : item));
+      return updated;
+    });
+    backendMocks.createExcerpt.mockImplementation(async (draft: ExcerptDraft, reflectionBody: string | null) => {
+      const bundle = bundleFor(draft.relativePath);
+      const excerpt: Excerpt = {
+        ...draft,
+        sourceRevision: null,
+        createdAt: 10,
+        updatedAt: 10,
+        deletedAt: null,
+        legacyKind: draft.appearance.style,
+        legacyColor: "yellow",
+        legacyTitle: null,
+        legacySelectedText: draft.sourceText,
+      };
+      const reflection: Reflection | null = reflectionBody
+        ? {
+            entryId: excerpt.id,
+            entryKind: "excerpt",
+            body: reflectionBody.trim(),
+            createdAt: 10,
+            updatedAt: 10,
+            deletedAt: null,
+          }
+        : null;
+      bundle.excerpts = [excerpt, ...bundle.excerpts.filter((item) => item.id !== excerpt.id)];
+      if (reflection) {
+        bundle.reflections = [
+          reflection,
+          ...bundle.reflections.filter((item) => item.entryId !== excerpt.id),
+        ];
+      }
+      return { excerpt, reflection };
+    });
+    backendMocks.deleteAnnotation.mockImplementation(async (id: string) => {
+      const found = findEntry(id);
+      if (!found) throw new Error("Annotation was not found");
+      const bundle = bundleFor(found.path);
+      bundle.excerpts = bundle.excerpts.filter((item) => item.id !== id);
+      bundle.places = bundle.places.filter((item) => item.id !== id);
+      bundle.reflections = bundle.reflections.filter((item) => item.entryId !== id);
+      bundle.reviewEnrollments = bundle.reviewEnrollments.filter((item) => item.excerptId !== id);
+    });
+    backendMocks.clearDocumentAnnotations.mockImplementation(async (path: string) => {
+      const snapshot = bundleFor(path);
+      bundles.set(path, emptyBundle());
+      return snapshot;
+    });
+    backendMocks.upsertReflection.mockImplementation(async (entryId: string, entryKind: AnnotationEntryKind, body: string) => {
+      const found = findEntry(entryId);
+      const bundle = bundleFor(found?.path ?? "docs/a.md");
+      const reflection: Reflection = {
+        entryId,
+        entryKind,
+        body: body.trim(),
+        createdAt: 20,
+        updatedAt: 20,
+        deletedAt: null,
+      };
+      bundle.reflections = [
+        reflection,
+        ...bundle.reflections.filter((item) => item.entryId !== entryId),
+      ];
+      return reflection;
+    });
+    backendMocks.setReviewEnrollment.mockImplementation(async (excerptId: string, enabled: boolean) => {
+      const found = findEntry(excerptId);
+      if (!found) throw new Error("Excerpt was not found");
+      const bundle = bundleFor(found.path);
+      if (!enabled) {
+        bundle.reviewEnrollments = bundle.reviewEnrollments.filter(
+          (item) => item.excerptId !== excerptId,
+        );
+        return null;
+      }
+      const enrollment: ReviewEnrollment = {
+        excerptId,
+        dueAt: 100,
+        suspended: false,
+        box: 0,
+        lastReviewedAt: null,
+        totalReviews: 0,
+        enrolledAt: 100,
+        updatedAt: 100,
+        deletedAt: null,
+      };
+      bundle.reviewEnrollments = [
+        enrollment,
+        ...bundle.reviewEnrollments.filter((item) => item.excerptId !== excerptId),
+      ];
+      return enrollment;
+    });
+  });
+
+  function makeDraft(id: string, relativePath: string): ExcerptDraft {
+    return {
+      id,
+      relativePath,
+      sourceText: "quote",
+      anchor: {
+        format: "markdown",
+        quote: { exact: "quote", prefix: "", suffix: "" },
+        headingId: null,
+      },
+      appearance: { style: "highlight", tone: "sand" },
+      sortIndex: "M|00000|00000000",
+    };
+  }
+
+  it("keeps a slow A excerpt out of B's bundle and undo stack", async () => {
+    bundleFor("docs/a.md").excerpts.push(
+      excerptFrom(makeAnnotation("a1", { relativePath: "docs/a.md" })),
+    );
+    bundleFor("docs/b.md").excerpts.push(
+      excerptFrom(makeAnnotation("b1", { relativePath: "docs/b.md" })),
+    );
+    const slowCreate = deferred<{ excerpt: Excerpt; reflection: Reflection | null }>();
+    backendMocks.createExcerpt.mockImplementationOnce(() => slowCreate.promise);
+
+    const { result, rerender } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let capture!: Promise<unknown>;
+    act(() => {
+      capture = result.current.saveExcerpt(makeDraft("a2", "docs/a.md"), null);
+    });
+    rerender({ path: "docs/b.md" });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["b1"]);
+    expect(result.current.canUndo).toBe(false);
+
+    await act(async () => {
+      slowCreate.resolve({
+        excerpt: { ...makeDraft("a2", "docs/a.md") } as Excerpt,
+        reflection: null,
+      });
+      await capture;
+    });
+    // B's view is untouched: no A excerpt injected, no undo entry leaking.
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["b1"]);
+    expect(result.current.canUndo).toBe(false);
+  });
+
+  it("does not clear document B when A's clear resolves after a switch", async () => {
+    bundleFor("docs/a.md").excerpts.push(
+      excerptFrom(makeAnnotation("a1", { relativePath: "docs/a.md" })),
+    );
+    bundleFor("docs/b.md").excerpts.push(
+      excerptFrom(makeAnnotation("b1", { relativePath: "docs/b.md" })),
+    );
+    let resolveClear!: (snapshot: DocumentAnnotationBundle) => void;
+    backendMocks.clearDocumentAnnotations.mockImplementationOnce(
+      (path: string) =>
+        new Promise<DocumentAnnotationBundle>((resolve) => {
+          resolveClear = (snapshot) => {
+            bundles.set(path, emptyBundle());
+            resolve(snapshot);
+          };
+        }),
+    );
+
+    const { result, rerender } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    let clearing!: Promise<void>;
+    act(() => {
+      clearing = result.current.clearAll();
+    });
+    rerender({ path: "docs/b.md" });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      resolveClear(bundleFor("docs/a.md"));
+      await clearing;
+    });
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["b1"]);
+    // A itself was cleared on the backend; B's server bundle is intact.
+    expect(bundles.get("docs/b.md")?.excerpts.map((item) => item.id)).toEqual(["b1"]);
+  });
+
+  it("does not drop a new excerpt when a stale reload resolves after it", async () => {
+    const staleReload = deferred<DocumentAnnotationBundle>();
+    backendMocks.listDocumentAnnotations
+      .mockImplementationOnce(async (path: string) => bundleFor(path))
+      .mockImplementationOnce(() => staleReload.promise)
+      .mockImplementation(async (path: string) => bundleFor(path));
+
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let manual!: Promise<void>;
+    act(() => {
+      manual = result.current.reload();
+    });
+    await act(async () => {
+      await result.current.saveExcerpt(makeDraft("a2", "docs/a.md"), null);
+    });
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["a2"]);
+
+    // The stale reload only ever sees the pre-mutation server state.
+    await act(async () => {
+      staleReload.resolve(emptyBundle());
+      await manual;
+    });
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["a2"]);
+  });
+
+  it("keeps concurrent note and color updates on the same mark", async () => {
+    bundleFor("docs/a.md").excerpts.push(
+      excerptFrom(makeAnnotation("a1", { relativePath: "docs/a.md" })),
+    );
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const annotation = result.current.annotations.find((item) => item.id === "a1")!;
+
+    await act(async () => {
+      await Promise.all([
+        result.current.updateNote({ ...annotation }, "later thought"),
+        result.current.updateColor({ ...annotation }, "blue"),
+      ]);
+    });
+    const updated = result.current.annotations.find((item) => item.id === "a1");
+    expect(updated?.color).toBe("blue");
+    const reflection = result.current.bundle.reflections.find(
+      (item) => item.entryId === "a1",
+    );
+    expect(reflection?.body).toBe("later thought");
+    // Server side converged to the same value ("blue" maps to tone "slate").
+    const serverExcerpt = bundleFor("docs/a.md").excerpts.find((item) => item.id === "a1");
+    expect(serverExcerpt?.appearance.tone).toBe("slate");
+  });
+
+  it("applies a stale undo only to its own document and keeps B intact", async () => {
+    bundleFor("docs/a.md").excerpts.push(
+      excerptFrom(makeAnnotation("a1", { relativePath: "docs/a.md" })),
+    );
+    bundleFor("docs/b.md").excerpts.push(
+      excerptFrom(makeAnnotation("b1", { relativePath: "docs/b.md" })),
+    );
+    const { result, rerender } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    let undoing!: Promise<boolean>;
+    act(() => {
+      undoing = result.current.undo();
+    });
+    rerender({ path: "docs/b.md" });
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await undoing;
+    });
+    // B keeps its entry and has no undo entry; the backend delete hit A's row.
+    expect(result.current.annotations.map((item) => item.id)).toEqual(["b1"]);
+    expect(result.current.canUndo).toBe(false);
   });
 });

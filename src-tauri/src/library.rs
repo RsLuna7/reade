@@ -3,7 +3,10 @@ use std::{
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
     path::{Component, Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc, Mutex,
+    },
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
@@ -94,6 +97,17 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
 
 pub(crate) type CommandResult<T> = Result<T, String>;
 
+/// Result of `open_library` / `refresh_library` (D02): the scanned
+/// documents plus the backend-normalized library identity the frontend
+/// uses to filter stale events. `root_key` is `normalize_root(canonical)`,
+/// independent of the user-typed path.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryOpenResult {
+    pub root_key: String,
+    pub documents: Vec<DocumentInfo>,
+}
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentInfo {
@@ -163,6 +177,10 @@ pub struct AssetData {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct IndexProgress {
+    /// Normalized identity of the library this progress belongs to, so the
+    /// frontend can drop progress emitted for a library it has already
+    /// switched away from (D02: events must carry their origin context).
+    library_root: String,
     total: usize,
     completed: usize,
     ready: usize,
@@ -173,6 +191,7 @@ struct IndexProgress {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct DocumentIndexEvent {
+    library_root: String,
     relative_path: String,
     title: String,
     status: IndexStatus,
@@ -180,48 +199,104 @@ struct DocumentIndexEvent {
 }
 
 struct OpenEpubAssets {
-    relative_path: String,
     size: u64,
     modified: u64,
     assets: Vec<(String, Vec<u8>)>,
+    /// Sum of asset byte lengths, for the LRU budget below.
+    bytes_total: u64,
+    /// Monotonic last-use stamp (`epub_asset_stamp` counter); eviction input.
+    last_used: u64,
 }
+
+/// D07: EPUB asset sessions are keyed by (library identity, document path)
+/// instead of a single global slot, so main/secondary panes, multiple books
+/// and same-named documents in different libraries each hold their own
+/// immutable asset set. Same-path dual panes share one session (the asset
+/// bytes are immutable for a given file version).
+type EpubAssetSessions = HashMap<(String, String), OpenEpubAssets>;
+
+/// D07 初始预算（计划 §4 D07.3 建议值；最终由 D10 样本校准）：全部活跃
+/// EPUB 资产会话的字节总预算。超限时按 last_used 淘汰最久未用的会话；
+/// 被淘汰会话的后续读取返回"重新打开"错误（明确降级，不静默卡死）。
+const EPUB_ASSET_BUDGET_BYTES: u64 = 128 * 1024 * 1024;
 
 struct LibraryState {
     root: Option<PathBuf>,
+    /// Normalized identity of the open library (`normalize_root` of `root`).
+    /// Events and open results carry this so the frontend can filter stale
+    /// context without string-comparing user-typed paths.
+    root_key: String,
     documents: Vec<DocumentInfo>,
     cache: Connection,
     watcher: Option<RecommendedWatcher>,
+    /// Scan revision: bumped by every successful open and every refresh.
     generation: u64,
-    open_epub: Option<OpenEpubAssets>,
+    /// Open-session identity: bumped ONLY by successful library opens, so
+    /// A→B→A yields three distinct sessions while a same-library refresh
+    /// keeps the reading session valid (plan §3.1).
+    open_session: u64,
+    /// D07: per-document EPUB asset sessions (see `EpubAssetSessions`).
+    open_epub_assets: EpubAssetSessions,
+    /// Monotonic stamp for LRU bookkeeping on `open_epub_assets`.
+    epub_asset_stamp: u64,
 }
+
+/// Ticket counter for in-flight `open_library` requests. A commit whose
+/// ticket is no longer the newest must not overwrite the root committed by
+/// a later open (A slow + B fast must not leave the backend rooted at A).
+static OPEN_REQUEST: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Clone)]
 pub struct AppState {
     inner: Arc<Mutex<LibraryState>>,
     index_gate: Arc<Mutex<()>>,
+    /// D09: on-disk cache path (None for in-memory test states). Lets scans
+    /// run on a dedicated connection outside the state lock.
+    cache_path: Option<PathBuf>,
 }
 
 impl AppState {
     pub fn new(cache_directory: PathBuf) -> CommandResult<Self> {
         fs::create_dir_all(&cache_directory)
             .map_err(|error| format!("Cannot create application cache directory: {error}"))?;
-        let connection = open_cache_connection(&cache_directory.join("reade-cache.sqlite3"))?;
-        Self::from_connection(connection)
+        let cache_path = cache_directory.join("reade-cache.sqlite3");
+        let connection = open_cache_connection(&cache_path)?;
+        Self::from_connection(connection, Some(cache_path))
     }
 
-    fn from_connection(connection: Connection) -> CommandResult<Self> {
+    fn from_connection(connection: Connection, cache_path: Option<PathBuf>) -> CommandResult<Self> {
         initialize_cache(&connection)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(LibraryState {
                 root: None,
+                root_key: String::new(),
                 documents: Vec::new(),
                 cache: connection,
                 watcher: None,
                 generation: 0,
-                open_epub: None,
+                open_session: 0,
+                open_epub_assets: HashMap::new(),
+                epub_asset_stamp: 0,
             })),
             index_gate: Arc::new(Mutex::new(())),
+            cache_path,
         })
+    }
+
+    /// D09: a short-lived connection for out-of-lock scans. WAL lets the
+    /// scan's reads and cache-row clears coexist with the main connection's
+    /// short background-index transactions; busy_timeout resolves writer
+    /// overlaps deterministically instead of failing fast.
+    fn scan_connection(&self) -> CommandResult<Connection> {
+        let path = self
+            .cache_path
+            .as_ref()
+            .ok_or_else(|| "Document cache path is unavailable for scanning".to_owned())?;
+        let connection = open_cache_connection(path)?;
+        connection
+            .busy_timeout(std::time::Duration::from_secs(5))
+            .map_err(|error| format!("Cannot configure scan busy timeout: {error}"))?;
+        Ok(connection)
     }
 
     #[cfg(test)]
@@ -229,7 +304,13 @@ impl AppState {
         Self::from_connection(
             Connection::open_in_memory()
                 .map_err(|error| format!("Cannot create test cache: {error}"))?,
+            None,
         )
+    }
+
+    #[cfg(test)]
+    fn file_backed(directory: &Path) -> CommandResult<Self> {
+        Self::new(directory.to_path_buf())
     }
 }
 
@@ -302,26 +383,67 @@ pub async fn open_library(
     app: AppHandle,
     state: State<'_, AppState>,
     user: State<'_, UserState>,
-) -> CommandResult<Vec<DocumentInfo>> {
+) -> CommandResult<LibraryOpenResult> {
+    // Take the open ticket BEFORE any blocking work: a later open that
+    // finishes first wins the commit, and this request's commit must fail
+    // once a newer ticket exists (D02: opening A then B cannot commit A last).
+    let request = OPEN_REQUEST.fetch_add(1, Ordering::SeqCst) + 1;
     let root = run_blocking(move || canonical_library_root(Path::new(&root_path))).await?;
-    let documents = {
-        let mut current = lock_state(&state)?;
-        scan_documents(&root, &mut current.cache)?
-    };
+    // D09: the filesystem walk runs on the blocking pool against a dedicated
+    // cache connection — it holds neither the async runtime thread nor the
+    // state lock, so searches and reads stay responsive during a scan.
+    let scan_root = root.clone();
+    let scan_state = state.inner().clone();
+    let documents = run_blocking(move || {
+        let mut scan_cache = scan_state.scan_connection()?;
+        scan_documents(&scan_root, &mut scan_cache)
+    })
+    .await?;
     record_scan_fingerprints(&user, &root, &documents).await;
     let watcher = create_watcher(&root, app.clone())?;
-    let generation = {
-        let mut current = lock_state(&state)?;
-        current.generation = current.generation.wrapping_add(1);
-        current.root = Some(root);
-        current.documents = documents;
-        current.watcher = Some(watcher);
-        current.open_epub = None;
-        current.generation
-    };
+    let (root_key, generation) =
+        commit_open_library(&state, root.clone(), documents, Some(watcher), request)?;
     let snapshot = lock_state(&state)?.documents.clone();
-    spawn_background_index(app, generation, snapshot.clone());
-    Ok(snapshot)
+    spawn_background_index(app, root_key.clone(), generation, snapshot.clone());
+    Ok(LibraryOpenResult {
+        root_key,
+        documents: snapshot,
+    })
+}
+
+/// Commits a completed open for `root`. Fails when a newer `open_library`
+/// request has started since this one took its ticket: the stale open must
+/// not repoint the backend root at the old library (its watcher is dropped
+/// with the failed commit). On success, bumps both the scan revision
+/// (`generation`) and the open-session identity, and returns the new
+/// `root_key` plus `generation` for follow-up indexing.
+fn commit_open_library(
+    state: &AppState,
+    root: PathBuf,
+    documents: Vec<DocumentInfo>,
+    watcher: Option<RecommendedWatcher>,
+    request: u64,
+) -> CommandResult<(String, u64)> {
+    let mut current = state
+        .inner
+        .lock()
+        .map_err(|_| "Library state lock was poisoned".to_owned())?;
+    if OPEN_REQUEST.load(Ordering::SeqCst) != request {
+        return Err(
+            "A newer open_library request superseded this open; ignore the stale result".to_owned(),
+        );
+    }
+    let root_key = normalize_root(&root);
+    current.generation = current.generation.wrapping_add(1);
+    current.open_session = current.open_session.wrapping_add(1);
+    current.root = Some(root);
+    current.root_key = root_key.clone();
+    current.documents = documents;
+    current.watcher = watcher;
+    // A library switch invalidates every EPUB asset session of the old
+    // library (D07: sessions are keyed by library identity).
+    current.open_epub_assets.clear();
+    Ok((root_key, current.generation))
 }
 
 /// Read-only existence probe for the recent-libraries list
@@ -343,32 +465,37 @@ pub async fn refresh_library(
     app: AppHandle,
     state: State<'_, AppState>,
     user: State<'_, UserState>,
-) -> CommandResult<Vec<DocumentInfo>> {
+) -> CommandResult<LibraryOpenResult> {
     let root = current_root(&state)?;
     let scan_root = root.clone();
     let app_state = state.inner().clone();
+    // D09: scan on the blocking pool against a dedicated connection, same
+    // as open_library — the state lock is only taken to publish the result.
     let documents = run_blocking(move || {
-        let mut current = app_state
-            .inner
-            .lock()
-            .map_err(|_| "Library state lock was poisoned".to_owned())?;
-        scan_documents(&scan_root, &mut current.cache)
+        let mut scan_cache = app_state.scan_connection()?;
+        scan_documents(&scan_root, &mut scan_cache)
     })
     .await?;
     record_scan_fingerprints(&user, &root, &documents).await;
-    let generation = {
+    let (root_key, generation) = {
         let mut current = lock_state(&state)?;
         if current.root.as_ref() != Some(&root) {
             return Err("The library changed while it was being refreshed; retry".to_owned());
         }
+        // A refresh keeps the open-session identity: same-library scans must
+        // not invalidate still-valid reading contexts (plan §3.1). EPUB
+        // asset sessions also stay; a changed file fails its size/modified
+        // check on the next read and is dropped then (D07).
         current.generation = current.generation.wrapping_add(1);
         current.documents = documents;
-        current.open_epub = None;
-        current.generation
+        (current.root_key.clone(), current.generation)
     };
     let snapshot = lock_state(&state)?.documents.clone();
-    spawn_background_index(app, generation, snapshot.clone());
-    Ok(snapshot)
+    spawn_background_index(app, root_key.clone(), generation, snapshot.clone());
+    Ok(LibraryOpenResult {
+        root_key,
+        documents: snapshot,
+    })
 }
 
 /// Opens the system file manager and selects a library file or folder.
@@ -399,9 +526,10 @@ pub async fn open_document(
     let path = resolve_existing_in_root(&root, &relative_path)?;
     let format =
         DocumentFormat::from_path(&path).ok_or_else(|| "Unsupported document format".to_owned())?;
-    if format != DocumentFormat::Epub {
-        lock_state(&state)?.open_epub = None;
-    }
+    // D07: opening a Markdown/PDF no longer clears EPUB asset sessions —
+    // a secondary-pane EPUB keeps its images while the main pane reads
+    // something else. Sessions are keyed per document and expire on their
+    // own size/modified check.
     match format {
         DocumentFormat::Markdown | DocumentFormat::Mdx => {
             let markdown = run_blocking(move || {
@@ -431,6 +559,7 @@ pub async fn open_document(
                 index_error: info.as_ref().and_then(|value| value.index_error.clone()),
             };
             let generation = current.generation;
+            let root_key = current.root_key.clone();
             drop(current);
             if let Some(document) = info.filter(|value| {
                 matches!(
@@ -438,7 +567,7 @@ pub async fn open_document(
                     IndexStatus::Pending | IndexStatus::Failed
                 )
             }) {
-                spawn_background_index(app, generation, vec![document]);
+                spawn_background_index(app, root_key, generation, vec![document]);
             }
             Ok(content)
         }
@@ -483,28 +612,89 @@ pub async fn open_document(
                     .collect(),
                 links: Vec::new(),
             };
-            {
-                let mut current = lock_state(&state)?;
-                let document = current
-                    .documents
-                    .iter()
-                    .find(|document| document.relative_path == relative_path)
-                    .cloned()
-                    .ok_or_else(|| "Document is not in the current library".to_owned())?;
-                store_index_result(&mut current.cache, &root, &document, &indexed)?;
-                update_document_status(&mut current, &relative_path, &indexed);
-                current.open_epub = Some(OpenEpubAssets {
-                    relative_path: relative_path.clone(),
-                    size: document.size,
-                    modified: document.modified,
-                    assets: parsed.asset_bytes,
-                });
+            let committed = commit_epub_open_result(
+                state.inner(),
+                &root,
+                &relative_path,
+                &indexed,
+                parsed.asset_bytes,
+            )?;
+            if committed {
+                emit_document_status(&app, &normalize_root(&root), &relative_path, &indexed);
             }
-            emit_document_status(&app, &relative_path, &indexed);
             Ok(DocumentContent::Epub {
                 relative_path,
                 document: parsed.payload,
             })
+        }
+    }
+}
+
+/// Applies a finished EPUB parse to the open library (state writes + cache
+/// index). Returns `false` when the library switched while the parse was in
+/// flight: the stale result must not mutate the new library's documents,
+/// status, or single EPUB asset cache (D02). The caller only emits the
+/// status event when this returns `true`.
+fn commit_epub_open_result(
+    state: &AppState,
+    captured_root: &Path,
+    relative_path: &str,
+    indexed: &IndexedDocument,
+    assets: Vec<(String, Vec<u8>)>,
+) -> CommandResult<bool> {
+    let mut current = state
+        .inner
+        .lock()
+        .map_err(|_| "Library state lock was poisoned".to_owned())?;
+    if current.root.as_ref() != Some(&captured_root.to_path_buf()) {
+        return Ok(false);
+    }
+    let document = current
+        .documents
+        .iter()
+        .find(|document| document.relative_path == relative_path)
+        .cloned()
+        .ok_or_else(|| "Document is not in the current library".to_owned())?;
+    store_index_result(&mut current.cache, captured_root, &document, indexed)?;
+    update_document_status(&mut current, relative_path, indexed);
+    // D07: register this document's asset session under (library, path).
+    current.epub_asset_stamp += 1;
+    let stamp = current.epub_asset_stamp;
+    let root_key = current.root_key.clone();
+    let bytes_total = assets.iter().map(|(_, bytes)| bytes.len() as u64).sum();
+    current.open_epub_assets.insert(
+        (root_key, relative_path.to_owned()),
+        OpenEpubAssets {
+            size: document.size,
+            modified: document.modified,
+            assets,
+            bytes_total,
+            last_used: stamp,
+        },
+    );
+    enforce_epub_asset_budget(&mut current);
+    Ok(true)
+}
+
+/// D07: keeps the total bytes of live EPUB asset sessions within
+/// `EPUB_ASSET_BUDGET_BYTES`, evicting least-recently-used sessions first.
+/// An evicted session fails its next asset read with a "reopen" error —
+/// explicit degradation instead of unbounded memory or silent corruption.
+fn enforce_epub_asset_budget(current: &mut LibraryState) {
+    let mut total: u64 = current
+        .open_epub_assets
+        .values()
+        .map(|s| s.bytes_total)
+        .sum();
+    while total > EPUB_ASSET_BUDGET_BYTES && current.open_epub_assets.len() > 1 {
+        let victim = current
+            .open_epub_assets
+            .iter()
+            .min_by_key(|(_, session)| session.last_used)
+            .map(|(key, _)| key.clone());
+        let Some(key) = victim else { break };
+        if let Some(removed) = current.open_epub_assets.remove(&key) {
+            total = total.saturating_sub(removed.bytes_total);
         }
     }
 }
@@ -521,11 +711,15 @@ pub async fn read_document_range(
             "Range length must be between 1 and {MAX_RANGE_BYTES} bytes"
         ));
     }
-    let root = current_root(&state)?;
-    run_blocking(move || {
-        read_pdf_range_from_root(&root, &relative_path, offset, length).map(Response::new)
-    })
-    .await
+    // Root and session are captured atomically: the read always uses the
+    // captured root, and a library switch after the read fails the request
+    // instead of delivering old-library bytes into the new context (D02).
+    let (root, open_session) = current_root_and_session(&state)?;
+    let bytes =
+        run_blocking(move || read_pdf_range_from_root(&root, &relative_path, offset, length))
+            .await?;
+    ensure_same_open_session(&state, open_session)?;
+    Ok(Response::new(bytes))
 }
 
 fn read_pdf_range_from_root(
@@ -547,6 +741,14 @@ fn read_pdf_range_from_root(
         fs::metadata(&path).map_err(|error| format!("Cannot inspect PDF document: {error}"))?;
     if offset >= metadata.len() {
         return Err("Range starts past the end of the PDF".to_owned());
+    }
+    // D06: legitimate requests stay within the size captured at open time
+    // (the transport length). A request crossing EOF means the file shrank
+    // since the document was opened — fail with a stable error instead of
+    // returning a silently truncated chunk that PDF.js would treat as
+    // complete data.
+    if offset.saturating_add(length) > metadata.len() {
+        return Err("The PDF file changed while it was being read; reopen the document".to_owned());
     }
     let read_length = length.min(metadata.len() - offset) as usize;
     let mut file =
@@ -597,6 +799,13 @@ pub async fn read_pdf_reading_mode(
         .await?;
         {
             let mut current = lock_state(&state)?;
+            if current.root.as_ref() != Some(&root) {
+                // The library switched while indexing: the new library's
+                // documents/status must not be touched by the stale result.
+                return Err(
+                    "The library changed while the PDF was being indexed; reopen it".to_owned(),
+                );
+            }
             let stored_document = current
                 .documents
                 .iter()
@@ -606,7 +815,7 @@ pub async fn read_pdf_reading_mode(
             store_index_result(&mut current.cache, &root, &stored_document, &indexed)?;
             update_document_status(&mut current, &relative_path, &indexed);
         }
-        emit_document_status(&app, &relative_path, &indexed);
+        emit_document_status(&app, &normalize_root(&root), &relative_path, &indexed);
     }
 
     let current = lock_state(&state)?;
@@ -619,28 +828,53 @@ pub async fn read_epub_asset(
     asset_id: usize,
     state: State<'_, AppState>,
 ) -> CommandResult<Response> {
-    let root = current_root(&state)?;
+    // Capture root + session atomically so a same-named EPUB in another
+    // library can never satisfy this request (D02). The session re-check
+    // below rejects assets resolved before the user switched libraries.
+    let (root, open_session) = current_root_and_session(&state)?;
     let path = resolve_existing_in_root(&root, &relative_path)?;
     let metadata =
         fs::metadata(&path).map_err(|error| format!("Cannot inspect EPUB document: {error}"))?;
-    let current = lock_state(&state)?;
-    let open = current
-        .open_epub
-        .as_ref()
-        .filter(|open| {
-            open.relative_path == relative_path
-                && open.size == metadata.len()
-                && open.modified == modified_millis(&metadata)
-        })
-        .ok_or_else(|| "EPUB assets are no longer active; reopen the document".to_owned())?;
-    let (media_type, bytes) = open
-        .assets
-        .get(asset_id)
-        .ok_or_else(|| "EPUB asset does not exist".to_owned())?;
-    if !allowed_epub_asset(media_type) {
-        return Err(format!("EPUB asset type is blocked: {media_type}"));
+    let mut current = lock_state(&state)?;
+    if current.open_session != open_session {
+        // Same guard as ensure_same_open_session, inlined: a second lock
+        // acquisition here would deadlock on the non-reentrant mutex.
+        return Err("The library changed while the document was being read; reopen it".to_owned());
     }
-    Ok(Response::new(bytes.clone()))
+    // D07: the asset session is looked up per (library, document). A stale
+    // session (file changed on disk) is dropped so a later reopen re-reads
+    // the fresh bytes instead of failing forever.
+    let session_key = (current.root_key.clone(), relative_path.clone());
+    let stale = current
+        .open_epub_assets
+        .get(&session_key)
+        .is_some_and(|open| {
+            open.size != metadata.len() || open.modified != modified_millis(&metadata)
+        });
+    if stale {
+        current.open_epub_assets.remove(&session_key);
+    }
+    let payload: (String, Vec<u8>) = {
+        let open = current
+            .open_epub_assets
+            .get(&session_key)
+            .ok_or_else(|| "EPUB assets are no longer active; reopen the document".to_owned())?;
+        let (media_type, bytes) = open
+            .assets
+            .get(asset_id)
+            .ok_or_else(|| "EPUB asset does not exist".to_owned())?;
+        if !allowed_epub_asset(media_type) {
+            return Err(format!("EPUB asset type is blocked: {media_type}"));
+        }
+        (media_type.clone(), bytes.clone())
+    };
+    // Touch for LRU bookkeeping (after the immutable borrow ends).
+    current.epub_asset_stamp += 1;
+    let stamp = current.epub_asset_stamp;
+    if let Some(session) = current.open_epub_assets.get_mut(&session_key) {
+        session.last_used = stamp;
+    }
+    Ok(Response::new(payload.1))
 }
 
 #[tauri::command]
@@ -1593,13 +1827,15 @@ pub async fn retry_document_index(
         document.clone()
     };
     let generation = lock_state(&state)?.generation;
-    spawn_background_index(app, generation, vec![document]);
+    let root_key = lock_state(&state)?.root_key.clone();
+    spawn_background_index(app, root_key, generation, vec![document]);
     Ok(())
 }
 
 #[tauri::command]
 pub fn clear_conversion_cache(app: AppHandle, state: State<'_, AppState>) -> CommandResult<()> {
     let generation;
+    let root_key;
     let documents;
     {
         let mut current = lock_state(&state)?;
@@ -1608,11 +1844,12 @@ pub fn clear_conversion_cache(app: AppHandle, state: State<'_, AppState>) -> Com
             document.index_status = IndexStatus::Pending;
             document.index_error = None;
         }
-        current.open_epub = None;
+        current.open_epub_assets.clear();
         generation = current.generation;
+        root_key = current.root_key.clone();
         documents = current.documents.clone();
     }
-    spawn_background_index(app, generation, documents);
+    spawn_background_index(app, root_key, generation, documents);
     Ok(())
 }
 
@@ -1656,11 +1893,16 @@ async fn record_scan_fingerprints(
     }
 }
 
-fn spawn_background_index(app: AppHandle, generation: u64, documents: Vec<DocumentInfo>) {
+fn spawn_background_index(
+    app: AppHandle,
+    root_key: String,
+    generation: u64,
+    documents: Vec<DocumentInfo>,
+) {
     tauri::async_runtime::spawn(async move {
         let worker_app = app.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || {
-            index_documents_background(worker_app, generation, documents)
+            index_documents_background(worker_app, root_key, generation, documents)
         })
         .await;
     });
@@ -1668,11 +1910,13 @@ fn spawn_background_index(app: AppHandle, generation: u64, documents: Vec<Docume
 
 fn index_documents_background(
     app: AppHandle,
+    root_key: String,
     generation: u64,
     documents: Vec<DocumentInfo>,
 ) -> CommandResult<()> {
     let total = documents.len();
     let mut progress = IndexProgress {
+        library_root: root_key,
         total,
         completed: 0,
         ready: 0,
@@ -1729,7 +1973,12 @@ fn index_documents_background(
             continue;
         }
 
-        set_document_indexing(&app, &state, &document.relative_path)?;
+        set_document_indexing(
+            &app,
+            &state,
+            &progress.library_root,
+            &document.relative_path,
+        )?;
         let path = match resolve_existing_in_root(&root, &document.relative_path) {
             Ok(path) => path,
             Err(error) => {
@@ -1774,6 +2023,7 @@ fn index_documents_background(
 fn set_document_indexing(
     app: &AppHandle,
     state: &State<'_, AppState>,
+    library_root: &str,
     relative_path: &str,
 ) -> CommandResult<()> {
     let title = {
@@ -1792,6 +2042,7 @@ fn set_document_indexing(
     let _ = app.emit(
         "document-index-status",
         DocumentIndexEvent {
+            library_root: library_root.to_owned(),
             relative_path: relative_path.to_owned(),
             title,
             status: IndexStatus::Indexing,
@@ -1816,7 +2067,7 @@ fn finish_background_document(
     if !stored {
         return Ok(false);
     }
-    emit_document_status(app, &document.relative_path, indexed);
+    emit_document_status(app, &normalize_root(root), &document.relative_path, indexed);
     Ok(true)
 }
 
@@ -1846,10 +2097,16 @@ fn record_progress(progress: &mut IndexProgress, status: IndexStatus) {
     }
 }
 
-fn emit_document_status(app: &AppHandle, relative_path: &str, indexed: &IndexedDocument) {
+fn emit_document_status(
+    app: &AppHandle,
+    library_root: &str,
+    relative_path: &str,
+    indexed: &IndexedDocument,
+) {
     let _ = app.emit(
         "document-index-status",
         DocumentIndexEvent {
+            library_root: library_root.to_owned(),
             relative_path: relative_path.to_owned(),
             title: indexed.title.clone(),
             status: indexed.status,
@@ -2035,6 +2292,9 @@ fn initialize_cache(connection: &Connection) -> CommandResult<()> {
     connection
         .pragma_update(None, "auto_vacuum", 2)
         .map_err(|error| format!("Cannot configure incremental cache vacuuming: {error}"))?;
+    connection
+        .busy_timeout(std::time::Duration::from_secs(5))
+        .map_err(|error| format!("Cannot configure cache busy timeout: {error}"))?;
     connection
         .execute_batch(
             "PRAGMA journal_mode = WAL;
@@ -3542,6 +3802,31 @@ pub(crate) fn current_root(state: &State<'_, AppState>) -> CommandResult<PathBuf
         .ok_or_else(|| "No library is open".to_owned())
 }
 
+/// Captures the open root and its open-session atomically (single lock
+/// acquisition, D02): commands that do blocking work after this point can
+/// re-check the session before touching shared state, converting a
+/// library switch into a deterministic stale-context error instead of
+/// delivering old-library bytes/state to the new one.
+fn current_root_and_session(state: &State<'_, AppState>) -> CommandResult<(PathBuf, u64)> {
+    let current = lock_state(state)?;
+    let root = current
+        .root
+        .clone()
+        .ok_or_else(|| "No library is open".to_owned())?;
+    Ok((root, current.open_session))
+}
+
+/// Stale-context guard for commands that read with a captured root and must
+/// not return old-library results after the user switched away. A same-library
+/// refresh keeps the session (and therefore stays valid).
+fn ensure_same_open_session(state: &State<'_, AppState>, open_session: u64) -> CommandResult<()> {
+    let current = lock_state(state)?;
+    if current.open_session != open_session {
+        return Err("The library changed while the document was being read; reopen it".to_owned());
+    }
+    Ok(())
+}
+
 /// Snapshot of the open library root plus the relative paths found by the
 /// latest scan, for modules (e.g. move detection in the annotation store)
 /// that need the "currently present" set without holding the library lock.
@@ -5043,13 +5328,17 @@ mod tests {
     }
 
     #[test]
-    fn pdf_range_reads_are_bounded_and_clamped_at_eof() {
+    fn pdf_range_reads_are_bounded_and_reject_crossing_eof() {
         let library = tempdir().expect("temp library");
         fs::write(library.path().join("sample.pdf"), b"%PDF-1.7\n0123456789").expect("write pdf");
         fs::write(library.path().join("note.md"), b"not a pdf").expect("write note");
         let root = canonical_library_root(library.path()).expect("canonical root");
+        // PDF.js 把每段 range 的终点钳制到 transport length（打开时的文件
+        // 大小）；因此跨越 EOF 的请求只可能是文件缩短，按 D06 契约报
+        // 稳定错误而不是悄悄截短。
+        assert!(read_pdf_range_from_root(&root, "sample.pdf", 9, 50).is_err());
         assert_eq!(
-            read_pdf_range_from_root(&root, "sample.pdf", 9, 50).expect("tail range"),
+            read_pdf_range_from_root(&root, "sample.pdf", 9, 10).expect("tail range"),
             b"0123456789"
         );
         assert!(read_pdf_range_from_root(&root, "sample.pdf", 0, 0).is_err());
@@ -6070,5 +6359,483 @@ mod tests {
             elapsed < Duration::from_millis(500),
             "related query took {elapsed:?}"
         );
+    }
+
+    // ---- D09: 锁外扫描与专用缓存连接 ----
+
+    /// 扫描经专用连接完成（不持状态锁）：扫描从该连接读缓存（命中已
+    /// 索引文档的标题），并经该连接清除已消失文件的陈旧行——两件事都
+    /// 对主连接可见（WAL 跨连接读写已提交数据）。
+    #[test]
+    fn scan_connection_reconciles_cache_rows_visible_to_the_state() {
+        let dir = tempdir().expect("temp dir");
+        fs::write(dir.path().join("guide.md"), "# Test\n\nScan body").expect("seed md");
+        let state = AppState::file_backed(dir.path()).expect("file-backed state");
+        let root = canonical_library_root(dir.path()).expect("root");
+        let root_key = normalize_root(&root);
+
+        // 预置缓存：guide.md 已索引（标题/size/modified 与真实文件一致，
+        // 否则按指纹失效），ghost.md 已消失。
+        let metadata = fs::metadata(dir.path().join("guide.md")).expect("metadata");
+        let (file_size, file_modified) = (metadata.len(), modified_millis(&metadata));
+        {
+            let current = state.inner.lock().expect("lock");
+            current
+                .cache
+                .execute(
+                    "INSERT INTO document_cache(
+                         library_root, relative_path, title, format, source_size,
+                         source_modified, converter_revision, status, error, last_accessed
+                     ) VALUES (?1, 'guide.md', 'Cached Title', 'markdown', ?2, ?3,
+                               ?4, 'ready', NULL, 1)",
+                    params![
+                        root_key,
+                        file_size,
+                        file_modified as i64,
+                        CONVERTER_REVISION
+                    ],
+                )
+                .expect("seed cache hit");
+            current
+                .cache
+                .execute(
+                    "INSERT INTO document_cache(
+                         library_root, relative_path, title, format, source_size,
+                         source_modified, converter_revision, status, error, last_accessed
+                     ) VALUES (?1, 'ghost.md', 'Ghost', 'markdown', 100, 100,
+                               ?2, 'ready', NULL, 1)",
+                    params![root_key, CONVERTER_REVISION],
+                )
+                .expect("seed cache ghost");
+        }
+
+        let mut scan_cache = state.scan_connection().expect("scan connection");
+        let documents = scan_documents(&root, &mut scan_cache).expect("scan");
+        drop(scan_cache);
+        assert_eq!(documents.len(), 1);
+        // 扫描经专用连接读到缓存标题（读路径跨连接生效）。
+        assert_eq!(documents[0].title, "Cached Title");
+
+        // 幽灵行的清除经专用连接写入，主连接可见（写路径跨连接生效）。
+        let current = state.inner.lock().expect("lock");
+        let ghost_rows: i64 = current
+            .cache
+            .query_row(
+                "SELECT COUNT(*) FROM document_cache WHERE relative_path = 'ghost.md'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("count ghost");
+        assert_eq!(ghost_rows, 0, "stale rows cleared by the scan connection");
+    }
+
+    // ---- D07: EPUB 资产多会话与预算 ----
+
+    /// 超过字节预算时淘汰最久未用的会话，且至少保留一个会话（刚打开的
+    /// 会话即使超预算也不会被淘汰到空——明确降级而非静默清空）。
+    #[test]
+    fn epub_asset_budget_evicts_least_recently_used() {
+        let state = AppState::in_memory().expect("state");
+        {
+            let mut current = state.inner.lock().expect("lock");
+            for (index, last_used) in [1u64, 3u64, 2u64].into_iter().enumerate() {
+                let key = (format!("root-{index}"), format!("book-{index}.epub"));
+                current.open_epub_assets.insert(
+                    key,
+                    OpenEpubAssets {
+                        size: 10,
+                        modified: 1,
+                        assets: vec![("a.png".to_owned(), vec![0u8; 100])],
+                        bytes_total: 100,
+                        last_used,
+                    },
+                );
+                current.epub_asset_stamp = last_used;
+            }
+            // 插入一个超预算的会话，强制淘汰路径运行（stamp 取明确更新的
+            // 值，避免与既有会话平局导致 LRU 结果不确定）。
+            current.epub_asset_stamp = 10;
+            let huge_stamp = current.epub_asset_stamp;
+            let huge_len = (EPUB_ASSET_BUDGET_BYTES + 1) as usize;
+            current.open_epub_assets.insert(
+                ("root-huge".to_owned(), "huge.epub".to_owned()),
+                OpenEpubAssets {
+                    size: 1,
+                    modified: 1,
+                    assets: vec![("a.bin".to_owned(), vec![0u8; huge_len])],
+                    bytes_total: EPUB_ASSET_BUDGET_BYTES + 1,
+                    last_used: huge_stamp,
+                },
+            );
+            enforce_epub_asset_budget(&mut current);
+            // 最久未用的 root-0（last_used=1）先被淘汰。
+            assert!(!current
+                .open_epub_assets
+                .contains_key(&("root-0".to_owned(), "book-0.epub".to_owned())));
+            // 至少保留一个会话：最新的 huge 会话存活。
+            assert!(current
+                .open_epub_assets
+                .contains_key(&("root-huge".to_owned(), "huge.epub".to_owned())));
+            // 淘汰持续到只剩一个超预算会话为止（预算内无法再降）。
+            assert_eq!(current.open_epub_assets.len(), 1);
+        }
+    }
+
+    // ---- D06: PDF Range 文件会话语义 ----
+
+    /// A range request that crosses EOF (file shrank since open) must fail
+    /// with a stable error instead of returning a truncated chunk; requests
+    /// ending exactly at EOF stay valid.
+    #[test]
+    fn pdf_range_crossing_shrunk_file_is_rejected() {
+        let library = tempdir().expect("temp library");
+        let body = vec![0x41u8; 200];
+        fs::write(library.path().join("sample.pdf"), &body).expect("write pdf");
+        let root = canonical_library_root(library.path()).expect("root");
+
+        let ok_full = read_pdf_range_from_root(&root, "sample.pdf", 0, 100).expect("in bounds");
+        assert_eq!(ok_full.len(), 100);
+        let ok_tail = read_pdf_range_from_root(&root, "sample.pdf", 150, 50).expect("exact EOF");
+        assert_eq!(ok_tail.len(), 50);
+
+        let shrunk = read_pdf_range_from_root(&root, "sample.pdf", 0, 300)
+            .expect_err("crossing EOF must fail");
+        assert!(
+            shrunk.contains("changed while it was being read"),
+            "unexpected error: {shrunk}"
+        );
+        let past =
+            read_pdf_range_from_root(&root, "sample.pdf", 201, 10).expect_err("past EOF must fail");
+        assert!(past.contains("past the end"), "unexpected error: {past}");
+    }
+
+    // ---- D02 书库/文档上下文竞态回归 ----
+
+    /// A slow open must never overwrite the root committed by a newer open:
+    /// the stale commit fails and the newest ticket wins (plan D02).
+    #[test]
+    fn opening_a_then_b_cannot_commit_a_last() {
+        let state = AppState::in_memory().expect("state");
+        let dir_a = tempdir().expect("temp a");
+        let dir_b = tempdir().expect("temp b");
+        let root_a = canonical_library_root(dir_a.path()).expect("root a");
+        let root_b = canonical_library_root(dir_b.path()).expect("root b");
+
+        // Ticket protocol: A took ticket 1, then B took ticket 2.
+        OPEN_REQUEST.store(2, Ordering::SeqCst);
+        let stale_error =
+            commit_open_library(&state, root_a.clone(), Vec::new(), None, 1).unwrap_err();
+        assert!(
+            stale_error.contains("newer open_library"),
+            "unexpected error: {stale_error}"
+        );
+        {
+            let current = state.inner.lock().expect("lock");
+            assert!(current.root.is_none(), "stale open must not set a root");
+            assert_eq!(current.open_session, 0);
+        }
+
+        let (root_key, generation) =
+            commit_open_library(&state, root_b.clone(), Vec::new(), None, 2).expect("commit b");
+        let current = state.inner.lock().expect("lock");
+        assert_eq!(current.root.as_ref(), Some(&root_b));
+        assert_eq!(current.root_key, root_key);
+        assert_eq!(normalize_root(&root_b), root_key);
+        assert_eq!(generation, 1);
+        assert_eq!(current.generation, generation);
+        // One successful open = one session bump.
+        assert_eq!(current.open_session, 1);
+    }
+
+    /// An EPUB parse that finishes after the user switched libraries must
+    /// not mutate the new library's state, assets, or status events.
+    #[test]
+    fn late_epub_parse_from_a_cannot_mutate_b() {
+        let state = AppState::in_memory().expect("state");
+        let dir_b = tempdir().expect("temp b");
+        let root_b = canonical_library_root(dir_b.path()).expect("root b");
+        {
+            let mut current = state.inner.lock().expect("lock");
+            current.root = Some(root_b.clone());
+            current.root_key = normalize_root(&root_b);
+            current.documents.push(DocumentInfo {
+                relative_path: "books/sample.epub".to_owned(),
+                title: "B book".to_owned(),
+                size: 10,
+                modified: 20,
+                format: DocumentFormat::Epub,
+                index_status: IndexStatus::Pending,
+                index_error: None,
+            });
+        }
+        let root_a = PathBuf::from("D:\\reade-test-never-opened");
+        let indexed_a = IndexedDocument {
+            title: "A book".to_owned(),
+            status: IndexStatus::Ready,
+            error: None,
+            segments: Vec::new(),
+            links: Vec::new(),
+        };
+        let committed = commit_epub_open_result(
+            &state,
+            &root_a,
+            "books/sample.epub",
+            &indexed_a,
+            vec![("pic.png".to_owned(), b"bytes".to_vec())],
+        )
+        .expect("no error");
+        assert!(!committed, "stale parse must be rejected");
+        let current = state.inner.lock().expect("lock");
+        assert!(
+            current.open_epub_assets.is_empty(),
+            "B must not inherit A's assets"
+        );
+        assert_eq!(current.documents[0].title, "B book");
+        assert_eq!(current.documents[0].index_status, IndexStatus::Pending);
+    }
+
+    /// Same library: the parse result commits, caches the index under the
+    /// captured root, and activates the EPUB asset set.
+    #[test]
+    fn epub_parse_commits_index_and_assets_for_the_open_library() {
+        let state = AppState::in_memory().expect("state");
+        let dir = tempdir().expect("temp lib");
+        let root = canonical_library_root(dir.path()).expect("root");
+        {
+            let mut current = state.inner.lock().expect("lock");
+            current.root = Some(root.clone());
+            current.root_key = normalize_root(&root);
+            current.documents.push(DocumentInfo {
+                relative_path: "books/sample.epub".to_owned(),
+                title: "sample".to_owned(),
+                size: 42,
+                modified: 7,
+                format: DocumentFormat::Epub,
+                index_status: IndexStatus::Pending,
+                index_error: None,
+            });
+        }
+        let indexed = IndexedDocument {
+            title: "sample parsed".to_owned(),
+            status: IndexStatus::Ready,
+            error: None,
+            segments: Vec::new(),
+            links: Vec::new(),
+        };
+        let committed = commit_epub_open_result(
+            &state,
+            &root,
+            "books/sample.epub",
+            &indexed,
+            vec![("pic.png".to_owned(), b"bytes".to_vec())],
+        )
+        .expect("no error");
+        assert!(committed);
+        let current = state.inner.lock().expect("lock");
+        let open = current
+            .open_epub_assets
+            .get(&(normalize_root(&root), "books/sample.epub".to_owned()))
+            .expect("assets active");
+        assert_eq!(open.size, 42);
+        assert_eq!(current.documents[0].title, "sample parsed");
+        let segments: i64 = current
+            .cache
+            .query_row(
+                "SELECT COUNT(*) FROM search_segments WHERE library_root = ?1",
+                params![normalize_root(&root)],
+                |row| row.get(0),
+            )
+            .expect("count segments");
+        // IndexedDocument has no segments here, but the cache row must exist
+        // for the document itself.
+        let cache_rows: i64 = current
+            .cache
+            .query_row(
+                "SELECT COUNT(*) FROM document_cache WHERE library_root = ?1",
+                params![normalize_root(&root)],
+                |row| row.get(0),
+            )
+            .expect("count cache rows");
+        assert_eq!(segments, 0);
+        assert_eq!(cache_rows, 1);
+    }
+
+    // ---- D10 性能基线测量（显式运行，不是 CI 门禁） ----
+
+    /// Opt-in D10 baseline harness (plan §4 D10): generates a synthetic
+    /// markdown library, measures cold scan / index build / warm rescans /
+    /// search latency, and writes JSON samples to `output/hardening/perf/`.
+    /// No absolute-millisecond assertion lives here — thresholds are set
+    /// only after repeated same-machine baselines exist.
+    ///
+    /// Run:
+    /// `cargo test --manifest-path src-tauri/Cargo.toml perf_baseline -- --ignored --nocapture`
+    /// Env: `READE_PERF_DOCS` (default 5000), `READE_PERF_OUT` (default
+    /// `../output/hardening/perf/rust-baseline.json`, relative to `src-tauri`).
+    #[test]
+    #[ignore = "D10 measurement harness: run explicitly with --ignored"]
+    fn perf_baseline_scan_index_search_on_synthetic_library() {
+        let docs: usize = std::env::var("READE_PERF_DOCS")
+            .ok()
+            .and_then(|value| value.parse().ok())
+            .unwrap_or(5_000)
+            .clamp(30, 50_000);
+        let library = tempdir().expect("temp library");
+        let cache_dir = tempdir().expect("temp cache");
+        let filler =
+            "长文合成段落，用于扫描与索引预算测量，包含中文、English、与 inline code。".repeat(12);
+        let mut corpus_bytes: u64 = 0;
+        for index in 0..docs {
+            let folder = library.path().join(format!("batch-{}", index / 500));
+            fs::create_dir_all(&folder).expect("create batch dir");
+            let body = format!(
+                "# 合成文档 {index}\n\n{}\n\nEnglish summary paragraph {index} for corpus statistics.\n",
+                (0..24)
+                    .map(|p| format!("## 第 {} 节\n\n文档 {index} 的{filler}\n", p + 1))
+                    .collect::<Vec<_>>()
+                    .join("\n")
+            );
+            let bytes = body.as_bytes();
+            corpus_bytes += bytes.len() as u64;
+            fs::write(folder.join(format!("doc-{index:05}.md")), bytes).expect("write doc");
+        }
+        let root = canonical_library_root(library.path()).expect("canonical root");
+        let state = AppState::new(cache_dir.path().to_path_buf()).expect("state");
+        let mut current = state.inner.lock().expect("lock");
+
+        let timed = |label: &str, samples_ms: &mut Vec<f64>, run: &mut dyn FnMut()| {
+            let start = Instant::now();
+            run();
+            samples_ms.push(start.elapsed().as_secs_f64() * 1_000.0);
+            println!(
+                "perf_baseline: {label} = {:.1} ms",
+                samples_ms.last().expect("sample")
+            );
+        };
+
+        let mut cold_scan = Vec::new();
+        let documents = {
+            let start = Instant::now();
+            let documents = scan_documents(&root, &mut current.cache).expect("cold scan");
+            let ms = start.elapsed().as_secs_f64() * 1_000.0;
+            cold_scan.push(ms);
+            println!(
+                "perf_baseline: cold_scan({docs} docs, {} KiB) = {ms:.1} ms",
+                corpus_bytes / 1024
+            );
+            documents
+        };
+        assert_eq!(documents.len(), docs, "synthetic library scan set size");
+
+        let markdown_documents: Vec<DocumentInfo> = documents
+            .iter()
+            .filter(|document| document.format == DocumentFormat::Markdown)
+            .cloned()
+            .collect();
+        let index_start = Instant::now();
+        for document in &markdown_documents {
+            let path = root.join(&document.relative_path);
+            let indexed = index_document_path(&path, document).expect("index document");
+            store_index_result(&mut current.cache, &root, document, &indexed)
+                .expect("store index result");
+        }
+        let index_ms = index_start.elapsed().as_secs_f64() * 1_000.0;
+        println!(
+            "perf_baseline: index_build({} docs) = {index_ms:.1} ms ({:.3} ms/doc)",
+            markdown_documents.len(),
+            index_ms / markdown_documents.len() as f64
+        );
+
+        let mut warm_scans = Vec::new();
+        for _ in 0..5 {
+            timed("warm_scan", &mut warm_scans, &mut || {
+                let documents = scan_documents(&root, &mut current.cache).expect("warm scan");
+                assert_eq!(documents.len(), docs);
+            });
+        }
+
+        let hot_queries = [
+            "长文合成段落",
+            "稳定性分析方法与频率响应设计准则",
+            "English summary paragraph",
+            "阅读器实现细节与文档渲染问题",
+            "corpus statistics",
+        ];
+        let mut search_samples: Vec<(String, Vec<f64>)> = Vec::new();
+        let mut any_results = false;
+        for query in hot_queries {
+            let mut samples = Vec::new();
+            for _ in 0..6 {
+                let start = Instant::now();
+                let results = search_index(&current.cache, &normalize_root(&root), query, 100)
+                    .expect("hot search");
+                if !results.is_empty() {
+                    any_results = true;
+                }
+                samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+            }
+            search_samples.push((query.to_owned(), samples));
+        }
+        // Like-fallback path（<3 字符）单独采样。
+        let mut like_samples = Vec::new();
+        for _ in 0..6 {
+            let start = Instant::now();
+            search_index(&current.cache, &normalize_root(&root), "稳定", 100).expect("like search");
+            like_samples.push(start.elapsed().as_secs_f64() * 1_000.0);
+        }
+        assert!(any_results, "hot search must match the synthetic corpus");
+
+        fn percentile(sorted: &mut [f64], p: f64) -> f64 {
+            sorted.sort_by(|a, b| a.total_cmp(b));
+            if sorted.is_empty() {
+                return 0.0;
+            }
+            let index = (((sorted.len() as f64) * p).ceil() as usize)
+                .saturating_sub(1)
+                .min(sorted.len() - 1);
+            sorted[index]
+        }
+
+        let mut report = String::from("{\n");
+        report.push_str(&format!(
+            "  \"docs\": {docs}, \"corpus_bytes\": {corpus_bytes},\n"
+        ));
+        report.push_str(&format!(
+            "  \"cold_scan_ms\": {:.1}, \"index_build_ms\": {:.1}, \"index_ms_per_doc\": {:.3},\n",
+            cold_scan[0],
+            index_ms,
+            index_ms / markdown_documents.len() as f64
+        ));
+        report.push_str(&format!(
+            "  \"warm_scan_ms\": {{ \"samples\": {:?}, \"median\": {:.1}, \"p95\": {:.1} }},\n",
+            warm_scans,
+            percentile(&mut warm_scans.clone(), 0.5),
+            percentile(&mut warm_scans.clone(), 0.95)
+        ));
+        report.push_str("  \"search_ms\": [\n");
+        for (query, samples) in &search_samples {
+            report.push_str(&format!(
+                "    {{ \"query\": {query:?}, \"samples\": {:?}, \"median\": {:.1}, \"p95\": {:.1} }},\n",
+                samples,
+                percentile(&mut samples.clone(), 0.5),
+                percentile(&mut samples.clone(), 0.95)
+            ));
+        }
+        report.push_str(&format!(
+            "    {{ \"query\": \"稳定(like-fallback)\", \"samples\": {:?}, \"median\": {:.1}, \"p95\": {:.1} }}\n",
+            like_samples,
+            percentile(&mut like_samples.clone(), 0.5),
+            percentile(&mut like_samples.clone(), 0.95)
+        ));
+        report.push_str("  ]\n}\n");
+
+        let output = std::env::var("READE_PERF_OUT")
+            .unwrap_or_else(|_| "../output/hardening/perf/rust-baseline.json".to_owned());
+        let output = PathBuf::from(output);
+        if let Some(parent) = output.parent() {
+            fs::create_dir_all(parent).expect("create perf output dir");
+        }
+        fs::write(&output, report).expect("write perf baseline report");
+        println!("perf_baseline: report written to {}", output.display());
     }
 }

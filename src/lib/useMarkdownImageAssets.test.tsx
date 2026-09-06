@@ -15,9 +15,13 @@ vi.mock("./backend", () => ({
 
 const PNG = { mimeType: "image/png", data: "AAAA" };
 
-function flushAsyncWork(): Promise<void> {
-  return act(async () => {
-    await new Promise((resolve) => setTimeout(resolve, 90));
+async function flushAsyncWork(): Promise<void> {
+  await act(async () => {
+    // 多轮刷新：并行负载下单个 90ms 定时可能不够异步链（读取→消毒→
+    // 批量写回）完成；轮询多轮避免偶发 undefined 断言失败。
+    for (let round = 0; round < 8; round += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   });
 }
 

@@ -38,7 +38,7 @@ function documentInfo(relativePath: string, title: string): DocumentInfo {
 
 function seedLibrary(documents: DocumentInfo[]) {
   useReaderStore.setState({
-    snapshot: { rootPath: "D:/library", documents },
+    snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents },
     documents,
     currentPath: null,
     treeLayout: {},

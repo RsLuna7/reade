@@ -47,7 +47,13 @@ export interface SearchResult {
 }
 
 export interface LibrarySnapshot {
+  /** User-entered path; storage keys (tree layout, read marks) keep using it. */
   rootPath: string;
+  /**
+   * Backend-normalized library identity (D02): the key events are filtered
+   * by, so a stale index event from a previously open library is dropped.
+   */
+  rootKey: string;
   documents: DocumentInfo[];
 }
 
@@ -113,8 +119,23 @@ export interface PdfReadingMode {
   missingPages: number[];
   warning: string | null;
 }
-export interface IndexProgress { total: number; completed: number; ready: number; partial: number; failed: number }
-export interface DocumentIndexEvent { relativePath: string; title: string; status: IndexStatus; error: string | null }
+export interface IndexProgress {
+  /** Normalized identity of the library this progress belongs to (D02). */
+  libraryRoot: string;
+  total: number;
+  completed: number;
+  ready: number;
+  partial: number;
+  failed: number;
+}
+export interface DocumentIndexEvent {
+  /** Normalized identity of the library this event belongs to (D02). */
+  libraryRoot: string;
+  relativePath: string;
+  title: string;
+  status: IndexStatus;
+  error: string | null;
+}
 
 export interface AssetPayload { relativePath: string; mimeType: string; data: string }
 
@@ -306,9 +327,10 @@ export async function openLibrary(rootPath: string): Promise<LibrarySnapshot> {
   if (APP_RUNTIME === "web") {
     const manifest = await getWebLibrary().loadManifest();
     await recordWebManifestFingerprints(manifest.documents);
-    return { rootPath: manifest.title, documents: manifest.documents };
+    return { rootPath: manifest.title, rootKey: manifest.title, documents: manifest.documents };
   }
-  return { rootPath, documents: await (await getTauriBackend()).openLibrary(rootPath) };
+  const result = await (await getTauriBackend()).openLibrary(rootPath);
+  return { rootPath, rootKey: result.rootKey, documents: result.documents };
 }
 /**
  * 最近书库列表的只读存在性探测（plan-library-mru §3.2）：仅回答"路径
@@ -325,9 +347,10 @@ export async function refreshLibrary(rootPath: string): Promise<LibrarySnapshot>
     client.clearCache();
     const manifest = await client.loadManifest(true);
     await recordWebManifestFingerprints(manifest.documents);
-    return { rootPath: manifest.title, documents: manifest.documents };
+    return { rootPath: manifest.title, rootKey: manifest.title, documents: manifest.documents };
   }
-  return { rootPath, documents: await (await getTauriBackend()).refreshLibrary() };
+  const result = await (await getTauriBackend()).refreshLibrary();
+  return { rootPath, rootKey: result.rootKey, documents: result.documents };
 }
 export async function readDocument(relativePath: string): Promise<DocumentContent> {
   if (APP_RUNTIME === "web") return getWebLibrary().loadDocument(relativePath);
@@ -504,6 +527,11 @@ export async function onLibraryIndexProgress(handler: (progress: IndexProgress) 
 export async function onDocumentIndexStatus(handler: (event: DocumentIndexEvent) => void): Promise<UnlistenFn> {
   if (APP_RUNTIME === "web") return () => undefined;
   return (await getTauriBackend()).onDocumentIndexStatus(handler);
+}
+/** 桌面关闭协调（D05）：Rust 拦截首次关窗后发出该事件，前端 flush 后调 approve。 */
+export async function onWindowCloseRequested(handler: () => void | Promise<void>): Promise<UnlistenFn> {
+  if (APP_RUNTIME === "web") return () => undefined;
+  return (await getTauriBackend()).onWindowCloseRequested(handler);
 }
 
 export async function listAnnotations(relativePath?: string | null): Promise<Annotation[]> {
@@ -947,6 +975,16 @@ export async function pickAnnotationImportFile(): Promise<{
 // build, mirroring readDocumentRange.
 export async function recordReadingSession(session: ReadingSession): Promise<void> {
   return (await getTauriBackend()).recordReadingSession(session);
+}
+
+/** D05：会话开始即绑定"会话 id → (书库, 文档)"；此后保存按绑定归属。 */
+export async function startReadingSession(session: ReadingSession): Promise<void> {
+  return (await getTauriBackend()).startReadingSession(session);
+}
+
+/** 关窗协调的第二步：前端 flush 完（或超时）后放行关闭。 */
+export async function approveWindowClose(): Promise<void> {
+  return (await getTauriBackend()).approveWindowClose();
 }
 
 export async function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {

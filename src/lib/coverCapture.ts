@@ -7,6 +7,7 @@ import {
   type EpubDocument,
 } from "./backend";
 import { pickEpubCoverAsset, pngBase64FromDataUrl, thumbnailDimensions } from "./coverArt";
+import { COVER_STORED_EVENT } from "./coverCaptureEvent";
 
 /**
  * 封面缩略图的浏览器侧生产管线（docs/plan-bookshelf-covers.md §3.3）。
@@ -21,7 +22,7 @@ import { pickEpubCoverAsset, pngBase64FromDataUrl, thumbnailDimensions } from ".
  */
 
 /** 书架端封面刷新通知（EPUB 打开捕获后让已挂载的书架重取该文档）。 */
-export const COVER_STORED_EVENT = "reade:cover-stored";
+export { COVER_STORED_EVENT };
 
 function notifyCoverStored(relativePath: string): void {
   try {

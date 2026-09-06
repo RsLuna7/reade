@@ -6,18 +6,19 @@
 //! be wiped. Schema upgrades here are additive-only.
 
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
     sync::{Arc, Mutex, MutexGuard},
 };
 
-use rusqlite::{params, Connection};
+use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use tauri::State;
 
 use crate::library::{
-    current_root, normalize_relative_path, normalize_root, validate_relative_library_path,
-    AppState, CommandResult,
+    current_root, ensure_document_in_open_library, normalize_relative_path, normalize_root,
+    validate_relative_library_path, AppState, CommandResult,
 };
 
 const STATS_SCHEMA_VERSION: i64 = 1;
@@ -31,8 +32,9 @@ const ALLOWED_SESSION_FORMATS: &[&str] = &["markdown", "mdx", "pdf", "epub"];
 #[serde(rename_all = "camelCase")]
 pub struct ReadingSession {
     pub id: String,
-    /// Present on list responses. Ignored on write: the open library is stamped
-    /// from `current_root` instead of trusting the client.
+    /// Present on list responses. Ignored on write: the session is attributed
+    /// to the library it was started in (`start_reading_session` binding),
+    /// never to the library that happens to be open at save time.
     #[serde(default)]
     pub library_root: String,
     pub relative_path: String,
@@ -43,9 +45,23 @@ pub struct ReadingSession {
     pub active_seconds: u64,
 }
 
+/// D05: a session id is bound to its origin (library, document) when the
+/// session starts. Saves use this binding instead of re-resolving the
+/// current root, so switching libraries mid-session can neither misattribute
+/// time nor fail the final flush.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct SessionBinding {
+    root_key: String,
+    relative_path: String,
+}
+
 #[derive(Clone)]
 pub struct StatsState {
     connection: Arc<Mutex<Connection>>,
+    /// Process-local session bindings (D05). Bindings are intentionally not
+    /// persisted: they only need to outlive the session within this run, and
+    /// the documented loss boundary covers a killed process.
+    bindings: Arc<Mutex<HashMap<String, SessionBinding>>>,
 }
 
 impl StatsState {
@@ -60,6 +76,7 @@ impl StatsState {
         initialize_stats(&connection)?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            bindings: Arc::new(Mutex::new(HashMap::new())),
         })
     }
 
@@ -70,18 +87,130 @@ impl StatsState {
                 .map_err(|error| format!("Cannot create test stats database: {error}"))?,
         )
     }
+
+    #[cfg(test)]
+    fn bound_bindings(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionBinding>> {
+        self.bindings.lock().expect("bindings")
+    }
+}
+
+/// Starts (binds) a reading session: validates the document against the
+/// currently open library and remembers `session id → (library, document)`.
+/// Later `record_reading_session` saves are attributed to this origin even
+/// after the user switches libraries (D05). Re-binding the same id to the
+/// same origin is idempotent; a different origin is rejected.
+#[tauri::command]
+pub fn start_reading_session(
+    session: ReadingSession,
+    library: State<'_, AppState>,
+    stats: State<'_, StatsState>,
+) -> CommandResult<()> {
+    // Start snapshots carry no active time yet, so only the identity fields
+    // are validated here (full validation happens on every save).
+    validate_session_id(&session.id)?;
+    validate_relative_library_path(&session.relative_path)?;
+    let relative_path = normalize_relative_path(Path::new(&session.relative_path));
+    if !ALLOWED_SESSION_FORMATS.contains(&session.format.as_str()) {
+        return Err(format!(
+            "Unknown reading session format: {}",
+            session.format
+        ));
+    }
+    if session.started_at == 0 {
+        return Err("Reading session timestamps are required".to_owned());
+    }
+
+    let mut bindings = lock_bindings(&stats)?;
+    if bindings.contains_key(&session.id) {
+        // A live binding is only ever re-affirmed, never re-validated against
+        // the CURRENT library: the retry after a switch must succeed even
+        // though the original document is no longer open (D05). A different
+        // origin for the same id stays an error.
+        let candidate_root = match current_root(&library) {
+            Ok(root) => normalize_root(&root),
+            // No library open: nothing can differ from the binding origin.
+            Err(_) => return Ok(()),
+        };
+        return bind_session(&mut bindings, &session.id, candidate_root, relative_path);
+    }
+    // New binding: the document must exist in the open library at start
+    // time — this is the "original document context" the plan requires the
+    // backend to verify.
+    ensure_document_in_open_library(&library, &relative_path)?;
+    let root_key = normalize_root(&current_root(&library)?);
+    bind_session(&mut bindings, &session.id, root_key, relative_path)
 }
 
 #[tauri::command]
 pub fn record_reading_session(
     session: ReadingSession,
-    library: State<'_, AppState>,
     stats: State<'_, StatsState>,
 ) -> CommandResult<()> {
-    let root = current_root(&library)?;
+    save_session(stats.inner(), session)
+}
+
+/// The save path behind `record_reading_session`, split out so tests can
+/// drive it without Tauri `State` handles.
+fn save_session(stats: &StatsState, session: ReadingSession) -> CommandResult<()> {
     let sanitized = sanitize_session(session)?;
-    let connection = lock_stats(&stats)?;
-    upsert_session(&connection, &normalize_root(&root), &sanitized)
+    // Attribute to the session's bound origin, never to whatever library is
+    // open at save time; an unknown session id is refused instead of being
+    // silently attached to the current library (D05).
+    let root = {
+        let bindings = stats
+            .bindings
+            .lock()
+            .map_err(|_| "Statistics session bindings were poisoned".to_owned())?;
+        resolve_binding_root(&bindings, &sanitized)?
+    };
+    let connection = stats
+        .connection
+        .lock()
+        .map_err(|_| "Statistics state lock was poisoned".to_owned())?;
+    upsert_session(&connection, &root, &sanitized)
+}
+
+/// Binds a session id to its origin. Same id + same origin is idempotent;
+/// a different origin for a live id is refused.
+fn bind_session(
+    bindings: &mut HashMap<String, SessionBinding>,
+    session_id: &str,
+    root_key: String,
+    relative_path: String,
+) -> CommandResult<()> {
+    match bindings.get(session_id) {
+        Some(existing)
+            if existing.root_key == root_key && existing.relative_path == relative_path =>
+        {
+            Ok(())
+        }
+        Some(_) => Err("Reading session id is already bound to another document".to_owned()),
+        None => {
+            bindings.insert(
+                session_id.to_owned(),
+                SessionBinding {
+                    root_key,
+                    relative_path,
+                },
+            );
+            Ok(())
+        }
+    }
+}
+
+/// Resolves the library a session's saves belong to. The document path must
+/// match the binding so a same-named file elsewhere cannot receive the time.
+fn resolve_binding_root(
+    bindings: &HashMap<String, SessionBinding>,
+    session: &ReadingSession,
+) -> CommandResult<String> {
+    let bound = bindings
+        .get(&session.id)
+        .ok_or_else(|| "Reading session was not started; start it before saving".to_owned())?;
+    if bound.relative_path != session.relative_path {
+        return Err("Reading session document does not match its start binding".to_owned());
+    }
+    Ok(bound.root_key.clone())
 }
 
 #[tauri::command]
@@ -162,6 +291,15 @@ fn lock_stats<'a>(state: &'a State<'_, StatsState>) -> CommandResult<MutexGuard<
         .map_err(|_| "Statistics state lock was poisoned".to_owned())
 }
 
+fn lock_bindings<'a>(
+    state: &'a State<'_, StatsState>,
+) -> CommandResult<MutexGuard<'a, HashMap<String, SessionBinding>>> {
+    state
+        .bindings
+        .lock()
+        .map_err(|_| "Statistics session bindings were poisoned".to_owned())
+}
+
 fn sanitize_session(mut session: ReadingSession) -> CommandResult<ReadingSession> {
     validate_session_id(&session.id)?;
     validate_relative_library_path(&session.relative_path)?;
@@ -220,6 +358,27 @@ fn upsert_session(
     root: &str,
     session: &ReadingSession,
 ) -> CommandResult<()> {
+    // Monotonic guard (D05): a delayed older snapshot must never regress a
+    // newer one already on disk. Equal values are the idempotent-retry case.
+    // The guard only applies to rows of the SAME library: a row under another
+    // root is an id collision and must still surface the ownership error.
+    let existing: Option<(String, i64, i64)> = connection
+        .query_row(
+            "SELECT library_root, active_seconds, ended_at FROM reading_sessions WHERE id = ?1",
+            params![session.id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )
+        .optional()
+        .map_err(|error| format!("Cannot read existing reading session: {error}"))?;
+    if let Some((stored_root, stored_active, stored_ended)) = existing {
+        if stored_root == root {
+            let stale = (session.active_seconds as i64) <= stored_active
+                && (session.ended_at as i64) <= stored_ended;
+            if stale {
+                return Ok(());
+            }
+        }
+    }
     connection
         .execute(
             "INSERT INTO reading_sessions(
@@ -295,6 +454,193 @@ fn list_sessions(
         sessions.push(row.map_err(|error| format!("Cannot decode reading session: {error}"))?);
     }
     Ok(sessions)
+}
+
+/// D05: session saves are attributed to the bound library, not to whatever
+/// is open at save time; an unbound id is refused.
+#[test]
+fn saves_are_attributed_to_the_bound_library_and_unknown_ids_are_refused() {
+    let stats = StatsState::in_memory().expect("stats");
+    let session = ReadingSession {
+        id: "sess-1".to_owned(),
+        library_root: String::new(),
+        relative_path: "notes/a.md".to_owned(),
+        format: "markdown".to_owned(),
+        title: Some("A".to_owned()),
+        started_at: 1_000,
+        ended_at: 2_000,
+        active_seconds: 60,
+    };
+
+    // 未绑定的保存被拒绝（不留"忘带就按当前库归属"的隐式绕过）。
+    let error = save_session(&stats, session.clone()).expect_err("unbound must refuse");
+    assert!(error.contains("was not started"), "unexpected: {error}");
+    assert_eq!(count_session_rows(&stats), 0);
+
+    // 绑定到库 A 之后保存：行归属 A 的 root_key。
+    {
+        let mut bindings = stats.bound_bindings();
+        bind_session(
+            &mut bindings,
+            "sess-1",
+            "C:/library-a".to_owned(),
+            "notes/a.md".to_owned(),
+        )
+        .expect("bind");
+    }
+    save_session(&stats, session.clone()).expect("save");
+    assert_eq!(count_session_rows(&stats), 1);
+    let listed = {
+        let connection = stats.connection.lock().expect("lock");
+        list_sessions(&connection, 0, u64::MAX).expect("list")
+    };
+    assert_eq!(listed[0].library_root, "C:/library-a");
+
+    // 同一路径出现在另一个库（前端切库后当前 root 为 B）也不改变归属：
+    // save_session 根本不看"当前 root"，重复保存仍落在 A。
+    save_session(
+        &stats,
+        ReadingSession {
+            ended_at: 3_000,
+            active_seconds: 120,
+            ..session.clone()
+        },
+    )
+    .expect("save after switch");
+    let listed = {
+        let connection = stats.connection.lock().expect("lock");
+        list_sessions(&connection, 0, u64::MAX).expect("list")
+    };
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].library_root, "C:/library-a");
+    assert_eq!(listed[0].active_seconds, 120);
+}
+
+/// D05: 迟到的旧快照不得倒退已经写入的更新快照；同值重试幂等。
+#[test]
+fn stale_snapshots_do_not_regress_newer_ones() {
+    let stats = StatsState::in_memory().expect("stats");
+    {
+        let mut bindings = stats.bound_bindings();
+        bind_session(
+            &mut bindings,
+            "sess-1",
+            "C:/library-a".to_owned(),
+            "notes/a.md".to_owned(),
+        )
+        .expect("bind");
+    }
+    let base = ReadingSession {
+        id: "sess-1".to_owned(),
+        library_root: String::new(),
+        relative_path: "notes/a.md".to_owned(),
+        format: "markdown".to_owned(),
+        title: None,
+        started_at: 1_000,
+        ended_at: 61_000,
+        active_seconds: 60,
+    };
+    save_session(&stats, base.clone()).expect("save 60s");
+
+    // 乱序：30s 快照（更小 active 且更旧 ended_at）迟到 → 跳过，不回退。
+    save_session(
+        &stats,
+        ReadingSession {
+            ended_at: 31_000,
+            active_seconds: 30,
+            ..base.clone()
+        },
+    )
+    .expect("stale snapshot is skipped");
+    {
+        let connection = stats.connection.lock().expect("lock");
+        let listed = list_sessions(&connection, 0, u64::MAX).expect("list");
+        assert_eq!(listed[0].active_seconds, 60, "must not regress");
+        assert_eq!(listed[0].ended_at, 61_000);
+    }
+
+    // 同值重试（幂等）：写入成功且无重复行。
+    save_session(&stats, base.clone()).expect("idempotent retry");
+    assert_eq!(count_session_rows(&stats), 1);
+
+    // 更新的快照正常覆盖。
+    save_session(
+        &stats,
+        ReadingSession {
+            ended_at: 121_000,
+            active_seconds: 120,
+            ..base
+        },
+    )
+    .expect("newer snapshot");
+    let listed = {
+        let connection = stats.connection.lock().expect("lock");
+        list_sessions(&connection, 0, u64::MAX).expect("list")
+    };
+    assert_eq!(listed[0].active_seconds, 120);
+}
+
+/// D05: 同一路径不同文档/不同 root 的会话 id 互不复用。
+#[test]
+fn bindings_cannot_be_rebound_to_another_document() {
+    let mut bindings = HashMap::new();
+    bind_session(
+        &mut bindings,
+        "sess-1",
+        "C:/library-a".to_owned(),
+        "notes/a.md".to_owned(),
+    )
+    .expect("first bind");
+    let error = bind_session(
+        &mut bindings,
+        "sess-1",
+        "C:/library-a".to_owned(),
+        "notes/b.md".to_owned(),
+    )
+    .expect_err("rebind to another document must fail");
+    assert!(error.contains("already bound"), "unexpected: {error}");
+    // 同 id 不同库同样拒绝。
+    let error = bind_session(
+        &mut bindings,
+        "sess-1",
+        "C:/library-b".to_owned(),
+        "notes/a.md".to_owned(),
+    )
+    .expect_err("rebind to another library must fail");
+    assert!(error.contains("already bound"));
+
+    // 幂等重绑（同 id 同 origin）成功。
+    bind_session(
+        &mut bindings,
+        "sess-1",
+        "C:/library-a".to_owned(),
+        "notes/a.md".to_owned(),
+    )
+    .expect("idempotent rebind");
+
+    // 路径与绑定不符的保存被拒绝（同名文件跨库不收时间）。
+    let session = ReadingSession {
+        id: "sess-1".to_owned(),
+        library_root: String::new(),
+        relative_path: "notes/b.md".to_owned(),
+        format: "markdown".to_owned(),
+        title: None,
+        started_at: 1_000,
+        ended_at: 2_000,
+        active_seconds: 10,
+    };
+    let error = resolve_binding_root(&bindings, &session).expect_err("mismatch must refuse");
+    assert!(error.contains("does not match its start binding"));
+}
+
+#[cfg(test)]
+fn count_session_rows(stats: &StatsState) -> usize {
+    let connection = stats.connection.lock().expect("lock");
+    connection
+        .query_row("SELECT count(*) FROM reading_sessions", [], |row| {
+            row.get::<_, i64>(0)
+        })
+        .expect("count") as usize
 }
 
 #[cfg(test)]

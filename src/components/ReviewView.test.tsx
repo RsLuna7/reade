@@ -222,9 +222,13 @@ describe("ReviewView keyboard (R2)", () => {
     await screen.findByText("第一段摘录");
 
     fireEvent.keyDown(window, { key: "1" });
-    await waitFor(() => {
-      expect(recordReviewOutcome).toHaveBeenCalledTimes(1);
-    });
+    await waitFor(
+      () => {
+        expect(recordReviewOutcome).toHaveBeenCalledTimes(1);
+      },
+      // 全量套件并行负载下，异步 outcome 提交可能超过默认 1s 等待。
+      { timeout: 5000 },
+    );
     await screen.findByText("第二段摘录");
 
     fireEvent.keyDown(window, { key: "Enter" });
@@ -233,9 +237,12 @@ describe("ReviewView keyboard (R2)", () => {
     );
 
     fireEvent.keyDown(window, { key: "2" });
-    await waitFor(() => {
-      expect(recordReviewOutcome).toHaveBeenCalledTimes(2);
-    });
+    await waitFor(
+      () => {
+        expect(recordReviewOutcome).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 5000 },
+    );
     expect(vi.mocked(recordReviewOutcome).mock.calls[1][1]).toMatchObject({ box: 0 });
 
     fireEvent.keyDown(window, { key: "Escape" });

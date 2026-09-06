@@ -6,27 +6,33 @@ on:
       - main
   workflow_dispatch:
 
+# D01：顶层只保留 contents: read；pages 发布权限只授予 deploy 作业。
+# 发布（build + deploy）必须依赖同一提交通过 verify.yml 门禁。
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
+  verify:
+    name: Verify (publish gate)
+    uses: ./.github/workflows/verify.yml
+    permissions:
+      contents: read
+
   build:
     name: Build static site
+    needs: verify
     runs-on: ubuntu-latest
     steps:
       - name: Check out repository
         uses: actions/checkout@v5
 
-      - name: Set up pnpm
+      - name: Set up pnpm (version from package.json packageManager)
         uses: pnpm/action-setup@v4
         with:
-          version: 10
           run_install: false
 
       - name: Set up Node.js
@@ -57,6 +63,10 @@ jobs:
     name: Deploy to GitHub Pages
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

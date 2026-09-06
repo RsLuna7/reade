@@ -6,7 +6,7 @@ import {
   type DocumentInfo,
 } from "../lib/backend";
 import { generatedCover, shelfProgressLabel } from "../lib/coverArt";
-import { capturePdfCoverThumbnail, COVER_STORED_EVENT } from "../lib/coverCapture";
+import { COVER_STORED_EVENT } from "../lib/coverCaptureEvent";
 import { isMarkedRead } from "../lib/readMarks";
 import { listLibraryReadingPositions, type ReadingPosition } from "../lib/readingPositions";
 import { documentTreeName, flattenDocumentsInTreeOrder, isDocumentUnderDirectory } from "../lib/tree";
@@ -203,6 +203,7 @@ export function BookshelfView({
         enqueueCoverTask(async () => {
           if (!aliveRef.current) return;
           try {
+            const { capturePdfCoverThumbnail } = await import("../lib/coverCapture");
             const stored = await capturePdfCoverThumbnail(path, document.size);
             if (!stored || !aliveRef.current) return;
             const refreshed = await readDocumentThumbnail(path);

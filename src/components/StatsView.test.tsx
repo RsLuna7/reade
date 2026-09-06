@@ -107,7 +107,7 @@ function annotation(id: string, relativePath: string): Annotation {
 
 function setStatsState(documents: DocumentInfo[]): void {
   useReaderStore.setState({
-    snapshot: { rootPath: ROOT, documents },
+    snapshot: { rootPath: ROOT, rootKey: ROOT, documents },
     documents,
     currentPath: null,
     currentContent: null,
@@ -125,12 +125,18 @@ function setStatsState(documents: DocumentInfo[]): void {
 }
 
 beforeEach(() => {
+  // 固定时钟到正午：用例以 now-1h / now-24h 构造会话，午夜后一小时内
+  // 真实时钟会让"活跃天数/今日"判定翻车（CI 任意时段运行都会踩中）。
+  vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date(2026, 8, 5, 10, 0, 0) });
   localStorage.clear();
   vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(listDocumentExtents).mockReset().mockImplementation(async () => []);
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe("StatsView footprint card", () => {
   it("counts documents read, finished, active days and notes", async () => {

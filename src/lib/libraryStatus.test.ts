@@ -7,7 +7,7 @@ describe("buildLibraryStatusDetail", () => {
       buildLibraryStatusDetail({
         searchQuery: "agent",
         searchResultCount: 3,
-        indexProgress: { total: 10, completed: 4, ready: 3, partial: 1, failed: 0 },
+        indexProgress: { libraryRoot: "D:/library", total: 10, completed: 4, ready: 3, partial: 1, failed: 0 },
       }),
     ).toBe("3 条搜索结果");
 
@@ -15,7 +15,7 @@ describe("buildLibraryStatusDetail", () => {
       buildLibraryStatusDetail({
         searchQuery: "",
         searchResultCount: 0,
-        indexProgress: { total: 10, completed: 4, ready: 3, partial: 1, failed: 0 },
+        indexProgress: { libraryRoot: "D:/library", total: 10, completed: 4, ready: 3, partial: 1, failed: 0 },
       }),
     ).toBe("索引 4/10 · 部分 1 · 失败 0");
   });

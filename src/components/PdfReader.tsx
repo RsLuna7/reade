@@ -65,6 +65,9 @@ import { MarkdownRenderer } from "./MarkdownRenderer";
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 const RANGE_CHUNK = 256 * 1024;
 const MAX_RANGE_CHUNK = 4 * 1024 * 1024;
+/** D06 内部常量（计划 §4 D06.5）：Range 并发上限与单请求超时，可测。 */
+const RANGE_CONCURRENCY_LIMIT = 4;
+const RANGE_REQUEST_TIMEOUT_MS = 15_000;
 const PAGE_RENDER_MARGIN = "1200px 0px";
 const PAGE_REFERENCE_GAP = 8;
 /** 双页意图的会话级记忆(PS-D3):同 SecondaryPane scrollMemory 模式。 */
@@ -91,22 +94,67 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 class ReadeRangeTransport extends PDFDataRangeTransport {
   private aborted = false;
+  private readonly queue: Array<{ begin: number; end: number }> = [];
+  private inFlight = 0;
 
-  constructor(private readonly path: string, length: number) {
+  constructor(
+    private readonly path: string,
+    length: number,
+    private readonly onError: (cause: unknown) => void,
+  ) {
     super(length, null, false);
   }
 
   override requestDataRange(begin: number, end: number): void {
     if (this.aborted) return;
-    void readDocumentRange(this.path, begin, Math.min(end - begin, MAX_RANGE_CHUNK))
-      .then((bytes) => {
-        if (!this.aborted) this.onDataRange(begin, bytes);
-      })
-      .catch(() => undefined);
+    this.queue.push({ begin, end });
+    this.pump();
   }
 
   override abort(): void {
     this.aborted = true;
+    this.queue.length = 0;
+  }
+
+  /**
+   * Bounded-concurrency range pump (D06): at most RANGE_CONCURRENCY_LIMIT
+   * IPC reads run at once, each with a hard timeout, so a stalled backend
+   * read can never hang the viewer silently. A failure aborts the transport
+   * and surfaces a retryable error through `onError` — PDF.js has no public
+   * error channel on PDFDataRangeTransport, so the reader tears the session
+   * down via loadingTask.destroy() when it fires.
+   */
+  private pump(): void {
+    while (!this.aborted && this.inFlight < RANGE_CONCURRENCY_LIMIT && this.queue.length > 0) {
+      const request = this.queue.shift();
+      if (!request) return;
+      this.inFlight += 1;
+      const { begin, end } = request;
+      const length = Math.min(end - begin, MAX_RANGE_CHUNK);
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const timeout = new Promise<never>((_, reject) => {
+        timer = setTimeout(
+          () => reject(new Error(`PDF range request timed out after ${RANGE_REQUEST_TIMEOUT_MS} ms`)),
+          RANGE_REQUEST_TIMEOUT_MS,
+        );
+      });
+      void Promise.race([readDocumentRange(this.path, begin, length), timeout])
+        .then((bytes) => {
+          if (!this.aborted) this.onDataRange(begin, bytes);
+        })
+        .catch((cause: unknown) => {
+          if (this.aborted) return;
+          // Stop new requests first, then fail the session: the component
+          // destroys the loading task and shows a retryable error.
+          this.abort();
+          this.onError(cause);
+        })
+        .finally(() => {
+          if (timer !== undefined) clearTimeout(timer);
+          this.inFlight -= 1;
+          this.pump();
+        });
+    }
   }
 }
 
@@ -322,6 +370,8 @@ interface BoundReadingMode {
 interface BoundError {
   sourceKey: string;
   message: string;
+  /** D06: 数据读取失败可以重建会话重试；密码等硬错误不可。 */
+  retryable?: boolean;
 }
 
 /** 框选结果:裁剪位图 + 页号(出处行"第 N 页"),即用即走不落库(RG-D2)。 */
@@ -829,6 +879,8 @@ export function PdfReader({
   );
   const [boundReading, setBoundReading] = useState<BoundReadingMode | null>(null);
   const [readingLoadingKey, setReadingLoadingKey] = useState<string | null>(null);
+  /** D06: Range 读取失败后重建会话重试的计数器。 */
+  const [loadNonce, setLoadNonce] = useState(0);
   const sourceKey = sourceIdentity(relativePath, size, modified);
   const sourceKeyRef = useRef(sourceKey);
   sourceKeyRef.current = sourceKey;
@@ -854,7 +906,14 @@ export function PdfReader({
   useEffect(() => {
     const generation = ++generationRef.current;
     const lifecycle = new PdfSessionLifecycle(generation, sourceKey);
-    const transport = new ReadeRangeTransport(relativePath, size);
+    const transport = new ReadeRangeTransport(relativePath, size, (cause: unknown) => {
+      // Range 读取失败/超时（D06）：终止会话并给出可重试错误，不再静默吞掉。
+      if (lifecycle.isActive() && generationRef.current === generation && sourceKeyRef.current === sourceKey) {
+        const detail = cause instanceof Error ? cause.message : String(cause);
+        setBoundError({ sourceKey, message: `PDF 数据读取失败：${detail}`, retryable: true });
+        void dispose().catch(() => undefined);
+      }
+    });
     const task = getDocument({
       range: transport,
       rangeChunkSize: RANGE_CHUNK,
@@ -884,7 +943,7 @@ export function PdfReader({
     return () => {
       void dispose().catch(() => undefined);
     };
-  }, [relativePath, size, sourceKey]);
+  }, [loadNonce, relativePath, size, sourceKey]);
 
   useEffect(() => {
     readingRequestRef.current += 1;
@@ -1698,7 +1757,20 @@ export function PdfReader({
         {calibrateError && <span className="pdf-page-calibrate-error">{calibrateError}</span>}
       </div>
     )}
-    {error && <div className="pdf-state pdf-state--error">{error}</div>}
+    {error && (
+      <div className="pdf-state pdf-state--error">
+        {error}
+        {boundError?.sourceKey === sourceKey && boundError.retryable && (
+          <button
+            type="button"
+            className="pdf-retry-button"
+            onClick={() => setLoadNonce((nonce) => nonce + 1)}
+          >
+            重试
+          </button>
+        )}
+      </div>
+    )}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
     {mode === "original" && session && <div className="pdf-pages" data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
       {Array.from({ length: session.pdf.numPages }, (_, index) => {

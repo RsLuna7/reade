@@ -10,6 +10,8 @@ interface Harness {
   persisted: ReadingSession[];
   /** Advances wall clock, monotonic clock, and fake timers together. */
   advance: (ms: number) => void;
+  /** Same as advance, but awaits timer callbacks and their microtasks. */
+  advanceAsync: (ms: number) => Promise<void>;
   failNextPersist: () => void;
 }
 
@@ -40,6 +42,11 @@ function createHarness(overrides: Partial<ReadingTrackerOptions> = {}): Harness 
       wall += ms;
       mono += ms;
       vi.advanceTimersByTime(ms);
+    },
+    advanceAsync: async (ms) => {
+      wall += ms;
+      mono += ms;
+      await vi.advanceTimersByTimeAsync(ms);
     },
     failNextPersist: () => {
       failNext = true;
@@ -192,5 +199,112 @@ describe("readingTracker", () => {
     expect(ids.length).toBe(2);
     const lastOfFirst = persisted.filter((session) => session.id === ids[0]).pop();
     expect(lastOfFirst?.activeSeconds).toBe(60);
+  });
+
+  // ---- D05: 保存失败退避重试、队列合并与关窗排空 ----
+
+  it("retries a failed save with backoff and drops the queued copy once a newer save confirms", async () => {
+    const { tracker, persisted, failNextPersist, advanceAsync } = createHarness({
+      retryBackoffMs: [10],
+    });
+    tracker.openDocument(DOC_A);
+    // async 推进按 30s 步进（单次长推进不会逐次触发 interval），每步交互续期。
+    tracker.recordActivity();
+    await advanceAsync(30_000);
+    tracker.recordActivity();
+    await advanceAsync(30_000);
+    expect(persisted).toHaveLength(2);
+
+    tracker.recordActivity();
+    failNextPersist();
+    await advanceAsync(30_000);
+    expect(persisted).toHaveLength(2);
+    // 10ms 退避后队列重试，送达失败时刻的 90s 快照。
+    await advanceAsync(10);
+    expect(persisted).toHaveLength(3);
+    expect(persisted[2].activeSeconds).toBe(90);
+
+    // 退避长于刷新间隔时的合并语义：新快照确认后，队列中的旧快照被清掉。
+    const merged = createHarness({ retryBackoffMs: [60_000] });
+    merged.tracker.openDocument(DOC_A);
+    merged.tracker.recordActivity();
+    await merged.advanceAsync(30_000);
+    merged.tracker.recordActivity();
+    await merged.advanceAsync(30_000);
+    merged.tracker.recordActivity();
+    merged.failNextPersist();
+    await merged.advanceAsync(30_000);
+    expect(merged.persisted).toHaveLength(2);
+    merged.tracker.recordActivity();
+    await merged.advanceAsync(30_000);
+    expect(merged.persisted).toHaveLength(3);
+    expect(merged.persisted[2].activeSeconds).toBe(120);
+    expect(merged.persisted.some((session) => session.activeSeconds === 90)).toBe(false);
+    tracker.dispose();
+    merged.tracker.dispose();
+  });
+
+  it("flushPending drains queued writes immediately for the close flow", async () => {
+    const { tracker, persisted, failNextPersist, advanceAsync } = createHarness({
+      retryBackoffMs: [60_000],
+    });
+    tracker.openDocument(DOC_A);
+    tracker.recordActivity();
+    await advanceAsync(30_000);
+    tracker.recordActivity();
+    await advanceAsync(30_000);
+    tracker.recordActivity();
+    failNextPersist();
+    await advanceAsync(30_000);
+    expect(persisted).toHaveLength(2);
+
+    // 不等待 60s 退避：关窗路径立即排空。
+    await tracker.flushPending();
+    expect(persisted).toHaveLength(3);
+    expect(persisted[2].activeSeconds).toBe(90);
+    tracker.dispose();
+  });
+
+  it("keeps saves queued until the session bind succeeds", async () => {
+    let wall = WALL_START;
+    let mono = 50_000;
+    let failBind = true;
+    let bindAttempts = 0;
+    const persisted: ReadingSession[] = [];
+    const binds: ReadingSession[] = [];
+    const tracker = createReadingTracker({
+      persist: (session) => {
+        persisted.push({ ...session });
+        return Promise.resolve();
+      },
+      bind: (session) => {
+        bindAttempts += 1;
+        binds.push({ ...session });
+        if (failBind) return Promise.reject(new Error("database busy"));
+        return Promise.resolve();
+      },
+      now: () => wall,
+      monotonicNow: () => mono,
+      retryBackoffMs: [10],
+    });
+    const advanceAsync = async (ms: number) => {
+      wall += ms;
+      mono += ms;
+      await vi.advanceTimersByTimeAsync(ms);
+    };
+
+    tracker.openDocument(DOC_A);
+    await advanceAsync(70_000);
+    // bind 未成功前不会有任何保存落地。
+    expect(persisted).toHaveLength(0);
+    expect(bindAttempts).toBeGreaterThanOrEqual(2);
+
+    failBind = false;
+    await advanceAsync(10);
+    expect(persisted).toHaveLength(1);
+    // 队列里合并出的最新快照被送达，且 id 与 bind 一致。
+    expect(persisted[0].id).toBe(binds[0].id);
+    expect(persisted[0].relativePath).toBe(DOC_A.relativePath);
+    tracker.dispose();
   });
 });

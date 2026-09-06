@@ -50,9 +50,14 @@ export async function chooseLibraryDirectory(): Promise<string | null> {
   const selection = await open({ directory: true, multiple: false, title: "选择本地文档库" });
   return typeof selection === "string" ? selection : null;
 }
-export function openLibrary(rootPath: string): Promise<DocumentInfo[]> { return invoke("open_library", { rootPath }); }
+/** Wire result of `open_library` / `refresh_library`: documents + normalized root identity. */
+export interface LibraryOpenResult {
+  rootKey: string;
+  documents: DocumentInfo[];
+}
+export function openLibrary(rootPath: string): Promise<LibraryOpenResult> { return invoke("open_library", { rootPath }); }
 export function probeLibraryPath(path: string): Promise<boolean> { return invoke("probe_library_path", { path }); }
-export function refreshLibrary(): Promise<DocumentInfo[]> { return invoke("refresh_library"); }
+export function refreshLibrary(): Promise<LibraryOpenResult> { return invoke("refresh_library"); }
 export function revealInFileManager(relativePath: string): Promise<void> {
   return invoke("reveal_in_file_manager", { relativePath });
 }
@@ -279,6 +284,12 @@ export function pickAnnotationsImportFile(): Promise<{
 export function recordReadingSession(session: ReadingSession): Promise<void> {
   return invoke("record_reading_session", { session });
 }
+export function startReadingSession(session: ReadingSession): Promise<void> {
+  return invoke("start_reading_session", { session });
+}
+export function approveWindowClose(): Promise<void> {
+  return invoke("approve_window_close");
+}
 export function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {
   return invoke("list_reading_sessions", { fromMs, toMs });
 }
@@ -291,4 +302,7 @@ export function onLibraryIndexProgress(handler: (progress: IndexProgress) => voi
 }
 export function onDocumentIndexStatus(handler: (status: DocumentIndexEvent) => void): Promise<UnlistenFn> {
   return listen<DocumentIndexEvent>("document-index-status", (event) => handler(event.payload));
+}
+export function onWindowCloseRequested(handler: () => void | Promise<void>): Promise<UnlistenFn> {
+  return listen("reade-close-requested", () => { void handler(); });
 }

@@ -2233,6 +2233,8 @@ a:focus-visible {
 .pdf-page-number { position: absolute; z-index: 4; right: 8px; bottom: 7px; padding: 2px 5px; border-radius: 4px; color: #555; background: rgba(255,255,255,.82); font-size: 9px; }
 .pdf-state { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
 .pdf-state--error { color: #b34e42; }
+.pdf-retry-button { padding: 2px 12px; border: 1px solid currentcolor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.pdf-retry-button:hover { background: rgba(179, 78, 66, 0.08); }
 .pdf-reading-mode { max-width: 780px; margin: 0 auto; }
 .pdf-reading-warning { display: flex; gap: 10px; padding: 13px 15px; margin-bottom: 18px; border: 1px solid color-mix(in srgb, #c68b35 38%, var(--line)); border-radius: 8px; color: var(--ink-soft); background: color-mix(in srgb, #c68b35 8%, var(--chrome)); font-size: 12px; line-height: 1.6; }
 .pdf-reading-page { position: relative; padding: 18px 0 54px; border-bottom: 1px solid var(--line); }

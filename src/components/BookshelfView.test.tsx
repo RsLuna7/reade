@@ -52,7 +52,7 @@ function documentInfo(relativePath: string, overrides: Partial<DocumentInfo> = {
 
 function setLibrary(documents: DocumentInfo[]) {
   useReaderStore.setState({
-    snapshot: { rootPath: "D:/library", documents },
+    snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents },
     documents,
     currentPath: null,
     loading: false,
