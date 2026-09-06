@@ -2,10 +2,13 @@ name: Verify
 
 # D01 验证门禁：
 # - pull_request：PR 变更跑前端测试/类型检查/桌面构建/Web 兼容构建 + Windows Rust 检查。
+# - push（feature/oxx）：D16 远端首跑；main 仍不单独触发，发布走 deploy-pages 的 workflow_call。
 # - workflow_call：由 deploy-pages.yml 在发布前调用，保证发布依赖同一提交的验证结果。
-# 主分支 push 的验证经由 deploy-pages.yml 的 verify 作业完成，避免同一提交重复运行。
 on:
   pull_request:
+  push:
+    branches:
+      - feature/oxx
   workflow_call:
 
 permissions:
