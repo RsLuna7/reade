@@ -16,7 +16,11 @@ import {
   useState,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { APP_RUNTIME } from "../lib/backend";
+import { APP_RUNTIME, createLocalBackup, exportDiagnosticReport, localDataStatus, pickBackupDirectory, stageLocalRestore, type LocalDataStatus } from "../lib/backend";
+import { collectLocalBackupPreferences } from "../lib/localBackup";
+import { downloadTextFile } from "../lib/fileTransfer";
+import { formatFileSize } from "../lib/displayFormat";
+import { useDialogFocus } from "../lib/useDialogFocus";
 
 
 export function ReadingSettingsPanel({
@@ -71,11 +75,30 @@ export function ReadingSettingsPanel({
   const resetReaderPreferences = useReaderStore((state) => state.resetReaderPreferences);
   const clearDocumentCache = useReaderStore((state) => state.clearDocumentCache);
   const [clearingCache, setClearingCache] = useState(false);
+  const [dataStatus, setDataStatus] = useState<LocalDataStatus | null>(null);
+  const [diagnosticsBusy, setDiagnosticsBusy] = useState(false);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  useDialogFocus(open, dialogRef);
   // 命名输入草稿:空值回落默认只在提交(blur/Enter)时发生,而非每个键击。
   const [colorNameDrafts, setColorNameDrafts] = useState(annotationColorNames);
   useEffect(() => {
     setColorNameDrafts(annotationColorNames);
   }, [annotationColorNames]);
+
+  useEffect(() => {
+    if (!open || isWeb) return;
+    let cancelled = false;
+    void localDataStatus()
+      .then((next) => {
+        if (!cancelled) setDataStatus(next);
+      })
+      .catch((cause) => {
+        if (!cancelled) onNotice(cause instanceof Error ? cause.message : String(cause));
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [open, isWeb, onNotice]);
 
   const numericSetting =
     (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing" | "wheelSpeed") =>
@@ -87,6 +110,7 @@ export function ReadingSettingsPanel({
   return (
     <div
       className="settings-popover reade-motion-panel"
+      ref={dialogRef}
       role="dialog"
       aria-label="阅读设置"
       aria-hidden={!open}
@@ -582,6 +606,95 @@ export function ReadingSettingsPanel({
         <RotateCcw size={13} aria-hidden="true" />
         {clearingCache ? "正在清理缓存…" : "清理文档索引缓存"}
       </button>}
+      {!isWeb && (
+        <fieldset className="settings-group">
+          <legend>本地数据与诊断</legend>
+          {dataStatus ? (
+            <p className="setting-hint">
+              版本 {dataStatus.appVersion} · 用户库{dataStatus.userDbOk ? "正常" : "异常"}
+              {dataStatus.userSchemaVersion != null ? ` v${dataStatus.userSchemaVersion}` : ""}
+              · 统计库{dataStatus.statsDbOk ? "正常" : "异常"} · 缓存 {formatFileSize(dataStatus.cacheBytes)}
+              · 失败索引 {dataStatus.failedIndexCount}
+              {dataStatus.lastBackupAtMs
+                ? ` · 最近备份 ${new Date(dataStatus.lastBackupAtMs).toLocaleString("zh-CN")}`
+                : " · 尚无备份"}
+              {dataStatus.restorePending ? " · 下次启动将应用已暂存的恢复" : ""}
+            </p>
+          ) : (
+            <p className="setting-hint">正在读取本机数据状态…</p>
+          )}
+          {(dataStatus?.userOpenError || dataStatus?.statsOpenError) && (
+            <p className="setting-hint" role="alert">
+              {dataStatus.userOpenError
+                ? `标注库打开失败：${dataStatus.userOpenError}`
+                : `统计库打开失败：${dataStatus.statsOpenError}`}
+              请从下方备份恢复；恢复会在下次启动时应用。
+            </p>
+          )}
+          <p className="setting-hint">
+            备份包含标注库、阅读统计和本机偏好，不打包原书文件，也不备份可再生成的索引缓存。
+          </p>
+          <p className="setting-hint">{dataStatus?.userDbPath}</p>
+          <button
+            className="settings-reset"
+            type="button"
+            disabled={diagnosticsBusy}
+            onClick={() => {
+              if (diagnosticsBusy) return;
+              setDiagnosticsBusy(true);
+              void createLocalBackup(collectLocalBackupPreferences())
+                .then((result) => {
+                  onNotice(`已创建本地备份：${result.backupPath}`);
+                  return localDataStatus();
+                })
+                .then((next) => setDataStatus(next))
+                .catch((cause) => onNotice(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => setDiagnosticsBusy(false));
+            }}
+          >
+            创建本地备份
+          </button>
+          <button
+            className="settings-reset"
+            type="button"
+            disabled={diagnosticsBusy}
+            onClick={() => {
+              if (diagnosticsBusy) return;
+              if (!window.confirm("从备份恢复会在下次启动时替换标注库和阅读统计。当前数据会先另存为回滚副本。继续？")) {
+                return;
+              }
+              setDiagnosticsBusy(true);
+              void pickBackupDirectory()
+                .then((dir) => (dir ? stageLocalRestore(dir) : null))
+                .then((message) => {
+                  if (message) onNotice(message);
+                })
+                .catch((cause) => onNotice(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => setDiagnosticsBusy(false));
+            }}
+          >
+            从备份恢复…
+          </button>
+          <button
+            className="settings-reset"
+            type="button"
+            disabled={diagnosticsBusy}
+            onClick={() => {
+              if (diagnosticsBusy) return;
+              setDiagnosticsBusy(true);
+              void exportDiagnosticReport()
+                .then((report) => {
+                  downloadTextFile("reade-diagnostics.json", report, "application/json");
+                  onNotice("已导出脱敏诊断报告（不含数据库路径）。");
+                })
+                .catch((cause) => onNotice(cause instanceof Error ? cause.message : String(cause)))
+                .finally(() => setDiagnosticsBusy(false));
+            }}
+          >
+            导出脱敏诊断
+          </button>
+        </fieldset>
+      )}
     </div>
   );
 }

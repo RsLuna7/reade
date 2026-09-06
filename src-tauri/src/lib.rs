@@ -1,11 +1,18 @@
+mod diagnostics;
 mod documents;
 mod library;
+mod library_paths;
 mod links;
+mod sqlite_io;
 mod stats;
 mod storage_migration;
 mod transfer;
 mod user_store;
 
+use crate::diagnostics::{
+    apply_pending_restore, create_local_backup, export_diagnostic_report, local_data_status,
+    stage_local_restore, DataOpenHealth,
+};
 use library::{
     capture_read_snapshot, clear_conversion_cache, find_related_passages, list_document_extents,
     list_document_links, open_document, open_library, probe_library_path, read_asset,
@@ -59,16 +66,32 @@ pub fn run() {
             // legacy cache files before the cache's "schema mismatch →
             // rebuild" policy gets a chance to delete them.
             let data_directory = app.path().app_data_dir()?;
-            let user_state = UserState::new(data_directory, cache_directory.clone())
-                .map_err(std::io::Error::other)?;
+            apply_pending_restore(&data_directory).map_err(std::io::Error::other)?;
+            let mut user_open_error = None;
+            let user_state = match UserState::new(data_directory.clone(), cache_directory.clone()) {
+                Ok(state) => state,
+                Err(error) => {
+                    user_open_error = Some(error.clone());
+                    UserState::unavailable(error, data_directory.join(user_store::USER_DB_FILE))
+                        .map_err(std::io::Error::other)?
+                }
+            };
             app.manage(user_state);
             let state = AppState::new(cache_directory).map_err(std::io::Error::other)?;
             app.manage(state);
             // Reading statistics persist in app_data_dir, away from the
             // disposable conversion cache in app_cache_dir.
-            let stats_directory = app.path().app_data_dir()?;
-            let stats_state = StatsState::new(stats_directory).map_err(std::io::Error::other)?;
+            let mut stats_open_error = None;
+            let stats_state = match StatsState::new(data_directory.clone()) {
+                Ok(state) => state,
+                Err(error) => {
+                    stats_open_error = Some(error.clone());
+                    StatsState::unavailable(error, data_directory.join("reade-stats.sqlite3"))
+                        .map_err(std::io::Error::other)?
+                }
+            };
             app.manage(stats_state);
+            app.manage(DataOpenHealth::new(user_open_error, stats_open_error));
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -155,6 +178,10 @@ pub fn run() {
             list_reading_sessions,
             start_reading_session,
             approve_window_close,
+            local_data_status,
+            create_local_backup,
+            stage_local_restore,
+            export_diagnostic_report,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

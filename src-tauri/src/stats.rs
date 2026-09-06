@@ -62,14 +62,19 @@ pub struct StatsState {
     /// persisted: they only need to outlive the session within this run, and
     /// the documented loss boundary covers a killed process.
     bindings: Arc<Mutex<HashMap<String, SessionBinding>>>,
+    unavailable: Option<String>,
+    durable_path: Option<PathBuf>,
 }
 
 impl StatsState {
     pub fn new(data_directory: PathBuf) -> CommandResult<Self> {
         fs::create_dir_all(&data_directory)
             .map_err(|error| format!("Cannot create application data directory: {error}"))?;
-        let connection = open_stats_connection(&data_directory.join("reade-stats.sqlite3"))?;
-        Self::from_connection(connection)
+        let path = data_directory.join("reade-stats.sqlite3");
+        let connection = open_stats_connection(&path)?;
+        let mut state = Self::from_connection(connection)?;
+        state.durable_path = Some(path);
+        Ok(state)
     }
 
     fn from_connection(connection: Connection) -> CommandResult<Self> {
@@ -77,20 +82,78 @@ impl StatsState {
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
             bindings: Arc::new(Mutex::new(HashMap::new())),
+            unavailable: None,
+            durable_path: None,
         })
     }
 
-    #[cfg(test)]
-    fn in_memory() -> CommandResult<Self> {
+    pub(crate) fn in_memory() -> CommandResult<Self> {
         Self::from_connection(
             Connection::open_in_memory()
                 .map_err(|error| format!("Cannot create test stats database: {error}"))?,
         )
     }
 
+    pub(crate) fn unavailable(reason: String, durable_path: PathBuf) -> CommandResult<Self> {
+        let mut state = Self::in_memory()?;
+        state.unavailable = Some(reason);
+        state.durable_path = Some(durable_path);
+        Ok(state)
+    }
+
+    fn ensure_available(&self) -> CommandResult<()> {
+        if let Some(reason) = &self.unavailable {
+            return Err(format!("Reading stats database is unavailable: {reason}"));
+        }
+        Ok(())
+    }
+
     #[cfg(test)]
     fn bound_bindings(&self) -> std::sync::MutexGuard<'_, HashMap<String, SessionBinding>> {
         self.bindings.lock().expect("bindings")
+    }
+
+    pub(crate) fn snapshot_to(&self, dest: &std::path::Path) -> CommandResult<()> {
+        if self.unavailable.is_some() {
+            let Some(path) = &self.durable_path else {
+                return Err(
+                    "Reading stats database is unavailable and no on-disk file exists to back up"
+                        .into(),
+                );
+            };
+            if !path.exists() {
+                return Err(
+                    "Reading stats database is unavailable and no on-disk file exists to back up"
+                        .into(),
+                );
+            }
+            let connection = Connection::open(path)
+                .map_err(|error| format!("Cannot open stats database for backup: {error}"))?;
+            return crate::sqlite_io::vacuum_into(&connection, dest);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "Reading stats lock was poisoned".to_owned())?;
+        crate::sqlite_io::vacuum_into(&connection, dest)
+    }
+
+    pub(crate) fn integrity_ok(&self) -> CommandResult<bool> {
+        if self.unavailable.is_some() {
+            return Ok(false);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "Reading stats lock was poisoned".to_owned())?;
+        crate::sqlite_io::integrity_ok(&connection)
+    }
+
+    pub(crate) fn bound_session_count(&self) -> u32 {
+        self.bindings
+            .lock()
+            .map(|guard| guard.len() as u32)
+            .unwrap_or(0)
     }
 }
 
@@ -105,6 +168,7 @@ pub fn start_reading_session(
     library: State<'_, AppState>,
     stats: State<'_, StatsState>,
 ) -> CommandResult<()> {
+    stats.ensure_available()?;
     // Start snapshots carry no active time yet, so only the identity fields
     // are validated here (full validation happens on every save).
     validate_session_id(&session.id)?;
@@ -152,6 +216,7 @@ pub fn record_reading_session(
 /// The save path behind `record_reading_session`, split out so tests can
 /// drive it without Tauri `State` handles.
 fn save_session(stats: &StatsState, session: ReadingSession) -> CommandResult<()> {
+    stats.ensure_available()?;
     let sanitized = sanitize_session(session)?;
     // Attribute to the session's bound origin, never to whatever library is
     // open at save time; an unknown session id is refused instead of being
@@ -285,6 +350,7 @@ fn initialize_stats(connection: &Connection) -> CommandResult<()> {
 }
 
 fn lock_stats<'a>(state: &'a State<'_, StatsState>) -> CommandResult<MutexGuard<'a, Connection>> {
+    state.ensure_available()?;
     state
         .connection
         .lock()

@@ -1,0 +1,35 @@
+[
+  {
+    "resultId": "r-1",
+    "relativePath": "notes/guide.md",
+    "title": "安装步骤",
+    "snippet": "…稳定性…",
+    "score": 1.5,
+    "format": "markdown",
+    "locator": null
+  },
+  {
+    "resultId": "r-2",
+    "relativePath": "papers/a.pdf",
+    "title": "Paper",
+    "snippet": "abstract",
+    "score": 0.25,
+    "format": "pdf",
+    "locator": {
+      "kind": "pdfPage",
+      "page": 12
+    }
+  },
+  {
+    "resultId": "r-3",
+    "relativePath": "books/long.epub",
+    "title": "Long Book",
+    "snippet": "chapter",
+    "score": 0.5,
+    "format": "epub",
+    "locator": {
+      "kind": "epubChapter",
+      "chapterId": "chap-09"
+    }
+  }
+]

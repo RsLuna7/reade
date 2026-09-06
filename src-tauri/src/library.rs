@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Seek, SeekFrom},
-    path::{Component, Path, PathBuf},
+    path::{Path, PathBuf},
     sync::{
         atomic::{AtomicU64, Ordering},
         Arc, Mutex,
@@ -14,7 +14,7 @@ use base64::{engine::general_purpose::STANDARD as BASE64, Engine as _};
 use ignore::{DirEntry, WalkBuilder};
 use notify::{EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use rusqlite::{params, Connection, OptionalExtension};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use tauri::{ipc::Response, AppHandle, Emitter, Manager, State};
 
 use crate::documents::{
@@ -96,19 +96,23 @@ const EXCLUDED_DIRECTORIES: &[&str] = &[
 ];
 
 pub(crate) type CommandResult<T> = Result<T, String>;
+pub(crate) use crate::library_paths::{
+    canonical_library_root, normalize_relative_path, normalize_root, resolve_existing_in_root,
+    validate_relative_library_path,
+};
 
 /// Result of `open_library` / `refresh_library` (D02): the scanned
 /// documents plus the backend-normalized library identity the frontend
 /// uses to filter stale events. `root_key` is `normalize_root(canonical)`,
 /// independent of the user-typed path.
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct LibraryOpenResult {
     pub root_key: String,
     pub documents: Vec<DocumentInfo>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct DocumentInfo {
     pub relative_path: String,
@@ -120,7 +124,7 @@ pub struct DocumentInfo {
     pub index_error: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(
     tag = "kind",
     rename_all = "camelCase",
@@ -131,7 +135,7 @@ pub enum SearchLocator {
     EpubChapter { chapter_id: String },
 }
 
-#[derive(Debug, Clone, Serialize, PartialEq)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct SearchResult {
     pub result_id: String,
@@ -174,7 +178,7 @@ pub struct AssetData {
     pub data: String,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct IndexProgress {
     /// Normalized identity of the library this progress belongs to, so the
@@ -188,7 +192,7 @@ struct IndexProgress {
     failed: usize,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 struct DocumentIndexEvent {
     library_root: String,
@@ -281,6 +285,21 @@ impl AppState {
             index_gate: Arc::new(Mutex::new(())),
             cache_path,
         })
+    }
+
+    pub(crate) fn failed_index_count(&self) -> u32 {
+        self.inner
+            .lock()
+            .map(|current| {
+                current
+                    .documents
+                    .iter()
+                    .filter(|document| {
+                        document.index_status == crate::documents::IndexStatus::Failed
+                    })
+                    .count() as u32
+            })
+            .unwrap_or(0)
     }
 
     /// D09: a short-lived connection for out-of-lock scans. WAL lets the
@@ -2911,22 +2930,6 @@ fn clear_cache_storage(connection: &mut Connection) -> CommandResult<()> {
     reclaim_cache_space(connection)
 }
 
-pub(crate) fn validate_relative_library_path(relative_path: &str) -> CommandResult<()> {
-    let relative = Path::new(relative_path);
-    if relative_path.trim().is_empty() || relative.is_absolute() {
-        return Err("A non-empty relative path is required".to_owned());
-    }
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err("Path traversal outside the library is not allowed".to_owned());
-    }
-    Ok(())
-}
-
 fn ensure_document_in_library(
     current: &LibraryState,
     root: &Path,
@@ -3846,39 +3849,6 @@ pub(crate) fn current_root_and_document_paths(
     Ok((root, paths))
 }
 
-fn canonical_library_root(path: &Path) -> CommandResult<PathBuf> {
-    let canonical = path
-        .canonicalize()
-        .map_err(|error| format!("Cannot open library root: {error}"))?;
-    if !canonical.is_dir() {
-        return Err("Library root must be a directory".to_owned());
-    }
-    Ok(canonical)
-}
-
-pub(crate) fn resolve_existing_in_root(root: &Path, relative_path: &str) -> CommandResult<PathBuf> {
-    let relative = Path::new(relative_path);
-    if relative_path.trim().is_empty() || relative.is_absolute() {
-        return Err("A non-empty relative path is required".to_owned());
-    }
-    if relative.components().any(|component| {
-        matches!(
-            component,
-            Component::ParentDir | Component::RootDir | Component::Prefix(_)
-        )
-    }) {
-        return Err("Path traversal outside the library is not allowed".to_owned());
-    }
-    let candidate = root.join(relative);
-    let canonical = candidate
-        .canonicalize()
-        .map_err(|error| format!("Cannot resolve library path: {error}"))?;
-    if !canonical.starts_with(root) {
-        return Err("Resolved path is outside the library root".to_owned());
-    }
-    Ok(canonical)
-}
-
 fn create_watcher(root: &Path, app: AppHandle) -> CommandResult<RecommendedWatcher> {
     let last_emit = Arc::new(Mutex::new(None::<Instant>));
     let mut watcher = notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
@@ -3965,20 +3935,6 @@ fn fallback_title(path: &Path) -> String {
         .and_then(|stem| stem.to_str())
         .unwrap_or("Untitled")
         .to_owned()
-}
-
-pub(crate) fn normalize_relative_path(path: &Path) -> String {
-    path.components()
-        .filter_map(|component| match component {
-            Component::Normal(part) => Some(part.to_string_lossy()),
-            _ => None,
-        })
-        .collect::<Vec<_>>()
-        .join("/")
-}
-
-pub(crate) fn normalize_root(path: &Path) -> String {
-    path.to_string_lossy().replace('\\', "/")
 }
 
 fn modified_millis(metadata: &fs::Metadata) -> u64 {
@@ -6658,6 +6614,116 @@ mod tests {
             .expect("count cache rows");
         assert_eq!(segments, 0);
         assert_eq!(cache_rows, 1);
+    }
+
+    fn json_fixture(name: &str) -> serde_json::Value {
+        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../src/lib/ipc-fixtures")
+            .join(name);
+        let bytes =
+            fs::read(&path).unwrap_or_else(|error| panic!("read {}: {error}", path.display()));
+        serde_json::from_slice(&bytes).unwrap_or_else(|error| panic!("parse {name}: {error}"))
+    }
+
+    fn assert_fixture_round_trip<T>(name: &str, value: &T)
+    where
+        T: serde::Serialize + serde::de::DeserializeOwned + PartialEq + std::fmt::Debug,
+    {
+        let expected = json_fixture(name);
+        let encoded = serde_json::to_value(value).expect("serialize");
+        assert_eq!(encoded, expected, "{name} rust serialize ≠ fixture");
+        let decoded: T = serde_json::from_value(expected).expect("deserialize fixture");
+        assert_eq!(decoded, *value, "{name} fixture deserialize ≠ rust value");
+    }
+
+    #[test]
+    fn ipc_session_dtos_match_shared_fixtures() {
+        assert_fixture_round_trip(
+            "library-open-result.json",
+            &LibraryOpenResult {
+                root_key: "C:/合成库/library-a".into(),
+                documents: vec![
+                    DocumentInfo {
+                        relative_path: "笔记/长文.md".into(),
+                        title: "稳定性分析 🧪".into(),
+                        size: 4096,
+                        modified: 1_725_600_000_000,
+                        format: DocumentFormat::Markdown,
+                        index_status: IndexStatus::Ready,
+                        index_error: None,
+                    },
+                    DocumentInfo {
+                        relative_path: "papers/guide.epub".into(),
+                        title: "Guide".into(),
+                        size: 1_048_576,
+                        modified: 1_725_600_000_001,
+                        format: DocumentFormat::Epub,
+                        index_status: IndexStatus::Failed,
+                        index_error: Some("Resource limit exceeded".into()),
+                    },
+                ],
+            },
+        );
+        let expected_results = json_fixture("search-results.json");
+        let results = vec![
+            SearchResult {
+                result_id: "r-1".into(),
+                relative_path: "notes/guide.md".into(),
+                title: "安装步骤".into(),
+                snippet: "…稳定性…".into(),
+                score: 1.5,
+                format: DocumentFormat::Markdown,
+                locator: None,
+            },
+            SearchResult {
+                result_id: "r-2".into(),
+                relative_path: "papers/a.pdf".into(),
+                title: "Paper".into(),
+                snippet: "abstract".into(),
+                score: 0.25,
+                format: DocumentFormat::Pdf,
+                locator: Some(SearchLocator::PdfPage { page: 12 }),
+            },
+            SearchResult {
+                result_id: "r-3".into(),
+                relative_path: "books/long.epub".into(),
+                title: "Long Book".into(),
+                snippet: "chapter".into(),
+                score: 0.5,
+                format: DocumentFormat::Epub,
+                locator: Some(SearchLocator::EpubChapter {
+                    chapter_id: "chap-09".into(),
+                }),
+            },
+        ];
+        assert_eq!(
+            serde_json::to_value(&results).expect("search serialize"),
+            expected_results
+        );
+        let decoded: Vec<SearchResult> =
+            serde_json::from_value(expected_results).expect("search deserialize");
+        assert_eq!(decoded, results);
+        assert_fixture_round_trip(
+            "index-progress.json",
+            &IndexProgress {
+                library_root: "C:/合成库/library-a".into(),
+                total: 16,
+                completed: 12,
+                ready: 10,
+                partial: 1,
+                failed: 1,
+            },
+        );
+        assert_fixture_round_trip(
+            "document-index-event.json",
+            &DocumentIndexEvent {
+                library_root: "C:/合成库/library-b".into(),
+                relative_path: "notes/长文.md".into(),
+                title: "迟到事件".into(),
+                status: IndexStatus::Ready,
+                error: None,
+            },
+        );
     }
 
     // ---- D10 性能基线测量（显式运行，不是 CI 门禁） ----

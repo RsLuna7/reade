@@ -1,0 +1,704 @@
+:root {
+  font-family:
+    Inter, "SF Pro Text", "Segoe UI Variable Text", "Segoe UI", "Noto Sans SC",
+    "Microsoft YaHei UI", sans-serif;
+  color: var(--ink);
+  background: var(--theme-color);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  /* ~18.5% : 67.5% : 14% at 1440px (264 / 976 / 200). */
+  --sidebar-width: 264px;
+  --toc-width: 200px;
+  --reader-font-size: 17px;
+  --reader-line-height: 1.86;
+  /* Fallback; runtime may set a px cap or `none` for fluid measure. */
+  --reader-measure: none;
+  --reader-gutter-inline: 40px;
+  --reader-gutter-toc: 24px;
+  /* Headings stay bold so they read as titles. Rank comes from size, not
+     from thinning the face or greying the ink. */
+  --reader-h1-size: 1.85em;
+  --reader-h2-size: 1.55em;
+  --reader-h3-size: 1.26em;
+  --reader-h4-size: 1.08em;
+  --reader-h5-size: 0.94em;
+  --reader-h6-size: 0.88em;
+  --reader-h1-weight: 700;
+  --reader-h2-weight: 700;
+  --reader-h3-weight: 700;
+  --reader-h4-weight: 700;
+  --reader-h5-weight: 700;
+  --reader-h6-weight: 700;
+  --reader-h1-color: var(--ink);
+  --reader-h2-color: var(--ink);
+  --reader-h3-color: var(--ink);
+  --reader-h4-color: var(--ink);
+  --reader-h5-color: var(--ink);
+  --reader-h6-color: var(--ink);
+  --motion-fast: 0ms;
+  --motion-standard: 0ms;
+  --motion-slow: 0ms;
+  --motion-distance: 0px;
+  --motion-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  /* 段落聚焦淡入淡出时长(plan-focus-mode §2):off 档瞬时。 */
+  --focus-fade: 0ms;
+}
+
+/*
+  标注色板：阅读正文与 UI chrome 统一走三色低彩度 --excerpt-*（暖砂/青灰/墨蓝）。
+  旧四色键 yellow/green/blue/pink 仍出现在数据层与 class 名；粉映射为砂。
+  --annot-* 作为兼容别名指向 excerpt，避免列表/刻度/圆点再亮成荧光色。
+  PDF 页面恒为白底，pdf 用户高亮层固定用明色系字面量。
+*/
+:root {
+  /* Reading-first excerpt palette (v6): low-chroma, appearance only. */
+  --excerpt-sand: #b5965d;
+  --excerpt-sand-fill: rgb(181 150 93 / 22%);
+  --excerpt-sand-line: #7f6537;
+  --excerpt-sage: #6e938a;
+  --excerpt-sage-fill: rgb(110 147 138 / 20%);
+  --excerpt-sage-line: #4d6f67;
+  --excerpt-slate: #6d829d;
+  --excerpt-slate-fill: rgb(109 130 157 / 20%);
+  --excerpt-slate-line: #50657f;
+  --annot-yellow: var(--excerpt-sand);
+  --annot-yellow-fill: var(--excerpt-sand-fill);
+  --annot-yellow-line: var(--excerpt-sand-line);
+  --annot-green: var(--excerpt-sage);
+  --annot-green-fill: var(--excerpt-sage-fill);
+  --annot-green-line: var(--excerpt-sage-line);
+  --annot-blue: var(--excerpt-slate);
+  --annot-blue-fill: var(--excerpt-slate-fill);
+  --annot-blue-line: var(--excerpt-slate-line);
+  --annot-pink: var(--excerpt-sand);
+  --annot-pink-fill: var(--excerpt-sand-fill);
+  --annot-pink-line: var(--excerpt-sand-line);
+}
+
+/* 主题 id 契约为 `${series}-${mode}`(theme-tokens.css),后缀匹配即覆盖全部暗色系。 */
+:root[data-theme$="-dark"] {
+  --excerpt-sand: #c7aa72;
+  --excerpt-sand-fill: rgb(199 170 114 / 22%);
+  --excerpt-sand-line: #d0b680;
+  --excerpt-sage: #88aaa1;
+  --excerpt-sage-fill: rgb(136 170 161 / 22%);
+  --excerpt-sage-line: #9abbb2;
+  --excerpt-slate: #899db7;
+  --excerpt-slate-fill: rgb(137 157 183 / 22%);
+  --excerpt-slate-line: #9fb2c9;
+  /* --annot-* stay as aliases to --excerpt-* from :root; only excerpt values change. */
+}
+
+:root[data-motion="subtle"] {
+  --motion-fast: 120ms;
+  --motion-standard: 180ms;
+  --motion-slow: 220ms;
+  --motion-distance: 4px;
+  --focus-fade: 120ms;
+}
+
+:root[data-motion="full"] {
+  --motion-fast: 150ms;
+  --motion-standard: 220ms;
+  --motion-slow: 280ms;
+  --motion-distance: 6px;
+  --focus-fade: 240ms;
+}
+
+/* 主题墨水扩散(plan-theme-ink-transition):扩散期间由 html class 圈定
+   关闭默认交叉淡入——新快照交给 WAAPI 的 clip-path 圆形揭示,旧快照
+   原样垫底;class 在 transition.finished 后移除,后续无 origin 的
+   full 档切换仍是默认交叉淡入。 */
+:root.theme-ink-reveal::view-transition-old(root),
+:root.theme-ink-reveal::view-transition-new(root) {
+  animation: none;
+  mix-blend-mode: normal;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+body {
+  min-width: 680px;
+  min-height: 520px;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+a {
+  -webkit-tap-highlight-color: transparent;
+}
+
+button:focus-visible,
+input:focus-visible,
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+::selection {
+  background: var(--selection);
+}
+
+::-webkit-scrollbar {
+  width: 11px;
+  height: 11px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  min-height: 48px;
+  border: 3px solid transparent;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--muted) 46%, transparent);
+  background-clip: content-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, var(--muted) 72%, transparent);
+  background-clip: content-box;
+}
+
+.reader-shell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  width: 100%;
+  height: 100%;
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.library-sidebar {
+  position: relative;
+  z-index: 4;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  background:
+    radial-gradient(circle at 28px 36px, color-mix(in srgb, var(--accent) 12%, transparent), transparent 110px),
+    var(--chrome);
+}
+
+.sidebar-header {
+  flex-shrink: 0;
+  padding: 25px 20px 17px;
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  min-height: 38px;
+}
+
+.brand-mark {
+  position: relative;
+  display: grid;
+  width: 35px;
+  height: 35px;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  border-radius: 10px 10px 10px 3px;
+  background: var(--accent);
+  box-shadow: 0 7px 17px rgba(143, 59, 42, 0.18);
+}
+
+.brand-companion {
+  display: block;
+  width: 35px;
+  height: 35px;
+}
+
+.brand-companion-eye {
+  fill: #fff6ea;
+}
+
+.brand-companion-eyes {
+  transform-box: fill-box;
+  transform-origin: center;
+}
+
+.brand-copy {
+  min-width: 0;
+}
+
+.brand-name {
+  margin: 0;
+  font-family: Georgia, "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+  font-size: 17px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.brand-tagline {
+  margin: 2px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.library-row {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 20px;
+}
+
+/* 最近书库菜单(plan-library-mru §2.3):挂 library-row,复用 popover 样式族。 */
+.library-switcher {
+  position: absolute;
+  z-index: 12;
+  top: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  display: grid;
+  gap: 8px;
+  max-height: min(430px, calc(100vh - 140px));
+  padding: 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: 14px;
+  background: var(--paper-raised);
+  box-shadow: var(--shadow);
+  overflow-y: auto;
+}
+
+.library-switcher .settings-heading {
+  margin: 0;
+}
+
+.library-switcher-list {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  gap: 2px;
+  list-style: none;
+}
+
+.library-switcher-item {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.library-switcher-open {
+  display: grid;
+  min-width: 0;
+  flex: 1;
+  gap: 1px;
+  padding: 6px 8px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  text-align: left;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.library-switcher-open:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--accent-soft) 42%, transparent);
+}
+
+.library-switcher-open[aria-current="true"] {
+  border-color: color-mix(in srgb, var(--accent) 26%, var(--line));
+  background: color-mix(in srgb, var(--accent-soft) 30%, transparent);
+}
+
+.library-switcher-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 650;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.library-switcher-badge {
+  flex: 0 0 auto;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent);
+  background: var(--accent-soft);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.library-switcher-meta {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.library-switcher-item--missing .library-switcher-open {
+  cursor: default;
+}
+
+.library-switcher-item--missing .library-switcher-name,
+.library-switcher-item--missing .library-switcher-meta {
+  color: var(--muted);
+  opacity: 0.62;
+}
+
+.library-switcher-remove {
+  width: 28px;
+  height: 28px;
+}
+
+.library-switcher-browse {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  border: 1px dashed var(--line-strong);
+  border-radius: 9px;
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 650;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease);
+}
+
+.library-switcher-browse:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-strong));
+  color: var(--ink);
+}
+
+.library-button {
+  display: flex;
+  min-width: 0;
+  height: 38px;
+  flex: 1;
+  align-items: center;
+  gap: 9px;
+  padding: 0 11px;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--paper-raised) 64%, transparent);
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.library-button:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-strong));
+  color: var(--ink);
+  background: var(--paper-raised);
+}
+
+.library-button-copy {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-button {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  place-items: center;
+  flex: 0 0 auto;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: transparent;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease),
+    transform var(--motion-fast) var(--motion-ease);
+}
+
+.icon-button:hover,
+.icon-button[aria-expanded="true"] {
+  border-color: var(--line);
+  color: var(--ink);
+  background: var(--paper-raised);
+}
+
+.icon-button.accent {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
+.icon-button:disabled {
+  cursor: default;
+  opacity: 0.42;
+}
+
+.search-box {
+  position: relative;
+  margin-top: 11px;
+}
+
+.search-box > svg {
+  position: absolute;
+  top: 50%;
+  left: 11px;
+  color: var(--muted);
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.search-input {
+  width: 100%;
+  height: 38px;
+  padding: 0 33px 0 35px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  outline: none;
+  color: var(--ink);
+  background: color-mix(in srgb, var(--chrome-strong) 68%, transparent);
+  font-size: 13px;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.search-input::placeholder {
+  color: var(--muted);
+}
+
+.search-input:focus {
+  border-color: color-mix(in srgb, var(--accent) 34%, transparent);
+  background: var(--paper-raised);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 9%, transparent);
+}
+
+.search-shortcut {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  padding: 2px 5px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--muted);
+  background: color-mix(in srgb, var(--paper) 72%, transparent);
+  font-size: 9px;
+  line-height: 1.3;
+  pointer-events: none;
+  transform: translateY(-50%);
+}
+
+.sidebar-section-label {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 21px 8px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+.sidebar-content {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar-content::-webkit-scrollbar,
+.toc-panel::-webkit-scrollbar,
+.toc-drawer::-webkit-scrollbar {
+  width: 0;
+  height: 0;
+  display: none;
+}
+
+.sidebar-footer {
+  /* Anchor for the upward-opening theme style popover. */
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  flex-shrink: 0;
+  min-height: 61px;
+  justify-content: center;
+  gap: 4px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+  background: color-mix(in srgb, var(--chrome) 92%, transparent);
+}
+
+.theme-controls {
+  display: grid;
+  width: 100%;
+  min-width: 0;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
+  gap: 2px;
+}
+
+.theme-controls > .theme-series-label,
+.theme-controls > .icon-button {
+  width: 100%;
+  min-width: 0;
+}
+
+/* Four equal cells fill the footer; the series label is one of them. */
+.theme-series-label {
+  display: inline-flex;
+  height: 36px;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  overflow: hidden;
+  padding: 0 4px;
+  border: 1px solid transparent;
+  border-radius: 10px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.theme-series-label:hover,
+.theme-series-label[aria-expanded="true"] {
+  border-color: var(--line-strong);
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+}
+
+/* 「界面风格」picker: reuses the settings-popover shell, opens upward from
+   the sidebar footer and stays inside the sidebar bounds. The compound
+   selector must outweigh .settings-popover's own top/right placement,
+   which is declared later in this file. */
+.settings-popover.theme-style-popover {
+  top: auto;
+  right: 10px;
+  bottom: calc(100% + 9px);
+  left: 10px;
+  width: auto;
+  padding: 14px;
+}
+
+.theme-style-options {
+  display: grid;
+  gap: 8px;
+}
+
+.theme-style-tile {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: var(--ink-soft);
+  background: var(--chrome);
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--motion-ease),
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.theme-style-tile:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.theme-style-tile.active,
+.theme-style-tile[aria-checked="true"] {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+  background: var(--paper-raised);
+}
+
+.theme-style-swatch {
+  display: inline-flex;
+  overflow: hidden;
+  width: 42px;
+  height: 20px;
+  flex-shrink: 0;
+  border: 1px solid var(--line-strong);
+  border-radius: 6px;
+}
+
+.theme-style-swatch i {
+  display: block;
+  width: 14px;
+  height: 100%;
+}
+
+.theme-style-name {
+  font-weight: 600;
+}
+
+.theme-style-hint {
+  margin: 12px 0 0;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.5;
+}
+
+.sidebar-status {
+  min-width: 0;
+  overflow: hidden;
+  padding: 0 4px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+

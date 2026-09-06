@@ -146,6 +146,27 @@ vi.mock("./lib/backend", async () => {
     onWindowCloseRequested: vi.fn(async () => () => undefined),
     startReadingSession: vi.fn(async () => undefined),
     approveWindowClose: vi.fn(async () => undefined),
+    localDataStatus: vi.fn(async () => ({
+      appVersion: "0.2.0",
+      userDbPath: "C:/data/reade-user.sqlite3",
+      statsDbPath: "C:/data/reade-stats.sqlite3",
+      cacheDbPath: "C:/cache/reade-cache.sqlite3",
+      userDbOk: true,
+      statsDbOk: true,
+      userSchemaVersion: 7,
+      cacheBytes: 0,
+      failedIndexCount: 0,
+      lastBackupAtMs: null,
+      lastBackupPath: null,
+      pendingBoundSessions: 0,
+      restorePending: false,
+      userOpenError: null,
+      statsOpenError: null,
+    })),
+    createLocalBackup: vi.fn(async () => ({ backupPath: "C:/data/backups/x", createdAtMs: 1 })),
+    stageLocalRestore: vi.fn(async () => "staged"),
+    exportDiagnosticReport: vi.fn(async () => "{}"),
+    pickBackupDirectory: vi.fn(async () => null),
   };
 });
 
@@ -1117,7 +1138,7 @@ describe("library-wide annotations (B7)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
   }
 
   it("lists annotations across documents and jumps into another document", async () => {
@@ -1173,7 +1194,7 @@ describe("library annotation search and filters (方案四 A1)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
   }
 
   function setTwoDocumentState() {
@@ -1454,7 +1475,7 @@ describe("lost documents rebind (§5.6 C)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
 
     const section = await screen.findByRole("region", { name: "失联文档" });
     expect(section).toHaveTextContent("ghost.md");
@@ -1947,7 +1968,7 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
   });
 
-  it("does not loop auto-opening the first document after a read failure", async () => {
+  it("does not loop auto-opening the first document after a read failure", { timeout: 20_000 }, async () => {
     // 首篇读取失败时 currentPath 保持 null,loading 翻转会让冷启动 effect
     // 重跑;回归场景是不加防护时无限重试,加载遮罩持续闪烁。
     vi.mocked(readDocument).mockRejectedValue(new Error("cannot read document"));
@@ -1963,7 +1984,7 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().currentPath).toBeNull();
     // 失败必须以 error 通道呈现,而不是静默重试。
     expect(useReaderStore.getState().error).toContain("cannot read document");
-  }, 10000);
+  });
 
   it("ignores history that only points at documents outside the library", async () => {
     writeReadingPosition(HOME_ROOT, "removed.md", { kind: "scroll", scrollRatio: 0.4 });

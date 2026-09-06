@@ -48,6 +48,12 @@ import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
 import { BookshelfView } from "./components/BookshelfView";
 import { BrandCompanion } from "./components/BrandCompanion";
 import { DocumentTree } from "./components/DocumentTree";
+import { MotionNotice } from "./components/MotionNotice";
+import { LocalDataHealthNotice } from "./components/LocalDataHealthNotice";
+import { ReadingSettingsPanel, ThemeStylePicker } from "./components/ReadingSettingsPanel";
+import { SidePanel, type SidePanelTab } from "./components/SidePanel";
+import { TocNavigation } from "./components/TocNavigation";
+import { Welcome } from "./components/WelcomeView";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
 // 主题墨水扩散(plan-theme-ink-transition):点击处理器写入一次性
@@ -128,6 +134,7 @@ import { useHoverPreview } from "./lib/useHoverPreview";
 import { FindBar } from "./components/FindBar";
 import { ScrollMap } from "./components/ScrollMap";
 import { useDocumentFind } from "./lib/useDocumentFind";
+import { useReaderHotkeys } from "./lib/useReaderHotkeys";
 import {
   buildScrollMapMarks,
   collectAnnotationScrollPoints,
@@ -185,6 +192,7 @@ import {
 import {
   applyRelocatedAnnotation,
   captureRelocatedSelection,
+  collectRelocationRoots,
   findRelocationRange,
   isRelocatableAnnotation,
   type QuoteBearingLocator,
@@ -281,14 +289,9 @@ import {
   type ReadNextSuggestion,
 } from "./lib/readNext";
 import { documentTreeName } from "./lib/tree";
+import { decodePath, fileName, formatFileSize, formatModified, transferDateStamp } from "./lib/displayFormat";
+import { useMediaQuery } from "./lib/useMediaQuery";
 import { buildTocHeat, type TocHeatResult } from "./lib/tocHeat";
-import {
-  findTocScrollParent,
-  measureTocIndicator,
-  scrollTocLinkIntoView,
-  tocScrollBehaviorFromMotion,
-  type TocIndicatorBox,
-} from "./lib/tocActiveIndicator";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 // Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
 // 高亮复用朗读同款 CSS Custom Highlight(第二注册名,零 DOM 侵入)。
@@ -347,96 +350,6 @@ const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ 
 const ReviewView = lazy(() => import("./components/ReviewView").then((module) => ({ default: module.ReviewView })));
 const AnnotationHubView = lazy(() => import("./components/AnnotationHubView").then((module) => ({ default: module.AnnotationHubView })));
 const BookDigestView = lazy(() => import("./components/BookDigestView").then((module) => ({ default: module.BookDigestView })));
-
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia(query).matches
-      : false,
-  );
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia(query);
-    const update = () => setMatches(media.matches);
-    update();
-    media.addEventListener?.("change", update);
-    return () => media.removeEventListener?.("change", update);
-  }, [query]);
-
-  return matches;
-}
-
-function fileName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/** 本地日期戳(YYYYMMDD),用于导出文件的默认文件名。 */
-function transferDateStamp(now = new Date()): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function formatModified(value: number): string {
-  const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
-  const date = new Date(milliseconds);
-  if (Number.isNaN(date.getTime())) return "修改时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(date);
-}
-
-function decodePath(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Search roots for the §5.6 relocate pass, matching where the annotation's
- * quote could live. PDF roots are ordered by page proximity to the stored
- * page so the nearest rendered occurrence wins.
- */
-function collectRelocationRoots(
-  article: HTMLElement,
-  locator: QuoteBearingLocator,
-): HTMLElement[] {
-  if (locator.kind === "markdown") {
-    const root = article.querySelector<HTMLElement>(".markdown-body");
-    return root ? [root] : [];
-  }
-  if (locator.kind === "epub") {
-    const root = article.querySelector<HTMLElement>(".epub-reader");
-    return root ? [root] : [];
-  }
-  const pageSelector = locator.view === "reading" ? ".pdf-reading-page" : ".pdf-page";
-  const entries: Array<{ page: number; root: HTMLElement }> = [];
-  for (const page of Array.from(article.querySelectorAll<HTMLElement>(pageSelector))) {
-    const root =
-      locator.view === "reading"
-        ? page.querySelector<HTMLElement>(".markdown-body")
-        : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer");
-    if (!root || !root.textContent?.trim()) continue;
-    const pageNumber = Number(page.dataset.pageNumber);
-    entries.push({ page: Number.isFinite(pageNumber) ? pageNumber : 0, root });
-  }
-  entries.sort(
-    (a, b) => Math.abs(a.page - locator.page) - Math.abs(b.page - locator.page),
-  );
-  return entries.map((entry) => entry.root);
-}
-
-import { Welcome } from "./components/WelcomeView";
 
 function LibrarySwitcherPopover({
   entries,
@@ -529,267 +442,7 @@ function LibrarySwitcherPopover({
 }
 
 
-import { MotionNotice } from "./components/MotionNotice";
-import { ReadingSettingsPanel, ThemeStylePicker } from "./components/ReadingSettingsPanel";
-export { ReadingSettingsPanel };
-export { MotionNotice };
-
-export function TocNavigation({
-  items,
-  activeId,
-  onSelect,
-  heat,
-  onSelectTop,
-  estimateLine,
-}: {
-  items: TocItem[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
-  /** 方案三 T1 批注密度;不传时不渲染热力点/文首提示。 */
-  heat?: TocHeatResult | null;
-  /** 文首/失效章节说明行的跳转目标(滚动到文档顶部)。 */
-  onSelectTop?: () => void;
-  /** 阅读时间预估(plan-reading-time-estimate §3.3):目录顶部一行。 */
-  estimateLine?: string | null;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const linkRefs = useRef(new Map<string, HTMLAnchorElement>());
-  const [indicator, setIndicator] = useState<TocIndicatorBox | null>(null);
-
-  const setLinkRef = useCallback(
-    (id: string) => (node: HTMLAnchorElement | null) => {
-      if (node) linkRefs.current.set(id, node);
-      else linkRefs.current.delete(id);
-    },
-    [],
-  );
-
-  const measureActive = useCallback(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || !activeId) {
-      setIndicator(null);
-      return null as HTMLAnchorElement | null;
-    }
-    const link = linkRefs.current.get(activeId);
-    if (!link) {
-      setIndicator(null);
-      return null;
-    }
-    setIndicator(measureTocIndicator(wrap, link));
-    return link;
-  }, [activeId]);
-
-  useLayoutEffect(() => {
-    measureActive();
-  }, [measureActive, items, heat, estimateLine]);
-
-  useLayoutEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || !activeId) return;
-    const link = linkRefs.current.get(activeId);
-    if (!link) return;
-    const scrollParent = findTocScrollParent(wrap);
-    if (!scrollParent) return;
-    scrollTocLinkIntoView(
-      scrollParent,
-      link,
-      tocScrollBehaviorFromMotion(document.documentElement.dataset.motion),
-    );
-  }, [activeId]);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      measureActive();
-    });
-    observer.observe(wrap);
-    return () => observer.disconnect();
-  }, [measureActive]);
-
-  return (
-    <div className="toc-section">
-      {estimateLine ? <p className="toc-estimate">{estimateLine}</p> : null}
-      {heat && heat.unassignedCount > 0 ? (
-        <button type="button" className="toc-unassigned" onClick={onSelectTop}>
-          文首或已变更章节另有 {heat.unassignedCount} 条标注
-        </button>
-      ) : null}
-      {items.length ? (
-        <div className="toc-list-wrap" ref={wrapRef}>
-          {indicator ? (
-            <div
-              className="toc-active-indicator"
-              style={{ top: indicator.top, height: indicator.height }}
-              aria-hidden="true"
-            />
-          ) : null}
-          <ol className="toc-list">
-            {items.map((item, index) => {
-              const heatEntry = heat?.byId.get(item.id);
-              const heatLabel = heatEntry ? `本节 ${heatEntry.count} 条标注` : null;
-              return (
-                <li key={`${item.id}:${index}`}>
-                  <a
-                    ref={setLinkRef(item.id)}
-                    className={`toc-link${activeId === item.id ? " active" : ""}${
-                      heatEntry ? " has-heat" : ""
-                    }`}
-                    style={{ "--toc-depth": item.level } as CSSProperties}
-                    href={`#${item.id}`}
-                    aria-current={activeId === item.id ? "location" : undefined}
-                    title={heatLabel ? `${item.title}（${heatLabel}）` : item.title}
-                    aria-label={heatLabel ? `${item.title}，${heatLabel}` : undefined}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      onSelect(item.id);
-                    }}
-                  >
-                    {item.title}
-                    {heatEntry ? (
-                      <span
-                        className="toc-heat"
-                        data-level={heatEntry.level}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                  </a>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      ) : (
-        <p className="toc-empty">这篇文档没有可导航的标题。</p>
-      )}
-    </div>
-  );
-}
-
-type SidePanelTab = "toc" | "annotations";
-
-function SidePanel({
-  tab,
-  onTabChange,
-  tocItems,
-  activeId,
-  onSelectHeading,
-  tocHeat,
-  onSelectDocumentTop,
-  tocEstimateLine,
-  annotations,
-  brokenIds,
-  approximateIds,
-  geometricFallbackIds,
-  annotationsLoading,
-  annotationSort,
-  onAnnotationSortChange,
-  onExportAnnotations,
-  onSelectAnnotation,
-  onDeleteAnnotation,
-  onEditAnnotationNote,
-  onChangeAnnotationColor,
-  onRelocateAnnotation,
-  onGenerateAnnotationCard,
-  onCompileAnnotationsDigest,
-  onClearAnnotations,
-  annotationsPanel,
-  onOpenLibraryHub,
-}: {
-  tab: SidePanelTab;
-  onTabChange: (tab: SidePanelTab) => void;
-  tocItems: TocItem[];
-  activeId: string | null;
-  onSelectHeading: (id: string) => void;
-  tocHeat?: TocHeatResult | null;
-  onSelectDocumentTop?: () => void;
-  tocEstimateLine?: string | null;
-  annotations: Annotation[];
-  brokenIds: Set<string>;
-  approximateIds: Set<string>;
-  geometricFallbackIds: Set<string>;
-  annotationsLoading: boolean;
-  annotationSort: AnnotationListSort;
-  onAnnotationSortChange: (sort: AnnotationListSort) => void;
-  onExportAnnotations: () => void;
-  onSelectAnnotation: (annotation: Annotation) => void;
-  onDeleteAnnotation: (annotation: Annotation) => void;
-  onEditAnnotationNote: (annotation: Annotation) => void;
-  onChangeAnnotationColor: (annotation: Annotation, color: AnnotationColor) => void;
-  onRelocateAnnotation: (annotation: Annotation) => void;
-  onGenerateAnnotationCard?: (annotation: Annotation) => void;
-  /** 全书回顾编纂(plan-book-digest):标注 tab 工具条入口。 */
-  onCompileAnnotationsDigest?: () => void;
-  onClearAnnotations: () => void;
-  /** Chapter/page-band outline for Markdown/PDF/EPUB; honesty fallback stays AnnotationList. */
-  annotationsPanel?: React.ReactNode;
-  /** 二级入口：全屏全库摘录（命令面板亦可）。 */
-  onOpenLibraryHub?: () => void;
-}) {
-  return (
-    <div className="toc-inner">
-      <div className="side-panel-tabs" role="tablist" aria-label="目录与标注">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "toc"}
-          className={tab === "toc" ? "active" : ""}
-          onClick={() => onTabChange("toc")}
-        >
-          目录
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "annotations"}
-          className={tab === "annotations" ? "active" : ""}
-          onClick={() => onTabChange("annotations")}
-        >
-          标注
-          {annotations.length > 0 ? <span className="side-panel-count">{annotations.length}</span> : null}
-        </button>
-      </div>
-      {tab === "toc" ? (
-        <TocNavigation
-          items={tocItems}
-          activeId={activeId}
-          onSelect={onSelectHeading}
-          heat={tocHeat}
-          onSelectTop={onSelectDocumentTop}
-          estimateLine={tocEstimateLine}
-        />
-      ) : (
-        <>
-          {onOpenLibraryHub ? (
-            <button type="button" className="annotation-hub-link side-panel-hub-link" onClick={onOpenLibraryHub}>
-              打开全库摘录
-            </button>
-          ) : null}
-          {annotationsPanel ?? (
-            <AnnotationList
-              annotations={annotations}
-              brokenIds={brokenIds}
-              approximateIds={approximateIds}
-              geometricFallbackIds={geometricFallbackIds}
-              loading={annotationsLoading}
-              sort={annotationSort}
-              onSortChange={onAnnotationSortChange}
-              onExport={onExportAnnotations}
-              onSelect={onSelectAnnotation}
-              onDelete={onDeleteAnnotation}
-              onEditNote={onEditAnnotationNote}
-              onChangeColor={onChangeAnnotationColor}
-              onRelocate={onRelocateAnnotation}
-              onGenerateCard={onGenerateAnnotationCard}
-              onCompileDigest={onCompileAnnotationsDigest}
-              onClearAll={onClearAnnotations}
-            />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
+export { MotionNotice, ReadingSettingsPanel, TocNavigation };
 
 function App() {
   const snapshot = useReaderStore((state) => state.snapshot);
@@ -4435,100 +4088,7 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [runSearch, searchQuery, snapshot]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Alt+←/→:阅读回退栈(plan-nav-history)。必须 preventDefault,
-      // 否则 WebView2/浏览器把 Alt+← 当整页 history back。
-      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          handleNavBack();
-          return;
-        }
-        if (event.key === "ArrowRight") {
-          event.preventDefault();
-          handleNavForward();
-          return;
-        }
-        return;
-      }
-      if (!(event.ctrlKey || event.metaKey)) {
-        if (event.key === "Escape") {
-          if (findOpen) {
-            closeFind();
-            return;
-          }
-          if (autoPace.barOpen) {
-            autoPace.stop();
-            return;
-          }
-          if (annotationTool !== "view") {
-            setAnnotationTool("view");
-          }
-          setSettingsOpen(false);
-          setStylePickerOpen(false);
-          setAnnotationPanelOpen(false);
-          setCollectionsPopoverOpen(false);
-          setLibrarySwitcherOpen(false);
-          setCommandPaletteOpen(false);
-          setFolderDocsOpen(false);
-          setCompactTocOpen(false);
-          setMobileLibraryOpen(false);
-          setPendingSelection(null);
-          setNoteDraft(null);
-          setMarkEditor(null);
-          setQuoteCardSource(null);
-          setBookDigestOpen(false);
-          dismissReadNext();
-          closeRelatedPassages();
-          clearRelocatePreview();
-        }
-        return;
-      }
-      if (event.key.toLowerCase() === "z" && !event.shiftKey) {
-        const target = event.target;
-        if (
-          target instanceof HTMLElement &&
-          (target.tagName === "INPUT" ||
-            target.tagName === "TEXTAREA" ||
-            target.isContentEditable)
-        ) {
-          return;
-        }
-        if (!canUndo) return;
-        event.preventDefault();
-        void handleUndoAnnotation();
-        return;
-      }
-      if (event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) {
-        if (IS_WEB_RUNTIME) return;
-        event.preventDefault();
-        void chooseAndOpenLibrary();
-      } else if (event.key.toLowerCase() === "o" && event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        openFolderDocsList();
-      } else if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        searchRef.current?.focus();
-      } else if (event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) {
-        // WebView2/浏览器把 Ctrl+P 默认给系统打印;开与关都要拦掉。
-        event.preventDefault();
-        setCommandPaletteOpen((open) => !open);
-      } else if (event.key.toLowerCase() === "b") {
-        if (!currentPath || !currentContent) return;
-        event.preventDefault();
-        void handleCreateBookmark();
-      } else if (event.key.toLowerCase() === "f" && !event.shiftKey && !event.altKey) {
-        if (IS_WEB_RUNTIME) return;
-        const target = event.target;
-        if (target instanceof HTMLElement && target.closest(".secondary-pane")) return;
-        event.preventDefault();
-        openFind();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
+  useReaderHotkeys({
     canUndo,
     chooseAndOpenLibrary,
     clearRelocatePreview,
@@ -4544,11 +4104,26 @@ function App() {
     closeRelatedPassages,
     openFind,
     openFolderDocsList,
-    autoPace.barOpen,
-    autoPace.stop,
+    autoPaceBarOpen: autoPace.barOpen,
+    autoPaceStop: autoPace.stop,
     annotationTool,
     setAnnotationTool,
-  ]);
+    searchRef,
+    setSettingsOpen,
+    setStylePickerOpen,
+    setAnnotationPanelOpen,
+    setCollectionsPopoverOpen,
+    setLibrarySwitcherOpen,
+    setCommandPaletteOpen,
+    setFolderDocsOpen,
+    setCompactTocOpen,
+    setMobileLibraryOpen,
+    setPendingSelection,
+    setNoteDraft,
+    setMarkEditor,
+    setQuoteCardSource,
+    setBookDigestOpen,
+  });
 
   // Markdown 本地资产管线(主栏):去重、批量写入与失败原因都收在 hook 里。
   const {
@@ -6062,6 +5637,8 @@ function App() {
         )}
 
         {error && <MotionNotice key={`error-${error}`} id={error} message={error} kind="error" motionLevel={motionLevel} onClose={clearError} />}
+
+        <LocalDataHealthNotice onNotice={showNotice} />
 
         {notice && !error && <MotionNotice
           key={notice.id}

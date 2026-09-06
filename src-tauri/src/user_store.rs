@@ -429,6 +429,11 @@ pub struct ReadingPlaceDraft {
 #[derive(Clone)]
 pub struct UserState {
     connection: Arc<Mutex<Connection>>,
+    /// Set when the durable database could not be opened. Commands that
+    /// need a healthy store refuse with this reason; backup may still
+    /// snapshot `durable_path` if the file is still on disk.
+    unavailable: Option<String>,
+    durable_path: Option<PathBuf>,
 }
 
 impl std::fmt::Debug for UserState {
@@ -455,24 +460,71 @@ impl UserState {
         )?;
         Ok(Self {
             connection: Arc::new(Mutex::new(connection)),
+            unavailable: None,
+            durable_path: Some(durable),
         })
     }
 
-    #[cfg(test)]
-    fn in_memory() -> CommandResult<Self> {
+    pub(crate) fn in_memory() -> CommandResult<Self> {
         let connection = Connection::open_in_memory()
             .map_err(|error| format!("Cannot create test user database: {error}"))?;
         Ok(Self {
             connection: Arc::new(Mutex::new(initialize_user_database(
                 connection, None, None,
             )?)),
+            unavailable: None,
+            durable_path: None,
+        })
+    }
+
+    pub(crate) fn unavailable(reason: String, durable_path: PathBuf) -> CommandResult<Self> {
+        Ok(Self {
+            unavailable: Some(reason),
+            durable_path: Some(durable_path),
+            ..Self::in_memory()?
         })
     }
 
     fn lock(&self) -> CommandResult<MutexGuard<'_, Connection>> {
+        if let Some(reason) = &self.unavailable {
+            return Err(format!("User database is unavailable: {reason}"));
+        }
         self.connection
             .lock()
             .map_err(|_| "User data state lock was poisoned".to_owned())
+    }
+
+    pub(crate) fn snapshot_to(&self, dest: &Path) -> CommandResult<()> {
+        if self.unavailable.is_some() {
+            let Some(path) = &self.durable_path else {
+                return Err(
+                    "User database is unavailable and no on-disk file exists to back up".into(),
+                );
+            };
+            if !path.exists() {
+                return Err(
+                    "User database is unavailable and no on-disk file exists to back up".into(),
+                );
+            }
+            let connection = Connection::open(path)
+                .map_err(|error| format!("Cannot open user database for backup: {error}"))?;
+            return crate::sqlite_io::vacuum_into(&connection, dest);
+        }
+        let connection = self.lock()?;
+        crate::sqlite_io::vacuum_into(&connection, dest)
+    }
+
+    pub(crate) fn integrity_ok(&self) -> CommandResult<bool> {
+        if self.unavailable.is_some() {
+            return Ok(false);
+        }
+        let connection = self.lock()?;
+        crate::sqlite_io::integrity_ok(&connection)
+    }
+
+    pub(crate) fn schema_version(&self) -> CommandResult<i64> {
+        let connection = self.lock()?;
+        crate::sqlite_io::user_version(&connection)
     }
 }
 

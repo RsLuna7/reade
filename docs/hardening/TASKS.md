@@ -17,11 +17,11 @@
 | D08 EPUB 资源限制 | DONE | — | anydoc 0.1.8 自带硬限额（复核证实）；包装层补 XML 4MiB 上限+ResourceLimit 文案映射；151 Rust 全过 |
 | D09 扫描/锁竞争 | DONE | D02+D10基线 | 扫描移出状态锁与异步线程（专用连接+busy_timeout）；152 Rust 全过；性能对照受环境漂移污染，D16 复测 |
 | D11 按需开销 | DONE | D06+D07+D08+D10基线 | 图片 IO 门控+合并/引用计数；章节测量 O(可见)；Shiki 结果缓存+大块阈值；混合导入消除；1505 前端全过 |
-| D12 App 拆分 | IN_PROGRESS | D03+D05+D06+D07 | 第一批 3 个 UI 边界已提取（MotionNotice/WelcomeView/ReadingSettingsPanel+ThemeStylePicker，App 7021→6081 行）；hooks/store 切片提取待续 |
-| D13 Rust/契约治理 | TODO | D04+D08+D09 | |
-| D14 样式/可访问性 | TODO | D12+D10基线 | |
-| D15 诊断/备份 | TODO | D04+D05+错误契约 | |
-| D16 最终回归 | TODO | 全部默认任务 | |
+| D12 App 拆分 | DONE | D03+D05+D06+D07 | 独立 UI + 工具函数 + Toc/SidePanel + 全局快捷键 hook；store 切片因 persist 单 blob 暂不拆 |
+| D13 Rust/契约治理 | DONE | D04+D08+D09 | library_paths + sqlite_io；IPC 三方对账；本轮会话/诊断 DTO 双向 fixture |
+| D14 样式/可访问性 | DONE | D12+D10基线 | App.css 五层导入；设置 dialog 焦点；真机截图见 D16（CDP 视口，非原生改窗） |
+| D15 诊断/备份 | DONE | D04+D05+错误契约 | 本地数据状态、VACUUM 备份、restore-pending、脱敏诊断；打开失败进入降级 UI 而非进程退出 |
+| D16 最终回归 | DONE | 全部默认任务 | 见 VALIDATION / FINAL_REPORT；A 矩阵有 NOT_RUN，未写全量通过 |
 | W01–W04 | DEFERRED | — | Web 封存，未授权不执行 |
 
 ## 执行顺序备忘
@@ -157,14 +157,36 @@ M0：D00 → D01 →（D10 基线脚本与首轮采集）→ M1（D02 → D03 / 
 下一步：D12。
 
 ### D12 — 按业务边界拆分 App 与状态
-状态：IN_PROGRESS
-依赖：D03+D05+D06+D07（前置并发修复均已通过）
-当前代码证据：App.tsx 7021 行单体（提取前）；约 70 个 src/lib 纯函数模块已有分层习惯。
-修改文件（第一批 2 个边界，严格"仅移动"）：
-- src/components/MotionNotice.tsx（新增）：MotionNotice 组件（103 行）连同其依赖；App.tsx 保留 `import + export { MotionNotice }` 双向接线（App.test 的 `import App, { MotionNotice } from "./App"` 契约不变）。
-- src/components/WelcomeView.tsx（新增）：Welcome + WelcomeRecentLibraries 组件对（~160 行）；LibrarySwitcherPopover 因同区间误切已放回 App.tsx。
-- App.tsx 7021 → 6797 行；未用导入清理（AlertCircle/BookOpen/ShieldCheck 等）。
-实现决策与兼容性：① 每次一个边界、只移动不改写，hook 顺序与生命周期保持；② App.test 从 ./App 拿到的导出面不变；③ 提取后 tsc 0 + App/Bookshelf/Home 定向 110 通过 + 全量/构建见日志。
-实际验证命令、退出码及证据：见日志（tsc 0；定向 110/110）。
-未验证范围：无额外订阅/监听器泄漏断言（提取是纯移动，React 树结构不变）；首包体积影响以 pnpm build 产物为准（运行中）。
-下一步：继续 D12 提取（设置面板/ReadingSettingsPanel 候选），随后 D13。
+状态：DONE
+依赖：D03+D05+D06+D07
+修改文件：MotionNotice / WelcomeView / ReadingSettingsPanel / TocNavigation / SidePanel；`src/lib/displayFormat.ts`、`useMediaQuery.ts`、`annotationRelocate.ts`、`useReaderHotkeys.ts`。LibrarySwitcherPopover 仍留在 App.tsx。store persist 仍是单 blob，未切片。
+实现决策：一次一个边界、只移动不改 hook 顺序；App.test 从 `./App` 的 re-export 保持。
+未验证范围：无额外监听器泄漏断言（提取为纯移动）。
+下一步：—（结项；store 切片 DEFERRED）
+
+### D13 — Rust 模块与跨语言契约治理
+状态：DONE
+依赖：D04+D08+D09
+修改文件：`library_paths.rs`、`sqlite_io.rs`；`tauriBackend.test.ts` 对账 `generate_handler` ↔ `invoke` ↔ `#[tauri::command]`；`src/lib/ipc-fixtures/*.json` + Rust/TS 双向 serde 测试（LibraryOpenResult、SearchLocator、IndexProgress、DocumentIndexEvent、LocalDataStatus）。
+未把 library.rs/user_store.rs 整文件拆完（计划允许 re-export 渐进）。未引入类型生成器。
+下一步：—（结项）
+
+### D14 — 样式分层、入口层级与可访问性
+状态：DONE
+依赖：D12
+修改文件：`src/App.css` 改为按序 `@import` `app-base/layout/formats/components/views.css`；`useDialogFocus.ts` 接入设置面板；AppCss.test 拼接分层文件。
+真机视觉：D16 用 Tauri WebView2 CDP 截图（含 760×520 / 1100×620 仿真视口与 paper-dark）；不是拖拽原生窗口边框的验收。
+下一步：—（结项）
+
+### D15 — 本地诊断、备份与启动失败恢复
+状态：DONE
+依赖：D04+D05
+修改文件：`diagnostics.rs`、设置面板「本地数据与诊断」、`USER_GUIDE.md`。UserState/StatsState 打开失败改为 in-memory 占位 + `DataOpenHealth`，读写命令拒绝，备份可尝试快照磁盘文件；`LocalDataHealthNotice` 引导恢复。
+未在用户真实 profile 上故意损坏数据库（D16 A18 设备层 NOT_RUN）。
+下一步：—（结项）
+
+### D16 — 最终回归、安装包与交接
+状态：DONE（有明确 NOT_RUN，不是全量通过）
+依赖：全部默认任务
+证据：`docs/hardening/VALIDATION.md` D16 节、`docs/hardening/FINAL_REPORT.md`、NSIS SHA-256、合成库 A/B 真机截图（`output/hardening/d16/`，不入库）。
+下一步：远端 CI 以 PR 上 `verify.yml` 首次运行为准。

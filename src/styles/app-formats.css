@@ -1,0 +1,1485 @@
+/* ---- 竖排模式(plan-vertical-writing §8,实验档) ----
+   writing-mode 加在滚动容器上(VW-D5):滚动坐标系随之翻转成 RTL 横向,
+   scrollLeft = 0 即右缘阅读起点,打开文档天然落在开头。 */
+.reading-scroll[data-writing="vertical"] {
+  overflow-x: auto;
+  overflow-y: hidden;
+  writing-mode: vertical-rl;
+}
+
+/* 列高恒为视口高(VW-D7):解除横排的 measure 限宽,壳随内容横向生长。 */
+.reading-scroll[data-writing="vertical"] .article-shell {
+  width: max-content;
+  max-width: none;
+  height: 100%;
+  min-height: 0;
+  margin-inline: 0;
+  padding: 48px 56px;
+  box-sizing: border-box;
+}
+
+/* 横排孤岛(§3.2):代码/公式/表格/Mermaid 在竖排流中保持 horizontal-tb
+   正交流排版,内部滚动行为不变;限制物理尺寸防孤岛撑破列高。 */
+.reading-scroll[data-writing="vertical"] .markdown-body pre,
+.reading-scroll[data-writing="vertical"] .markdown-code-block,
+.reading-scroll[data-writing="vertical"] .markdown-mermaid,
+.reading-scroll[data-writing="vertical"] .katex-display,
+.reading-scroll[data-writing="vertical"] .markdown-body table,
+.reading-scroll[data-writing="vertical"] .epub-table-scroll {
+  writing-mode: horizontal-tb;
+  max-width: min(72vw, 680px);
+  max-height: 100%;
+  overflow: auto;
+}
+
+.reading-scroll[data-writing="vertical"] .markdown-body img {
+  max-width: min(72vw, 640px);
+  max-height: 80vh;
+}
+
+/* 实验档徽标(设置面板的竖排分组)。 */
+.setting-badge {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  font-size: 10px;
+  font-weight: 600;
+  vertical-align: 1px;
+}
+
+/* ---- 增量重读(plan-incremental-reread IR-D7) ----
+   驻留式横幅:浮在 reading-frame 顶部居中,不占滚动布局;
+   区别于 4.2s 瞬态 notice toast。 */
+.reread-banner {
+  position: absolute;
+  z-index: 14;
+  top: 12px;
+  left: 50%;
+  display: flex;
+  max-width: min(560px, calc(100% - 48px));
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px 8px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 30%, var(--line-strong));
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent-soft) 40%, var(--paper-raised));
+  box-shadow: var(--shadow);
+  font-size: 12px;
+  line-height: 1.5;
+  transform: translateX(-50%);
+}
+
+.reread-banner > svg {
+  flex-shrink: 0;
+  color: var(--accent);
+}
+
+.reread-banner-message {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.reread-banner-jump,
+.reread-banner-dismiss {
+  display: inline-flex;
+  flex-shrink: 0;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 10%, transparent);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.reread-banner-jump:hover,
+.reread-banner-dismiss:hover {
+  border-color: color-mix(in srgb, var(--accent) 36%, var(--line-strong));
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+}
+
+.reread-banner-dismiss {
+  color: var(--ink-soft);
+  background: transparent;
+}
+
+/* 变更块的左缘 accent 细线(.toc-link.active inset 线族先例);
+   markdown 段级与 EPUB 章级共用,新增段线色更实。 */
+.markdown-body [data-reread-changed],
+.epub-chapter[data-reread-changed] {
+  box-shadow: inset 3px 0 0 0 color-mix(in srgb, var(--accent) 55%, transparent);
+}
+
+.markdown-body [data-reread-changed] {
+  padding-left: 12px;
+  margin-left: -12px;
+  border-radius: 2px;
+}
+
+.markdown-body [data-reread-changed="added"],
+.epub-chapter[data-reread-changed="added"] {
+  box-shadow: inset 3px 0 0 0 var(--accent);
+}
+
+/* 刻度层:叠加物而非滚动条替代品;条本身指针穿透,只有刻度点可点,
+   right 让开 11px 原生滚动条(§2 目标 4)。 */
+.scroll-map {
+  position: absolute;
+  top: 8px;
+  right: 13px;
+  bottom: 8px;
+  z-index: 5;
+  width: 12px;
+  pointer-events: none;
+}
+
+.scroll-map-tick {
+  position: absolute;
+  left: 50%;
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--ink) 30%, var(--paper));
+  border-radius: 50%;
+  background: var(--muted);
+  transform: translate(-50%, -50%);
+  cursor: pointer;
+  pointer-events: auto;
+  transition: transform var(--motion-fast) var(--motion-ease);
+}
+
+.scroll-map-tick:hover,
+.scroll-map-tick:focus-visible {
+  z-index: 1;
+  transform: translate(-50%, -50%) scale(1.4);
+  outline: none;
+}
+
+/* 标注四色:与 .annotation-color-dot--* 同一组 token,随明暗模式切换。 */
+.scroll-map-tick--yellow { background: var(--annot-yellow); }
+.scroll-map-tick--green { background: var(--annot-green); }
+.scroll-map-tick--blue { background: var(--annot-blue); }
+.scroll-map-tick--pink { background: var(--annot-pink); }
+
+.scroll-map-tick--bookmark {
+  width: 7px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--accent);
+}
+
+.scroll-map-tick--search {
+  border: 2px solid var(--accent);
+  background: transparent;
+}
+
+/* 朗读当前句:横线而非圆点(§3.1),随句号实时移动。 */
+.scroll-map-tick--tts {
+  width: 12px;
+  height: 3px;
+  border: none;
+  border-radius: 2px;
+  background: var(--ink);
+}
+
+/* ---- 聚焦模式(plan-focus-mode) ---- */
+/* 段落聚焦:容器由 hook 标记,当前块以外整体降不透明度;过渡只挂
+   opacity,GPU 合成承担,off 档 --focus-fade 为 0 即瞬时。 */
+.focus-spotlight [data-focus-container] > * {
+  transition: opacity var(--focus-fade) var(--motion-ease);
+}
+
+.focus-spotlight [data-focus-container] > :not([data-focus-current]) {
+  opacity: 0.35;
+}
+
+/* 阅读标尺:跟随指针的横向色带,纯视觉层不拦截任何指针事件。 */
+.reading-ruler {
+  position: absolute;
+  z-index: 6;
+  top: 0;
+  right: 0;
+  left: 0;
+  border-top: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--accent) 16%, transparent);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  pointer-events: none;
+  will-change: transform;
+}
+
+@media (hover: none) {
+  .reading-ruler {
+    display: none;
+  }
+}
+
+.article-shell {
+  /* Optional --reader-measure caps line length. Center the column so leftover
+     space in a wide pane does not look like a missing right-hand panel. */
+  width: 100%;
+  max-width: var(--reader-measure);
+  min-height: 100%;
+  margin-inline: auto;
+  padding: 52px var(--reader-gutter-toc) 110px var(--reader-gutter-inline);
+  box-sizing: border-box;
+}
+
+.article-header {
+  position: relative;
+  padding-bottom: 36px;
+  margin-bottom: 42px;
+  border-bottom: 1px solid var(--line);
+}
+
+.article-header::after {
+  position: absolute;
+  bottom: -1px;
+  left: 0;
+  width: 46px;
+  height: 2px;
+  content: "";
+  background: var(--accent);
+}
+
+.article-kicker {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+  color: var(--accent);
+  font-size: 11px;
+  font-weight: 750;
+  letter-spacing: 0.13em;
+  text-transform: uppercase;
+}
+
+.article-kicker::before {
+  width: 16px;
+  height: 1px;
+  content: "";
+  background: currentColor;
+}
+
+.article-title {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--reader-font-family);
+  font-size: clamp(29px, 2.5vw, 38px);
+  font-weight: 700;
+  letter-spacing: -0.025em;
+  line-height: 1.28;
+  overflow-wrap: anywhere;
+}
+
+.article-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 15px;
+  margin-top: 15px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.article-meta span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.article-index-status {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  margin-top: 18px;
+  border: 1px solid color-mix(in srgb, #b36d35 38%, var(--line));
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, #d39a52 8%, var(--chrome));
+  font-size: 11px;
+}
+.article-index-status button { margin-left: auto; border: 0; color: var(--accent); background: transparent; cursor: pointer; }
+
+/* 文章级 error boundary 的可恢复错误卡(单点渲染错误不再拖垮整个应用)。 */
+.article-error-card {
+  display: grid;
+  max-width: 520px;
+  margin: 56px auto;
+  padding: 22px 26px;
+  gap: 10px;
+  justify-items: start;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--chrome);
+}
+.article-error-card strong { font-size: 15px; }
+.article-error-card p {
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 13px;
+  line-height: 1.7;
+}
+.article-error-card button {
+  padding: 7px 14px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  color: var(--accent);
+  background: var(--paper);
+  font-size: 13px;
+  cursor: pointer;
+}
+.article-error-card button:hover { border-color: var(--accent); }
+
+.article-shell--pdf { max-width: none; padding-right: 28px; padding-left: 28px; }
+.article-shell--pdf .article-header { max-width: 920px; margin-right: auto; margin-left: auto; }
+
+.pdf-reader { min-width: 0; color: var(--ink); }
+.pdf-toolbar {
+  position: sticky;
+  z-index: 4;
+  top: 12px;
+  display: flex;
+  flex-wrap: wrap;
+  width: fit-content;
+  max-width: 100%;
+  margin: 0 auto 24px;
+  padding: 5px;
+  gap: 6px;
+  border: 1px solid var(--line-strong);
+  border-radius: 11px;
+  background: color-mix(in srgb, var(--paper-raised) 92%, transparent);
+  box-shadow: 0 8px 26px rgba(35, 31, 25, .1);
+  backdrop-filter: blur(14px);
+}
+.pdf-toolbar-group { display: flex; align-items: center; gap: 2px; border-right: 1px solid var(--line); padding-right: 6px; }
+.pdf-toolbar-group:last-child { border-right: 0; padding-right: 0; }
+.pdf-toolbar button { display: inline-flex; min-height: 30px; padding: 0 9px; align-items: center; justify-content: center; gap: 5px; border: 0; border-radius: 7px; color: var(--ink-soft); background: transparent; font-size: 10px; cursor: pointer; transition: color var(--motion-fast) var(--motion-ease), background-color var(--motion-fast) var(--motion-ease), opacity var(--motion-fast) var(--motion-ease); }
+.pdf-toolbar button:hover, .pdf-toolbar button.active { color: var(--accent-ink); background: var(--accent-soft); }
+.pdf-toolbar button:disabled { opacity: .4; cursor: not-allowed; }
+.pdf-toolbar label { color: var(--muted); font-size: 10px; white-space: nowrap; }
+.pdf-toolbar input { width: 36px; padding: 4px; margin-inline-end: 6px; border: 1px solid var(--line); border-radius: 5px; color: var(--ink); background: var(--chrome); text-align: center; }
+.pdf-stride-chip { min-width: 30px; font-variant-numeric: tabular-nums; }
+.pdf-pin-group { gap: 1px; }
+.pdf-pin-chip {
+  min-width: 26px;
+  padding: 0 6px;
+  font-variant-numeric: tabular-nums;
+}
+.pdf-mode-toggle { position: relative; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pdf-mode-toggle button { position: relative; z-index: 1; white-space: nowrap; }
+.pdf-mode-indicator { position: absolute; z-index: 0; top: 0; bottom: 0; left: 0; width: calc((100% - 8px) / 2); border-radius: 7px; background: var(--accent-soft); opacity: 0; pointer-events: none; transform: translateX(0); }
+:root[data-motion="full"] .pdf-mode-indicator { opacity: 1; transition: transform var(--motion-standard) var(--motion-ease); }
+:root[data-motion="full"] .pdf-mode-toggle[data-mode="reading"] .pdf-mode-indicator { transform: translateX(calc(100% + 2px)); }
+:root[data-motion="full"] .pdf-mode-toggle button.active { background: transparent; }
+.pdf-pages { display: flex; align-items: center; flex-direction: column; gap: 22px; }
+
+/* ---- PDF 双页对开(plan-pdf-spread) ----
+   spread=false 保持原 flex 路径零扰动;并排布局全部隔离在
+   [data-spread] 下:两列 grid,每行一对 (2k, 2k+1),偶数页左列、
+   奇数页右列并向书脊对齐;第 1 页独立占右列(封面是右页)。 */
+.pdf-pages[data-spread="true"] {
+  display: grid;
+  align-items: start;
+  justify-content: center;
+  grid-template-columns: repeat(2, minmax(0, min(var(--pdf-page-width), calc(50% - 11px))));
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:nth-child(even) {
+  justify-self: end;
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:nth-child(odd) {
+  justify-self: start;
+}
+
+.pdf-pages[data-spread="true"] .pdf-page:first-child {
+  grid-column: 2;
+  justify-self: start;
+}
+
+/* 单页文档:没有可配对的第 2 页,封面整行居中。 */
+.pdf-pages[data-spread="true"] .pdf-page:first-child:last-child {
+  grid-column: 1 / -1;
+  justify-self: center;
+}
+/* pdf.js text layer contract: --total-scale-factor is set per page from JS
+   (PdfPage), --scale-round-x/y are required by setLayerDimensions' round(). */
+.pdf-page { position: relative; isolation: isolate; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
+.pdf-page canvas, .pdf-annotation-layer, .pdf-user-highlight-layer { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
+.pdf-page canvas { display: block; }
+
+/* "截取引用"框选层(plan-pdf-region-card):十字光标 + 半透明选框;
+   模式激活时临时关闭文本层指针事件防选字冲突,退出即恢复。 */
+.pdf-region-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  cursor: crosshair;
+  touch-action: none;
+}
+
+.pdf-region-rect {
+  position: absolute;
+  border: 1px solid var(--accent);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  pointer-events: none;
+}
+
+.pdf-region-select-active .pdf-text-layer {
+  user-select: none;
+  pointer-events: none;
+}
+
+.pdf-region-select-active .pdf-annotation-layer {
+  pointer-events: none;
+}
+
+.pdf-region-hint {
+  position: sticky;
+  z-index: 4;
+  top: 58px;
+  width: fit-content;
+  max-width: 100%;
+  margin: -12px auto 16px;
+  padding: 4px 12px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  color: var(--ink-soft);
+  background: var(--paper-raised);
+  font-size: 12px;
+  box-shadow: var(--shadow);
+}
+.pdf-page-calibrate-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 8px;
+  border-radius: 11px;
+  padding: 6px 12px;
+}
+.pdf-page-calibrate-hint input {
+  width: 48px;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--ink);
+  background: var(--chrome);
+  text-align: center;
+}
+.pdf-page-calibrate-hint button {
+  min-height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-size: 12px;
+  cursor: pointer;
+}
+.pdf-page-calibrate-error {
+  flex: 1 1 100%;
+  color: #b34e42;
+}
+/* No width/height override here: pdf.js setLayerDimensions sizes the text
+   layer from --total-scale-factor and rotates it via [data-main-rotation]. */
+.pdf-text-layer { line-height: 1; opacity: 1; z-index: 1; }
+.pdf-user-highlight-layer { pointer-events: none; z-index: 2; }
+.pdf-user-highlight {
+  position: absolute;
+  border-radius: 2px;
+  pointer-events: none;
+  box-sizing: border-box;
+  mix-blend-mode: multiply;
+}
+/* PDF 页面恒为白底(不随主题),固定用明色系字面量,不走 --annot-* token。 */
+.pdf-user-highlight--highlight.pdf-user-highlight--yellow,
+.pdf-user-highlight--highlight.pdf-user-highlight--pink { background: rgb(181 150 93 / 22%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--green { background: rgb(110 147 138 / 20%); }
+.pdf-user-highlight--highlight.pdf-user-highlight--blue { background: rgb(109 130 157 / 20%); }
+.pdf-user-highlight--underline {
+  background: transparent;
+  mix-blend-mode: normal;
+  border-bottom-width: 3px;
+  border-bottom-style: solid;
+}
+.pdf-user-highlight--underline.pdf-user-highlight--yellow,
+.pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: #7f6537; }
+.pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: #4d6f67; }
+.pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: #50657f; }
+.pdf-annotation-layer { pointer-events: none; z-index: 3; }
+.pdf-annotation-layer a { position: absolute; pointer-events: auto; border-radius: 2px; background: color-mix(in srgb, #3f82b8 12%, transparent); }
+.pdf-annotation-layer a:hover { outline: 1px solid #3f82b8; background: color-mix(in srgb, #3f82b8 22%, transparent); }
+.pdf-page-number { position: absolute; z-index: 4; right: 8px; bottom: 7px; padding: 2px 5px; border-radius: 4px; color: #555; background: rgba(255,255,255,.82); font-size: 9px; }
+.pdf-state { display: flex; min-height: 180px; align-items: center; justify-content: center; gap: 10px; color: var(--muted); }
+.pdf-state--error { color: #b34e42; }
+.pdf-retry-button { padding: 2px 12px; border: 1px solid currentcolor; border-radius: 6px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.pdf-retry-button:hover { background: rgba(179, 78, 66, 0.08); }
+.pdf-reading-mode { max-width: 780px; margin: 0 auto; }
+.pdf-reading-warning { display: flex; gap: 10px; padding: 13px 15px; margin-bottom: 18px; border: 1px solid color-mix(in srgb, #c68b35 38%, var(--line)); border-radius: 8px; color: var(--ink-soft); background: color-mix(in srgb, #c68b35 8%, var(--chrome)); font-size: 12px; line-height: 1.6; }
+.pdf-reading-page { position: relative; padding: 18px 0 54px; border-bottom: 1px solid var(--line); }
+.pdf-reading-page-label, .epub-chapter-label { color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
+.pdf-page-missing { color: var(--muted); font-style: italic; }
+
+.epub-reader { width: 100%; max-width: 100%; color: var(--ink); font-family: var(--reader-font-family); font-size: var(--reader-font-size); line-height: var(--reader-line-height); }
+.epub-chapter { padding-bottom: 72px; margin-bottom: 64px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }
+.epub-chapter-heading { position: relative; }
+.epub-chapter-title { margin: 8px 0 36px; font-family: var(--reader-font-family); font-size: clamp(25px, 2vw, 33px); line-height: 1.35; }
+.reade-motion-locator-highlight { position: absolute; z-index: 3; inset: 0; border-radius: 8px; background: var(--accent); opacity: 0; pointer-events: none; }
+.epub-chapter-heading > .reade-motion-locator-highlight { z-index: 0; inset: -10px -12px; }
+.epub-chapter-heading > :not(.reade-motion-locator-highlight) { position: relative; z-index: 1; }
+.epub-reader p { margin: calc(var(--reader-paragraph-spacing) * 1em) 0; }
+.epub-reader h1,
+.epub-reader h2,
+.epub-reader h3,
+.epub-reader h4,
+.epub-reader h5,
+.epub-reader h6 {
+  margin: 2em 0 0.8em;
+  color: var(--ink);
+  font-family: var(--reader-font-family);
+  letter-spacing: -0.012em;
+  line-height: 1.42;
+  scroll-margin-top: 80px;
+  text-wrap: balance;
+}
+
+.epub-reader h1 { font-size: var(--reader-h1-size); font-weight: var(--reader-h1-weight); color: var(--reader-h1-color); }
+.epub-reader h2 { font-size: var(--reader-h2-size); font-weight: var(--reader-h2-weight); color: var(--reader-h2-color); }
+.epub-reader h3 { font-size: var(--reader-h3-size); font-weight: var(--reader-h3-weight); color: var(--reader-h3-color); }
+.epub-reader h4 { font-size: var(--reader-h4-size); font-weight: var(--reader-h4-weight); color: var(--reader-h4-color); }
+.epub-reader h5 { font-size: var(--reader-h5-size); font-weight: var(--reader-h5-weight); color: var(--reader-h5-color); }
+.epub-reader h6 { font-size: var(--reader-h6-size); font-weight: var(--reader-h6-weight); color: var(--reader-h6-color); }
+.epub-reader a { color: var(--accent-ink); text-decoration-color: color-mix(in srgb, var(--accent) 40%, transparent); text-underline-offset: 3px; }
+.epub-link-blocked { color: var(--muted); text-decoration: underline dotted; text-underline-offset: 3px; }
+.epub-reader blockquote { padding: 2px 18px; margin: 1.8em 0; border-left: 3px solid var(--accent); color: var(--ink-soft); }
+.epub-reader pre { padding: 17px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--code-bg); }
+.epub-reader code { font-family: "SFMono-Regular", Consolas, monospace; font-size: .86em; }
+.epub-image { display: block; max-width: 100%; max-height: 72vh; margin: 1.8em auto; object-fit: contain; }
+.epub-asset-placeholder { display: inline-flex; min-height: 48px; padding: 10px 14px; align-items: center; gap: 8px; border: 1px dashed var(--line-strong); border-radius: 7px; color: var(--muted); font-size: 11px; }
+.epub-table-scroll { max-width: 100%; overflow: auto; }
+.epub-reader table { width: 100%; margin: 1.8em 0; border-spacing: 0; border: 1px solid var(--line); border-radius: 8px; }
+.epub-reader th, .epub-reader td { padding: 8px 10px; border-right: 1px solid var(--line); border-bottom: 1px solid var(--line); text-align: left; }
+.epub-notes { padding-top: 24px; }
+.epub-notes aside { padding: 12px 0; border-bottom: 1px solid var(--line); }
+.epub-note-ref { font-size: .72em; vertical-align: super; }
+
+.markdown-body {
+  color: var(--ink);
+  font-family: var(--reader-font-family);
+  font-size: var(--reader-font-size);
+  line-height: var(--reader-line-height);
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+
+.reader-shell[data-heading-weights="medium"] {
+  --reader-h1-weight: 500;
+  --reader-h2-weight: 500;
+  --reader-h3-weight: 500;
+  --reader-h4-weight: 500;
+  --reader-h5-weight: 500;
+  --reader-h6-weight: 500;
+}
+
+.reader-shell[data-heading-weights="regular"] {
+  --reader-h1-weight: 400;
+  --reader-h2-weight: 400;
+  --reader-h3-weight: 400;
+  --reader-h4-weight: 400;
+  --reader-h5-weight: 400;
+  --reader-h6-weight: 400;
+}
+
+.markdown-body > :first-child {
+  margin-top: 0 !important;
+}
+
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4,
+.markdown-body h5,
+.markdown-body h6 {
+  font-family: var(--reader-font-family);
+  letter-spacing: -0.012em;
+  line-height: 1.42;
+  scroll-margin-top: 28px;
+  text-wrap: balance;
+}
+
+.markdown-body h1 {
+  margin: 2.2em 0 0.78em;
+  color: var(--reader-h1-color);
+  font-size: var(--reader-h1-size);
+  font-weight: var(--reader-h1-weight);
+}
+
+.markdown-body h2 {
+  position: relative;
+  padding-top: 0.9em;
+  margin: 2.4em 0 0.85em;
+  color: var(--reader-h2-color);
+  font-size: var(--reader-h2-size);
+  font-weight: var(--reader-h2-weight);
+}
+
+.markdown-body h2::before {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 30px;
+  height: 2px;
+  content: "";
+  background: var(--accent);
+}
+
+.markdown-body h3 {
+  margin: 2em 0 0.68em;
+  color: var(--reader-h3-color);
+  font-size: var(--reader-h3-size);
+  font-weight: var(--reader-h3-weight);
+}
+
+.markdown-body h4 {
+  margin: 1.75em 0 0.62em;
+  color: var(--reader-h4-color);
+  font-size: var(--reader-h4-size);
+  font-weight: var(--reader-h4-weight);
+}
+
+.markdown-body h5 {
+  margin: 1.55em 0 0.5em;
+  color: var(--reader-h5-color);
+  font-size: var(--reader-h5-size);
+  font-weight: var(--reader-h5-weight);
+}
+
+.markdown-body h6 {
+  margin: 1.4em 0 0.45em;
+  color: var(--reader-h6-color);
+  font-size: var(--reader-h6-size);
+  font-weight: var(--reader-h6-weight);
+}
+
+.markdown-body p {
+  margin: 0 0 calc(1.22em * var(--reader-paragraph-spacing, 1));
+}
+
+.markdown-body strong {
+  color: color-mix(in srgb, var(--ink) 92%, var(--accent));
+  font-weight: 700;
+}
+
+.markdown-body a {
+  color: var(--accent-ink);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in srgb, var(--accent) 35%, transparent);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.22em;
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    text-decoration-color var(--motion-fast) var(--motion-ease);
+}
+
+.markdown-body a:hover {
+  color: var(--accent);
+  text-decoration-color: currentColor;
+}
+
+.markdown-body ul,
+.markdown-body ol {
+  padding-left: 1.55em;
+  margin: 0 0 1.25em;
+}
+
+.markdown-body li {
+  padding-left: 0.18em;
+  margin: 0.28em 0;
+}
+
+.markdown-body li::marker {
+  color: var(--accent);
+  font-weight: 650;
+}
+
+.markdown-body .contains-task-list {
+  padding-left: 0;
+  list-style: none;
+}
+
+.markdown-body .task-list-item {
+  list-style: none;
+}
+
+.markdown-body input[type="checkbox"] {
+  width: 14px;
+  height: 14px;
+  margin: 0 0.55em 0 0;
+  accent-color: var(--accent);
+  vertical-align: -1px;
+}
+
+.markdown-body blockquote {
+  position: relative;
+  padding: 1.15em 1.35em 1.15em 1.55em;
+  margin: 1.8em 0;
+  border: 0;
+  border-radius: 2px 12px 12px 2px;
+  color: var(--ink-soft);
+  background: var(--teal-soft);
+}
+
+.markdown-body blockquote::before {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 3px;
+  border-radius: 2px;
+  content: "";
+  background: var(--teal);
+}
+
+.markdown-body blockquote > :last-child {
+  margin-bottom: 0;
+}
+
+.markdown-body hr {
+  height: 1px;
+  margin: 3em auto;
+  border: 0;
+  background: var(--line);
+}
+
+.markdown-body img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 2.2em auto;
+  border-radius: 10px;
+  box-shadow: 0 12px 32px rgba(42, 40, 34, 0.09);
+}
+
+/* 图包链接（视频封面等）：整块可点，避免 inline <a> 包 block <img> 点不中。 */
+.markdown-body a:has(> img),
+.markdown-body a:has(> .markdown-image-blocked),
+.markdown-body a:has(> .markdown-image-svg) {
+  display: block;
+  cursor: pointer;
+  text-decoration: none;
+}
+
+.markdown-body a:has(> img) img {
+  cursor: pointer;
+}
+
+.markdown-body code:not(pre code) {
+  padding: 0.16em 0.38em;
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--chrome-strong) 68%, transparent);
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.85em;
+}
+
+.code-block {
+  position: relative;
+  margin: 1.85em 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--code-bg);
+  box-shadow: 0 12px 30px rgba(25, 28, 27, 0.11);
+}
+
+.markdown-code-block {
+  position: relative;
+  margin: 1.85em 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--code-bg);
+  box-shadow: 0 12px 30px rgba(25, 28, 27, 0.11);
+}
+
+.markdown-code-toolbar {
+  display: flex;
+  height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  color: #aeb8b5;
+  background: var(--code-chrome);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  font-style: normal;
+  text-transform: uppercase;
+}
+
+.markdown-code-copy {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #c2cac8;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.markdown-code-copy:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.markdown-code-highlight pre,
+.markdown-code-plain {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent !important;
+}
+
+.markdown-code-highlight pre code,
+.markdown-code-plain code {
+  display: block;
+  min-width: max-content;
+  padding: 1.25em 1.35em;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82em;
+  line-height: 1.72;
+  tab-size: 2;
+}
+
+/* Code chrome is always dark (var(--code-bg)); always use dark-theme token colors. */
+.markdown-code-highlight .shiki,
+.markdown-code-highlight .shiki span {
+  color: var(--shiki-dark) !important;
+  background-color: transparent !important;
+}
+
+.code-block-header {
+  display: flex;
+  height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.075);
+  color: #aeb8b5;
+  background: var(--code-chrome);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.copy-code-button,
+.code-copy-button {
+  display: inline-flex;
+  height: 26px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 6px;
+  color: #c2cac8;
+  background: transparent;
+  font-size: 10px;
+  cursor: pointer;
+}
+
+.copy-code-button:hover,
+.code-copy-button:hover {
+  color: #fff;
+  background: rgba(255, 255, 255, 0.07);
+}
+
+.markdown-body pre {
+  margin: 1.85em 0;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--code-bg);
+}
+
+.code-block pre {
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+}
+
+.markdown-body pre code {
+  display: block;
+  min-width: max-content;
+  padding: 1.25em 1.35em;
+  color: #e4e7e3;
+  background: transparent;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 0.82em;
+  line-height: 1.72;
+  tab-size: 2;
+}
+
+.markdown-body table {
+  width: 100%;
+  margin: 1.8em 0;
+  border-collapse: separate;
+  border-spacing: 0;
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 10px;
+  font-size: 0.9em;
+}
+
+.markdown-body th,
+.markdown-body td {
+  padding: 0.72em 0.9em;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  text-align: left;
+}
+
+.markdown-body th:last-child,
+.markdown-body td:last-child {
+  border-right: 0;
+}
+
+.markdown-body tr:last-child td {
+  border-bottom: 0;
+}
+
+.markdown-body th {
+  color: var(--ink);
+  background: var(--chrome);
+  font-weight: 700;
+}
+
+.markdown-body tr:hover td {
+  background: color-mix(in srgb, var(--chrome) 45%, transparent);
+}
+
+.markdown-body .footnotes {
+  margin-top: 4em;
+  border-top: 1px solid var(--line);
+  color: var(--ink-soft);
+  font-size: 0.84em;
+}
+
+.markdown-body .footnotes h2 {
+  margin-top: 1.3em;
+  font-family: inherit;
+  font-size: 1em;
+}
+
+.katex-display {
+  padding: 0.8em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.mermaid-block,
+.mermaid-container,
+.markdown-mermaid {
+  position: relative;
+  display: grid;
+  min-height: 100px;
+  margin: 2em 0;
+  padding: 24px;
+  overflow: auto;
+  place-items: center;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: color-mix(in srgb, var(--chrome) 52%, var(--paper));
+}
+
+.mermaid-block svg,
+.mermaid-container svg,
+.markdown-mermaid svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.render-error,
+.mermaid-error,
+.markdown-mermaid-error {
+  padding: 14px 16px;
+  margin: 1.5em 0;
+  border-left: 3px solid var(--accent);
+  border-radius: 4px 9px 9px 4px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  font-family: "Cascadia Code", Consolas, monospace;
+  font-size: 12px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.markdown-mermaid-diagram {
+  display: grid;
+  width: 100%;
+  place-items: center;
+}
+
+.markdown-image-svg {
+  display: inline-block;
+  max-width: 100%;
+  line-height: 0;
+}
+
+.markdown-image-svg svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.markdown-mermaid-loading {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.markdown-mermaid-error strong,
+.markdown-mermaid-error span {
+  display: block;
+}
+
+.markdown-mermaid-error span {
+  margin-top: 4px;
+  color: var(--ink-soft);
+}
+
+.markdown-link-blocked,
+.markdown-image-blocked {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45em;
+  padding: 0.12em 0.38em;
+  border-radius: 4px;
+  color: var(--muted);
+  background: var(--chrome);
+  font-size: 0.86em;
+}
+
+.markdown-image-blocked-action {
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--accent, var(--ink));
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+.markdown-image-blocked-action:hover,
+.markdown-image-blocked-action:focus-visible {
+  color: var(--ink);
+}
+
+.toc-panel {
+  min-width: 0;
+  /* 左右都留白；热力点在 toc-link 右侧，不再依赖「左 0 右有」的不对称 padding。 */
+  padding: 43px 16px 28px 12px;
+  overflow-x: hidden;
+  overflow-y: auto;
+  border-left: 1px solid var(--line);
+  background: color-mix(in srgb, var(--paper) 95%, var(--chrome));
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.library-toggle,
+.sidebar-drawer-backdrop,
+.toc-toggle,
+.toc-drawer,
+.toc-drawer-backdrop {
+  display: none;
+}
+
+.toc-inner {
+  position: relative;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  /* 热力点在链接右侧绝对定位，左侧不再预留 18px 空轨。 */
+  padding-left: 0;
+}
+
+.toc-label {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 15px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 750;
+  letter-spacing: 0.15em;
+  text-transform: uppercase;
+}
+
+/* 目录顶部的全文预估行(plan-reading-time-estimate §3.3)。 */
+.toc-estimate {
+  margin: 0 0 8px;
+  padding: 0 8px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.toc-list-wrap {
+  position: relative;
+}
+
+/* 单根滑动光标：色走 --accent（朱红等主题强调色），动效跟 data-motion。 */
+.toc-active-indicator {
+  position: absolute;
+  top: 0;
+  left: 0;
+  z-index: 1;
+  width: 2px;
+  border-radius: 999px;
+  background: var(--accent);
+  pointer-events: none;
+  transition:
+    top var(--motion-standard) var(--motion-ease),
+    height var(--motion-standard) var(--motion-ease),
+    opacity var(--motion-fast) var(--motion-ease);
+}
+
+.toc-list {
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.toc-list li {
+  position: relative;
+}
+
+.toc-link {
+  position: relative;
+  display: block;
+  padding: 5px 8px 5px calc(10px + (var(--toc-depth, 1) - 1) * 11px);
+  overflow: hidden;
+  /* 未读节左缘透明(plan-heatmap-toc §3.3);活动线改由 .toc-active-indicator 承担。 */
+  border-left: 1px solid transparent;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+  text-decoration: none;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transition:
+    color var(--motion-fast) var(--motion-ease),
+    background-color var(--motion-fast) var(--motion-ease);
+}
+
+.toc-link:hover {
+  color: var(--ink-soft);
+}
+
+.toc-link.active,
+.toc-link[aria-current="location"] {
+  /* 左缘滑动条见 .toc-active-indicator；此处只保留朱色字重。 */
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.toc-empty {
+  padding-right: 10px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.65;
+}
+
+/* --- TOC 批注密度与已读覆盖(热力目录 T1/T2) ---------------------------
+   颜色复用统计热力色阶 --stats-scale-N,零新增 token;密度点无动画。 */
+
+.toc-unassigned {
+  display: block;
+  width: 100%;
+  margin: 0 0 8px;
+  padding: 4px 8px 4px 10px;
+  border: 0;
+  border-left: 1px solid transparent;
+  border-radius: 0;
+  color: var(--muted);
+  background: transparent;
+  font-size: 10.5px;
+  line-height: 1.5;
+  text-align: left;
+  cursor: pointer;
+}
+
+.toc-unassigned:hover {
+  color: var(--ink-soft);
+}
+
+.toc-link.has-heat {
+  padding-right: 20px;
+}
+
+.toc-heat {
+  position: absolute;
+  top: 50%;
+  right: 7px;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  transform: translateY(-50%);
+}
+
+.toc-heat[data-level="1"] { background: var(--stats-scale-1); }
+.toc-heat[data-level="2"] { background: var(--stats-scale-2); }
+.toc-heat[data-level="3"] { background: var(--stats-scale-3); }
+.toc-heat[data-level="4"] { background: var(--stats-scale-4); }
+
+.side-panel-tabs {
+  display: flex;
+  /* 空间不足时整粒药丸换行,标签文字绝不逐字竖排变形。 */
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 0 0 14px;
+}
+
+.side-panel-tabs button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 1 1 0;
+  min-width: 0;
+  gap: 6px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  white-space: nowrap;
+}
+
+.side-panel-tabs button.active {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 12%, var(--paper));
+}
+
+.side-panel-count {
+  min-width: 1.1em;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 18%, transparent);
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.annotation-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  /* 不定 width:100%——父级若是 auto 轨，百分比会与内容宽度循环，撑破侧栏。 */
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  margin: 0;
+  overflow: hidden;
+  list-style: none;
+}
+
+.annotation-list-item {
+  display: grid;
+  gap: 6px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--paper) 88%, var(--chrome));
+}
+
+.annotation-list-item.is-broken {
+  opacity: 0.72;
+}
+
+.annotation-list-main {
+  display: grid;
+  gap: 4px;
+  box-sizing: border-box;
+  min-width: 0;
+  max-width: 100%;
+  padding: 0;
+  overflow: hidden;
+  border: 0;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+}
+
+.annotation-list-kind {
+  width: fit-content;
+  padding: 1px 6px;
+  border-radius: 999px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.annotation-list-kind--bookmark {
+  color: var(--muted);
+  background: color-mix(in srgb, var(--chrome) 70%, transparent);
+}
+
+.annotation-list-kind--underline {
+  background: transparent;
+  border-bottom: 2px solid currentColor;
+  border-radius: 0;
+}
+
+.annotation-list-kind--highlight.annotation-list-kind--yellow,
+.annotation-list-kind--yellow { background: var(--annot-yellow-fill); }
+.annotation-list-kind--highlight.annotation-list-kind--green,
+.annotation-list-kind--green { background: var(--annot-green-fill); }
+.annotation-list-kind--highlight.annotation-list-kind--blue,
+.annotation-list-kind--blue { background: var(--annot-blue-fill); }
+.annotation-list-kind--highlight.annotation-list-kind--pink,
+.annotation-list-kind--pink { background: var(--annot-pink-fill); }
+
+.annotation-list-kind--underline.annotation-list-kind--yellow,
+.annotation-list-kind--underline.annotation-list-kind--green,
+.annotation-list-kind--underline.annotation-list-kind--blue,
+.annotation-list-kind--underline.annotation-list-kind--pink {
+  background: transparent;
+}
+
+.annotation-list-kind--underline.annotation-list-kind--yellow { border-bottom-color: var(--annot-yellow-line); }
+.annotation-list-kind--underline.annotation-list-kind--green { border-bottom-color: var(--annot-green-line); }
+.annotation-list-kind--underline.annotation-list-kind--blue { border-bottom-color: var(--annot-blue-line); }
+.annotation-list-kind--underline.annotation-list-kind--pink { border-bottom-color: var(--annot-pink-line); }
+
+.annotation-list-colors {
+  padding: 0 8px 4px;
+  justify-content: flex-start;
+}
+
+.annotation-list-wrap {
+  display: grid;
+  gap: 8px;
+  /* 与 library-group 相同：定宽轨，避免本文标注列表被长摘录撑破。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.annotation-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+  justify-content: space-between;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.annotation-list-toolbar button {
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 11px;
+}
+
+.annotation-list-toolbar-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.annotation-sort-toggle {
+  display: flex;
+  gap: 4px;
+}
+
+.annotation-sort-toggle button.active {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+}
+
+.annotation-library {
+  display: grid;
+  gap: 12px;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  /* 同上:嵌套内容的 min-content 不得撑破窄侧栏列宽。 */
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.annotation-library-total {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.annotation-library-group {
+  display: grid;
+  gap: 8px;
+  /* 显式 minmax(0,1fr) 提供确定宽度，打断子项 max-width:100% 的循环百分比。 */
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.annotation-library-doc {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.annotation-library-doc-title {
+  overflow: hidden;
+  min-width: 0;
+  flex: 1;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.annotation-library-current {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  color: var(--accent-ink);
+  background: color-mix(in srgb, var(--accent) 16%, transparent);
+  font-size: 10px;
+  font-weight: 600;
+}
+

@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { THEME_IDS, THEME_META } from "./lib/themes";
 
-const css = readFileSync(new URL("./App.css", import.meta.url), "utf8");
+const appCssUrl = new URL("./App.css", import.meta.url);
+const appCssSource = readFileSync(appCssUrl, "utf8");
+const importedLayers = [...appCssSource.matchAll(/@import\s+"(\.\/styles\/app-[^"]+\.css)"/g)].map(
+  (match) => readFileSync(new URL(match[1], appCssUrl), "utf8"),
+);
+const css = importedLayers.length > 0 ? importedLayers.join("\n") : appCssSource;
 const themeTokens = readFileSync(
   new URL("./styles/theme-tokens.css", import.meta.url),
   "utf8",
@@ -33,6 +38,22 @@ const REQUIRED_TOKENS = [
 ] as const;
 
 describe("application CSS isolation", () => {
+  it("loads layered App.css imports in cascade order", () => {
+    expect(appCssSource).toContain('@import "./styles/app-base.css"');
+    expect(appCssSource).toContain('@import "./styles/app-layout.css"');
+    expect(appCssSource).toContain('@import "./styles/app-formats.css"');
+    expect(appCssSource).toContain('@import "./styles/app-components.css"');
+    expect(appCssSource).toContain('@import "./styles/app-views.css"');
+    const order = [
+      appCssSource.indexOf("app-base.css"),
+      appCssSource.indexOf("app-layout.css"),
+      appCssSource.indexOf("app-formats.css"),
+      appCssSource.indexOf("app-components.css"),
+      appCssSource.indexOf("app-views.css"),
+    ];
+    expect(order).toEqual([...order].sort((left, right) => left - right));
+  });
+
   it("does not expose an application-level .sidebar selector to PDF.js", () => {
     expect(css).not.toMatch(/\.sidebar(?=[\s,{:#.>])/);
     expect(css).toContain(".library-sidebar");

@@ -982,9 +982,52 @@ export async function startReadingSession(session: ReadingSession): Promise<void
   return (await getTauriBackend()).startReadingSession(session);
 }
 
+export interface LocalDataStatus {
+  appVersion: string;
+  userDbPath: string;
+  statsDbPath: string;
+  cacheDbPath: string;
+  userDbOk: boolean;
+  statsDbOk: boolean;
+  userSchemaVersion: number | null;
+  cacheBytes: number;
+  failedIndexCount: number;
+  lastBackupAtMs: number | null;
+  lastBackupPath: string | null;
+  pendingBoundSessions: number;
+  restorePending: boolean;
+  userOpenError: string | null;
+  statsOpenError: string | null;
+}
+
+export interface LocalBackupResult {
+  backupPath: string;
+  createdAtMs: number;
+}
+
 /** 关窗协调的第二步：前端 flush 完（或超时）后放行关闭。 */
 export async function approveWindowClose(): Promise<void> {
   return (await getTauriBackend()).approveWindowClose();
+}
+
+export async function localDataStatus(): Promise<LocalDataStatus> {
+  return (await getTauriBackend()).localDataStatus();
+}
+
+export async function createLocalBackup(preferencesJson: string): Promise<LocalBackupResult> {
+  return (await getTauriBackend()).createLocalBackup(preferencesJson);
+}
+
+export async function stageLocalRestore(backupDir: string): Promise<string> {
+  return (await getTauriBackend()).stageLocalRestore(backupDir);
+}
+
+export async function exportDiagnosticReport(): Promise<string> {
+  return (await getTauriBackend()).exportDiagnosticReport();
+}
+
+export async function pickBackupDirectory(): Promise<string | null> {
+  return (await getTauriBackend()).pickBackupDirectory();
 }
 
 export async function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {

@@ -1,0 +1,23 @@
+{
+  "rootKey": "C:/合成库/library-a",
+  "documents": [
+    {
+      "relativePath": "笔记/长文.md",
+      "title": "稳定性分析 🧪",
+      "size": 4096,
+      "modified": 1725600000000,
+      "format": "markdown",
+      "indexStatus": "ready",
+      "indexError": null
+    },
+    {
+      "relativePath": "papers/guide.epub",
+      "title": "Guide",
+      "size": 1048576,
+      "modified": 1725600000001,
+      "format": "epub",
+      "indexStatus": "failed",
+      "indexError": "Resource limit exceeded"
+    }
+  ]
+}

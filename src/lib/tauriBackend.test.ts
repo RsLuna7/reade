@@ -274,10 +274,11 @@ describe("reveal in file manager IPC wrapper", () => {
 
 describe("IPC command name parity with Rust generate_handler", () => {
   it("keeps tauriBackend invoke names equal to lib.rs handler names", async () => {
-    const { readFile } = await import("node:fs/promises");
+    const { readdir, readFile } = await import("node:fs/promises");
     const { resolve } = await import("node:path");
     const root = resolve(import.meta.dirname, "../..");
-    const rust = await readFile(resolve(root, "src-tauri/src/lib.rs"), "utf8");
+    const rustDir = resolve(root, "src-tauri/src");
+    const rust = await readFile(resolve(rustDir, "lib.rs"), "utf8");
     const ts = await readFile(resolve(root, "src/lib/tauriBackend.ts"), "utf8");
 
     const handlerBlock = rust.match(/tauri::generate_handler!\s*\[\s*([\s\S]*?)\]/);
@@ -289,7 +290,24 @@ describe("IPC command name parity with Rust generate_handler", () => {
       (match) => match[1],
     );
 
-    expect([...new Set(tsCommands)].sort()).toEqual([...new Set(rustCommands)].sort());
-    expect(new Set(tsCommands).size).toBe(59);
+    const rustSet = [...new Set(rustCommands)].sort();
+    const tsSet = [...new Set(tsCommands)].sort();
+    expect(tsSet).toEqual(rustSet);
+    expect(rustSet.length).toBeGreaterThan(0);
+
+    const rustFiles = (await readdir(rustDir)).filter((name) => name.endsWith(".rs"));
+    const annotated = new Set<string>();
+    for (const name of rustFiles) {
+      const source = await readFile(resolve(rustDir, name), "utf8");
+      for (const match of source.matchAll(
+        /#\[tauri::command[^\]]*\][\s\S]*?(?:pub(?:\s*\([^)]*\))?\s+)?(?:async\s+)?fn\s+([a-z][a-z0-9_]*)/g,
+      )) {
+        annotated.add(match[1]);
+      }
+    }
+    const missingFromHandler = [...annotated].filter((name) => !rustSet.includes(name)).sort();
+    const handlerWithoutAttribute = rustSet.filter((name) => !annotated.has(name)).sort();
+    expect(missingFromHandler).toEqual([]);
+    expect(handlerWithoutAttribute).toEqual([]);
   });
 });

@@ -4,12 +4,12 @@ use std::io::{Cursor, Read};
 use anydoc::model::{
     Block, CellSlot, Document, ImageSource, Inline, LinkTarget, MarkerKind, NoteKind, TableKind,
 };
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use zip::ZipArchive;
 
 pub const MAX_CONVERTIBLE_BYTES: u64 = 128 * 1024 * 1024;
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum DocumentFormat {
     Markdown,
@@ -44,7 +44,7 @@ impl DocumentFormat {
     }
 }
 
-#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum IndexStatus {
     Pending,

@@ -1,0 +1,17 @@
+{
+  "appVersion": "0.2.0",
+  "userDbPath": "C:/Users/测试/AppData/Roaming/reade/reade-user.sqlite3",
+  "statsDbPath": "C:/Users/测试/AppData/Roaming/reade/reade-stats.sqlite3",
+  "cacheDbPath": "C:/Users/测试/AppData/Local/reade/reade-cache.sqlite3",
+  "userDbOk": false,
+  "statsDbOk": true,
+  "userSchemaVersion": null,
+  "cacheBytes": 0,
+  "failedIndexCount": 0,
+  "lastBackupAtMs": null,
+  "lastBackupPath": null,
+  "pendingBoundSessions": 0,
+  "restorePending": false,
+  "userOpenError": "Cannot open user database: locked by another process",
+  "statsOpenError": null
+}

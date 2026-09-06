@@ -26,6 +26,8 @@ import type {
   ReviewState,
   ReviewSummary,
   SearchResult,
+  LocalBackupResult,
+  LocalDataStatus,
 } from "./backend";
 import type {
   AnnotationEntryKind,
@@ -289,6 +291,22 @@ export function startReadingSession(session: ReadingSession): Promise<void> {
 }
 export function approveWindowClose(): Promise<void> {
   return invoke("approve_window_close");
+}
+export function localDataStatus(): Promise<LocalDataStatus> {
+  return invoke("local_data_status");
+}
+export function createLocalBackup(preferencesJson: string): Promise<LocalBackupResult> {
+  return invoke("create_local_backup", { preferencesJson });
+}
+export function stageLocalRestore(backupDir: string): Promise<string> {
+  return invoke("stage_local_restore", { backupDir });
+}
+export function exportDiagnosticReport(): Promise<string> {
+  return invoke("export_diagnostic_report");
+}
+export async function pickBackupDirectory(): Promise<string | null> {
+  const selected = await open({ directory: true, title: "选择 Reade 备份文件夹" });
+  return typeof selected === "string" ? selected : null;
 }
 export function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {
   return invoke("list_reading_sessions", { fromMs, toMs });
