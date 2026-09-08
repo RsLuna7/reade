@@ -70,6 +70,7 @@ import {
   describeHabitPeak,
   fillDailyRange,
   formatDuration,
+  formatHeatmapTooltip,
   isCurrentLibrarySession,
   libraryFolderName,
   localDayKey,
@@ -92,6 +93,7 @@ import {
   heatmapBlocksEqual,
   heatmapWeekCount,
 } from "../lib/heatmapLayout";
+import { useHeatmapTooltipSession } from "../lib/heatmapTooltipSession";
 import { chartMotionProps, useCountUp, useEntranceFlag } from "../lib/statsMotion";
 import { runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { THEME_META, useReaderStore } from "../store/useReaderStore";
@@ -950,6 +952,19 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
 
   const heatmapHostRef = useRef<HTMLDivElement>(null);
   const [heatmapBlocks, setHeatmapBlocks] = useState(DEFAULT_HEATMAP_BLOCKS);
+  const heatmapTips = useHeatmapTooltipSession();
+  const heatmapTooltips = useMemo(
+    () => ({
+      activity: {
+        text: (activity: Activity) => formatHeatmapTooltip(activity.date, activity.count),
+        placement: "top" as const,
+        offset: 10,
+        hoverRestMs: heatmapTips.hoverRestMs,
+        transitionStyles: heatmapTips.transitionStyles,
+      },
+    }),
+    [heatmapTips.hoverRestMs, heatmapTips.transitionStyles],
+  );
 
   useLayoutEffect(() => {
     const element = heatmapHostRef.current;
@@ -1296,7 +1311,12 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
               <h2>过去一年</h2>
               <span className="stats-section-hint">点击色块查看当日详情</span>
             </div>
-            <div className="stats-heatmap-scroll" ref={heatmapHostRef}>
+            <div
+              className="stats-heatmap-scroll"
+              ref={heatmapHostRef}
+              onPointerOver={heatmapTips.onPointerOver}
+              onPointerOut={heatmapTips.onPointerOut}
+            >
               <div className="stats-heatmap-scroll-inner">
                 <ActivityCalendar
                   data={heatmapData}
@@ -1315,14 +1335,7 @@ export function StatsView({ loadSessions = listReadingSessions }: StatsViewProps
                     weekdays: WEEKDAY_LABELS,
                     legend: { less: "少", more: "多" },
                   }}
-                  tooltips={{
-                    activity: {
-                      text: (activity) =>
-                        activity.count > 0
-                          ? `${activity.date} · ${formatDuration(activity.count)}`
-                          : `${activity.date} · 无阅读`,
-                    },
-                  }}
+                  tooltips={heatmapTooltips}
                   renderBlock={(block, activity) =>
                     cloneElement(block, {
                       onClick: () => setDrillDay(activity.date),

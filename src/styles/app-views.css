@@ -313,6 +313,27 @@ button.stats-fact:disabled {
   min-width: 100%;
 }
 
+/* Portaled by react-activity-calendar; library CSS is not imported so we
+   own the chip. Opaque surface + max-content width keep it readable over
+   month labels and give Floating UI a real size to flip/shift against. */
+.react-activity-calendar__tooltip {
+  z-index: 20;
+  width: max-content;
+  max-width: min(22rem, calc(100vw - 24px));
+  padding: 6px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: 8px;
+  background: var(--paper-raised);
+  color: var(--ink);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.35;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  box-shadow: var(--shadow);
+  pointer-events: none;
+}
+
 .stats-chart {
   min-width: 0;
 }

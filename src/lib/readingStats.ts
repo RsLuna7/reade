@@ -704,3 +704,13 @@ export function formatDuration(seconds: number): string {
   const minutes = totalMinutes % 60;
   return minutes > 0 ? `${hours} 小时 ${minutes} 分` : `${hours} 小时`;
 }
+
+const WEEKDAY_SHORT = ["日", "一", "二", "三", "四", "五", "六"] as const;
+
+/** Heatmap hover copy: local calendar day plus duration, never a raw ISO key. */
+export function formatHeatmapTooltip(dateKey: string, seconds: number): string {
+  const date = dayKeyToDate(dateKey);
+  const weekday = WEEKDAY_SHORT[date.getDay()] ?? "";
+  const when = `${date.getFullYear()}年${date.getMonth() + 1}月${date.getDate()}日周${weekday}`;
+  return seconds > 0 ? `${when} · ${formatDuration(seconds)}` : `${when} · 无阅读`;
+}

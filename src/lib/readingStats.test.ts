@@ -14,6 +14,7 @@ import {
   cumulativeSeries,
   fillDailyRange,
   formatDuration,
+  formatHeatmapTooltip,
   isCurrentLibrarySession,
   isWeekendDay,
   libraryFolderName,
@@ -225,6 +226,11 @@ describe("readingStats aggregation", () => {
     expect(formatDuration(150)).toBe("2 分钟");
     expect(formatDuration(3_600)).toBe("1 小时");
     expect(formatDuration(5_460)).toBe("1 小时 31 分");
+  });
+
+  it("formats heatmap hover copy with a local date instead of an ISO key", () => {
+    expect(formatHeatmapTooltip("2026-08-31", 3_600)).toBe("2026年8月31日周一 · 1 小时");
+    expect(formatHeatmapTooltip("2026-01-04", 0)).toBe("2026年1月4日周日 · 无阅读");
   });
 
   it("derives stable local day keys", () => {

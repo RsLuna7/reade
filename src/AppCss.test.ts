@@ -412,3 +412,17 @@ describe("reader heading ladder", () => {
     );
   });
 });
+
+describe("stats heatmap tooltip", () => {
+  it("gives the calendar hover chip a raised surface so it does not blend into labels", () => {
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*background:\s*var\(--paper-raised\)/s,
+    );
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*width:\s*max-content/s,
+    );
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*z-index:\s*20/s,
+    );
+  });
+});
