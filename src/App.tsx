@@ -765,14 +765,16 @@ function App() {
     const onWheel = (event: WheelEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (!currentPath || !currentContent) return;
+      const pdfHandle = pdfReaderHandleRef.current;
+      if (currentContent.kind === "pdf" && pdfHandle?.getMode() === "original") {
+        if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+        event.preventDefault();
+        pdfHandle.zoomByWheel(event.deltaY, event.deltaMode, event.clientX, event.clientY);
+        return;
+      }
       const direction = wheelZoomDirection(event.deltaY);
       if (direction === 0) return;
       event.preventDefault();
-      const pdfHandle = pdfReaderHandleRef.current;
-      if (currentContent.kind === "pdf" && pdfHandle?.getMode() === "original") {
-        pdfHandle.adjustScale(direction);
-        return;
-      }
       const currentSize = useReaderStore.getState().readingSettings.fontSize;
       const nextSize = adjustFontSize(currentSize, direction);
       if (nextSize !== currentSize) {

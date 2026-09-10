@@ -42,6 +42,7 @@ vi.mock("../lib/backend", () => ({
 }));
 
 import { readPdfReadingMode } from "../lib/backend";
+import { PDF_SCALE_COMMIT_DELAY_MS } from "../lib/readerWheelZoom";
 import {
   PdfReader,
   PdfSessionLifecycle,
@@ -813,6 +814,142 @@ describe("PDF tactical navigation (plan-pdf-tactical-nav A)", () => {
     fireEvent.keyDown(window, { key: "d", code: "KeyD" });
     expect(view.container.querySelector(".pdf-reading-page-label")).toHaveTextContent("Page 1");
     act(() => view.unmount());
+  });
+});
+
+describe("PDF wheel zoom preview", () => {
+  function fakePdf(numPages = 3) {
+    return {
+      numPages,
+      getOutline: vi.fn().mockResolvedValue(null),
+      getPage: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+  }
+
+  const common = {
+    relativePath: "zoom.pdf",
+    size: 100,
+    modified: 1,
+    indexStatus: "ready" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  async function renderReady(readerRef: { current: PdfReaderHandle | null }) {
+    const view = render(<PdfReader {...common} readerRef={readerRef} />);
+    const task = pdfMocks.tasks[pdfMocks.tasks.length - 1];
+    await act(async () => {
+      task.resolve(fakePdf());
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(view.container).toHaveTextContent(" / 3");
+    });
+    return view;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    cleanup();
+  });
+
+  it("coalesces zoom events into one frame and commits pdf.js scale after the debounce", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+
+    vi.useFakeTimers();
+    act(() => readerRef.current!.adjustScale(1));
+    act(() => readerRef.current!.adjustScale(1));
+
+    const pages = view.container.querySelector<HTMLElement>(".pdf-pages")!;
+    expect(pages.dataset.zoomPreview).toBeUndefined();
+    act(() => vi.advanceTimersByTime(16));
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(pages.style.getPropertyValue("--pdf-live-page-width")).toBe("984px");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("820px");
+    expect(view.getByRole("button", { name: "120%" })).toHaveAttribute("title", "实际大小");
+
+    act(() => {
+      vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS - 17);
+    });
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("820px");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(pages.dataset.zoomPreview).toBeUndefined();
+    expect(pages.style.getPropertyValue("--pdf-live-page-width")).toBe("");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("984px");
+    expect(view.getByRole("button", { name: "120%" })).toBeInTheDocument();
+
+    act(() => view.unmount());
+  });
+
+  it("applies fractional wheel deltas without snapping to 0.1", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-12, 0));
+    act(() => vi.advanceTimersByTime(16));
+
+    const pages = view.container.querySelector<HTMLElement>(".pdf-pages")!;
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(Number.parseFloat(pages.style.getPropertyValue("--pdf-live-page-width"))).toBe(
+      Math.round(820 * (1.1 ** 0.1)),
+    );
+    expect(view.getByRole("button", { name: "101%" })).toHaveAttribute("title", "实际大小");
+
+    act(() => view.unmount());
+  });
+
+  it("keeps the visible bitmap until the replacement render finishes", async () => {
+    const drawImage = vi.fn();
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D);
+    const jobs: Array<{ finish: () => void; cancel: ReturnType<typeof vi.fn> }> = [];
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale, scale, userUnit: 1 }),
+      render: vi.fn(() => {
+        let finish!: () => void;
+        const promise = new Promise<void>((resolve) => { finish = resolve; });
+        const cancel = vi.fn();
+        jobs.push({ finish, cancel });
+        return { promise, cancel };
+      }),
+      streamTextContent: vi.fn(),
+      getAnnotations: vi.fn().mockResolvedValue([]),
+    };
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = render(<PdfReader {...common} readerRef={readerRef} />);
+    try {
+      await act(async () => {
+        pdfMocks.tasks[pdfMocks.tasks.length - 1].resolve({ ...fakePdf(1), getPage: vi.fn().mockResolvedValue(page) });
+      });
+      await act(async () => { jobs[jobs.length - 1].finish(); });
+      const visible = view.container.querySelector("canvas")!;
+      const oldWidth = visible.width;
+      const oldDraws = drawImage.mock.calls.length;
+      const oldJobs = jobs.length;
+      vi.useFakeTimers();
+      act(() => readerRef.current!.adjustScale(1));
+      await act(async () => { vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS); });
+      expect(jobs).toHaveLength(oldJobs + 1);
+      expect(visible.width).toBe(oldWidth);
+      expect(drawImage).toHaveBeenCalledTimes(oldDraws);
+      await act(async () => { jobs[jobs.length - 1].finish(); });
+      expect(visible.width).toBeGreaterThan(oldWidth);
+      expect(drawImage).toHaveBeenCalledTimes(oldDraws + 1);
+    } finally {
+      view.unmount();
+      context.mockRestore();
+    }
   });
 });
 

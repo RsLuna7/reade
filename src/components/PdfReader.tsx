@@ -15,7 +15,21 @@ import {
 } from "../lib/annotations";
 import type { AnchorResolution } from "../lib/annotationModel";
 import type { TocItem } from "../lib/markdown";
-import { adjustPdfScale, type WheelZoomDirection } from "../lib/readerWheelZoom";
+import {
+  adjustPdfScale,
+  adjustPdfScaleByDelta,
+  applyPdfZoomPreview,
+  clampPdfScale,
+  isPdfZoomPreviewing,
+  PDF_SCALE_COMMIT_DELAY_MS,
+  pdfZoomLivePageWidth,
+  pdfZoomPreviewFactor,
+  wheelZoomDeltaPixels,
+  type WheelZoomDirection,
+} from "../lib/readerWheelZoom";
+import { setScrollInstant } from "../lib/scroll";
+import { createPdfZoomPreview, type PdfZoomPreview } from "../lib/pdfZoomPreview";
+import { PdfRenderQueue, pdfRasterPixelRatio } from "../lib/pdfRenderQueue";
 import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import {
   cropRegionFromSource,
@@ -201,10 +215,10 @@ export interface PdfPageMeasurement {
  * variable the calc is invalid and all spans silently inherit ~16px.
  *
  * The factor derives from the measured page-box width rather than
- * `viewport.width` because `.pdf-page` may be clamped by
- * `min(var(--pdf-page-width), 100%)` in narrow windows. Dividing by
- * `scale × userUnit` recovers the rotated page width in PDF units, so the
- * same formula holds for `/Rotate 90/270` pages.
+ * `viewport.width` so a page that is not at its render-viewport CSS size
+ * (window resize, ancestor zoom preview) still paints the text layer on
+ * the glyphs. Dividing by `scale × userUnit` recovers the rotated page
+ * width in PDF units, so the same formula holds for `/Rotate 90/270` pages.
  */
 export function computePdfTotalScaleFactor(
   measuredCssWidth: number,
@@ -221,6 +235,7 @@ export function computePdfTotalScaleFactor(
  * page render/text task is stopped before PDF.js destroys its document proxy.
  */
 export class PdfSessionLifecycle {
+  readonly renderQueue = new PdfRenderQueue();
   private active = true;
   private readonly pageTaskCancellations = new Set<() => void>();
 
@@ -319,6 +334,7 @@ export interface PdfReaderHandle {
   jumpToPage: (physicalPage: number) => void;
   openPageCalibration: () => void;
   adjustScale: (direction: WheelZoomDirection) => void;
+  zoomByWheel: (deltaY: number, deltaMode?: number, clientX?: number, clientY?: number) => void;
 }
 
 interface PdfReaderProps {
@@ -427,11 +443,12 @@ function captureCurrentPosition(
   toolbar: HTMLElement | null,
   fallbackPage: number,
   selector: string,
+  referenceY?: number,
 ): PdfPagePosition {
   const scrollRoot = findReadingRoot(reader);
   if (!scrollRoot) return { page: fallbackPage, offsetRatio: 0 };
   const viewport = scrollRoot.getBoundingClientRect();
-  const referenceLine = pdfReferenceLine(scrollRoot, toolbar);
+  const referenceLine = Number.isFinite(referenceY) ? (referenceY as number) : pdfReferenceLine(scrollRoot, toolbar);
   const selected = selectCurrentPdfPage(pageMeasurements(reader, selector), referenceLine, viewport.top, viewport.bottom) ?? fallbackPage;
   const page = reader.querySelector<HTMLElement>(`#pdf-page-${selected}`);
   if (!page) return { page: selected, offsetRatio: 0 };
@@ -443,19 +460,44 @@ function restorePositionInstantly(
   reader: HTMLElement,
   toolbar: HTMLElement | null,
   position: PdfPagePosition,
+  xRatio?: number,
+  referenceY?: number,
 ): boolean {
   const scrollRoot = findReadingRoot(reader);
   const page = reader.querySelector<HTMLElement>(`#pdf-page-${position.page}`);
   if (!scrollRoot || !page) return false;
   const rect = page.getBoundingClientRect();
-  scrollRoot.scrollTop = calculatePdfRestoreScrollTop(
-    scrollRoot.scrollTop,
-    rect.top,
-    rect.height,
-    pdfReferenceLine(scrollRoot, toolbar),
-    position.offsetRatio,
-  );
+  const view = xRatio !== undefined ? scrollRoot.getBoundingClientRect() : null;
+  const next = {
+    top: calculatePdfRestoreScrollTop(
+      scrollRoot.scrollTop,
+      rect.top,
+      rect.height,
+      Number.isFinite(referenceY) ? (referenceY as number) : pdfReferenceLine(scrollRoot, toolbar),
+      position.offsetRatio,
+    ),
+  } as { top: number; left?: number };
+  if (view && xRatio !== undefined && Number.isFinite(xRatio)) {
+    const ratio = Math.min(1, Math.max(0, xRatio));
+    const target = rect.left + rect.width * ratio;
+    const center = view.left + view.width / 2;
+    next.left = scrollRoot.scrollLeft + target - center;
+  }
+  // One native instant scroll avoids toggling scroll-behavior on the ancestor
+  // (and invalidating the whole PDF subtree) twice per preview frame.
+  if (typeof scrollRoot.scrollTo === "function") scrollRoot.scrollTo({ ...next, behavior: "instant" });
+  else setScrollInstant(scrollRoot, next);
   return true;
+}
+
+function capturePageCenterXRatio(reader: HTMLElement, pageNumber: number): number {
+  const scrollRoot = findReadingRoot(reader);
+  const page = reader.querySelector<HTMLElement>(`#pdf-page-${pageNumber}`);
+  if (!scrollRoot || !page) return 0.5;
+  const view = scrollRoot.getBoundingClientRect();
+  const rect = page.getBoundingClientRect();
+  if (!(rect.width > 0)) return 0.5;
+  return Math.min(1, Math.max(0, (view.left + view.width / 2 - rect.left) / rect.width));
 }
 
 function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage, onHighlightResolutions }: PageProps) {
@@ -467,6 +509,7 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
   const highlightRef = useRef<HTMLDivElement>(null);
   const [renderNearby, setRenderNearby] = useState(pageNumber <= 2);
   const [ratio, setRatio] = useState(initialRatio);
+  const [pageWidth, setPageWidth] = useState<number | null>(null);
   const [textLayerRevision, setTextLayerRevision] = useState(0);
   const viewportMetricsRef = useRef<{ width: number; scale: number; userUnit: number } | null>(null);
 
@@ -474,6 +517,9 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     const host = hostRef.current;
     const metrics = viewportMetricsRef.current;
     if (!host || !metrics) return;
+    // Preview only stretches the bitmap. Recomputing hidden text geometry here
+    // invalidates thousands of glyph styles on every ResizeObserver delivery.
+    if (host.closest("[data-zoom-preview]")) return;
     const factor = computePdfTotalScaleFactor(host.getBoundingClientRect().width, metrics);
     if (factor !== null) host.style.setProperty("--total-scale-factor", String(factor));
   }, []);
@@ -491,27 +537,41 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
 
   useEffect(() => {
     const host = hostRef.current;
-    if (!host) return;
+    if (!host || !renderNearby) return;
     const observer = new ResizeObserver(applyTotalScaleFactor);
     observer.observe(host);
     return () => observer.disconnect();
-  }, [applyTotalScaleFactor]);
+  }, [applyTotalScaleFactor, renderNearby]);
 
   useEffect(() => {
     if (!renderNearby || !session.lifecycle.isActive()) return;
     let cancelled = false;
-    let renderTask: { cancel: () => void; promise: Promise<void> } | null = null;
+    const controller = new AbortController();
+    let renderTask: ReturnType<PDFPageProxy["render"]> | null = null;
+    let resumeTimer: ReturnType<typeof setTimeout> | undefined;
     let textLayer: TextLayer | null = null;
 
     const cancel = () => {
       if (cancelled) return;
       cancelled = true;
+      controller.abort();
+      if (resumeTimer !== undefined) clearTimeout(resumeTimer);
       renderTask?.cancel();
       textLayer?.cancel();
     };
     const unregister = session.lifecycle.registerPageTask(cancel);
 
-    void session.pdf.getPage(pageNumber).then(async (page: PDFPageProxy) => {
+    const priority = () => {
+      const host = hostRef.current;
+      const root = findReadingRoot(host);
+      if (!host || !root) return pageNumber;
+      const rect = host.getBoundingClientRect();
+      const view = root.getBoundingClientRect();
+      return rect.bottom > view.top && rect.top < view.bottom
+        ? -1_000_000 + Math.abs(rect.top - view.top)
+        : Math.min(Math.abs(rect.top - view.bottom), Math.abs(rect.bottom - view.top));
+    };
+    void session.lifecycle.renderQueue.run(() => session.pdf.getPage(pageNumber).then(async (page: PDFPageProxy) => {
       if (cancelled || !session.lifecycle.isActive()) return;
       const viewport = page.getViewport({ scale });
       const nextRatio = viewport.height / viewport.width;
@@ -520,22 +580,22 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
       viewportMetricsRef.current = { width: viewport.width, scale: viewport.scale, userUnit: viewport.userUnit };
       const pageHost = hostRef.current;
       if (pageHost) {
-        // Page-box width and render viewport share one source of truth so the
-        // canvas bitmap is not stretched relative to the text layer (R2).
-        pageHost.style.setProperty("--pdf-page-width", `${viewport.width}px`);
         // Page size in PDF points (rotation-aware, scale 1) for annotation
         // capture: stored locators snapshot it so normalized rects remain
         // convertible to PDF user-space coordinates offline.
         const baseViewport = page.getViewport({ scale: 1 });
+        setPageWidth(baseViewport.width);
         pageHost.dataset.pageWidth = String(baseViewport.width);
         pageHost.dataset.pageHeight = String(baseViewport.height);
       }
       applyTotalScaleFactor();
-      const canvas = canvasRef.current;
+      const visibleCanvas = canvasRef.current;
+      // Keep the previous bitmap visible while PDF.js prepares the next scale.
+      const canvas = globalThis.document.createElement("canvas");
       const textHost = textRef.current;
       const annotationHost = annotationRef.current;
-      if (!canvas || !textHost || !annotationHost) return;
-      const pixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      if (!visibleCanvas || !textHost || !annotationHost) return;
+      const pixelRatio = pdfRasterPixelRatio(viewport.width, viewport.height, window.devicePixelRatio);
       canvas.width = Math.floor(viewport.width * pixelRatio);
       canvas.height = Math.floor(viewport.height * pixelRatio);
       canvas.style.width = `${viewport.width}px`;
@@ -549,8 +609,24 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
         annotationMode: AnnotationMode.DISABLE,
         transform: pixelRatio === 1 ? undefined : [pixelRatio, 0, 0, pixelRatio, 0, 0],
       });
+      renderTask.onContinue = (resume: () => void) => {
+        const continueWhenIdle = () => {
+          if (cancelled) return;
+          if (pageHost?.closest("[data-zoom-preview]")) {
+            resumeTimer = setTimeout(continueWhenIdle, 50);
+          } else resume();
+        };
+        continueWhenIdle();
+      };
       await renderTask.promise;
       if (cancelled || !session.lifecycle.isActive()) return;
+      visibleCanvas.width = canvas.width;
+      visibleCanvas.height = canvas.height;
+      visibleCanvas.getContext("2d")?.drawImage(canvas, 0, 0);
+      visibleCanvas.dataset.pdfRendered = "true";
+      // Release the temporary bitmap before constructing the text layer.
+      canvas.width = 0;
+      canvas.height = 0;
       textHost.replaceChildren();
       // Sizing (and rotation via data-main-rotation) is written by pdf.js
       // setLayerDimensions in terms of --total-scale-factor; no inline size.
@@ -602,7 +678,7 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
         });
         annotationHost.append(link);
       }
-    }).catch(() => undefined);
+    }), priority, controller.signal).catch(() => undefined);
 
     return () => {
       cancel();
@@ -777,7 +853,11 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
         ? `第 ${pageNumber} 页`
         : `印刷第 ${shownPage} 页，文件第 ${pageNumber} 页`
     }
-    style={{ aspectRatio: `1 / ${ratio}` }}
+    style={{
+      aspectRatio: `1 / ${ratio}`,
+      // Commit geometry with React, before the asynchronous bitmap render.
+      ...(pageWidth === null ? {} : { "--pdf-page-width": `${pageWidth * scale}px` }),
+    } as React.CSSProperties}
   >
     {renderNearby && <>
       <canvas ref={canvasRef} />
@@ -858,7 +938,21 @@ export function PdfReader({
   const [boundError, setBoundError] = useState<BoundError | null>(null);
   const [mode, setMode] = useState<"original" | "reading">("original");
   const [scale, setScale] = useState(1);
+  const [layoutScale, setLayoutScale] = useState(1);
+  const layoutScaleRef = useRef(1);
+  const scaleRef = useRef(1);
+  const zoomAnchorXRef = useRef<number | null>(null);
+  const zoomReferenceYRef = useRef<number | null>(null);
+  const commitTimerRef = useRef<number | null>(null);
+  const zoomFrameRef = useRef<number | null>(null);
+  const bitmapPreviewRef = useRef<PdfZoomPreview | null>(null);
+  const [zoomCommitRevision, setZoomCommitRevision] = useState(0);
+  const pagesRef = useRef<HTMLDivElement | null>(null);
+  const zoomPercentRef = useRef<HTMLButtonElement | null>(null);
+  const nativePageWidthRef = useRef<number | null>(null);
+  scaleRef.current = scale;
   const [nativePageWidth, setNativePageWidth] = useState<number | null>(null);
+  nativePageWidthRef.current = nativePageWidth;
   const [currentPage, setCurrentPage] = useState(1);
   // 双页对开(plan-pdf-spread):intent 是用户意图(会话级记忆),
   // capable 是宽窗判定;两者都成立且在原版式才真正并排。
@@ -1077,7 +1171,22 @@ export function PdfReader({
     };
   }, [onTocChange, session]);
 
+  const cancelZoomGesture = useCallback(() => {
+    if (commitTimerRef.current != null) window.clearTimeout(commitTimerRef.current);
+    if (zoomFrameRef.current != null) window.cancelAnimationFrame(zoomFrameRef.current);
+    commitTimerRef.current = null;
+    zoomFrameRef.current = null;
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    if (pagesRef.current) applyPdfZoomPreview(pagesRef.current, 1, 0);
+    layoutScaleRef.current = scaleRef.current;
+    zoomAnchorXRef.current = null;
+    zoomReferenceYRef.current = null;
+    if (zoomPercentRef.current) zoomPercentRef.current.textContent = `${Math.round(scaleRef.current * 100)}%`;
+  }, []);
+
   const jump = useCallback((page: number) => {
+    cancelZoomGesture();
     const readingLastPage = reading?.pages.reduce((last, item) => Math.max(last, item.page), 0) ?? 0;
     const pageCount = session?.pdf.numPages ?? readingLastPage;
     const requested = Math.max(1, Math.round(Number.isFinite(page) ? page : 1));
@@ -1093,7 +1202,7 @@ export function PdfReader({
         }
       }
     });
-  }, [mode, reading?.pages, session?.pdf.numPages, setActivePage]);
+  }, [cancelZoomGesture, mode, reading?.pages, session?.pdf.numPages, setActivePage]);
 
   const numPages = session?.pdf.numPages ?? 0;
   const activeOffset = effectiveOffset(pageOffset, numPages);
@@ -1280,11 +1389,97 @@ export function PdfReader({
     if (!pending || pending.page !== page) return;
     window.requestAnimationFrame(() => {
       const reader = rootRef.current;
+      if (commitTimerRef.current !== null) return;
       if (reader && pendingPositionRef.current === pending && restorePositionInstantly(reader, toolbarRef.current, pending)) {
         pendingPositionRef.current = null;
       }
     });
   }, []);
+
+  const commitPdfScale = useCallback((next: number) => {
+    if (zoomFrameRef.current !== null) {
+      window.cancelAnimationFrame(zoomFrameRef.current);
+      zoomFrameRef.current = null;
+    }
+    const clamped = clampPdfScale(next);
+    if (commitTimerRef.current != null) {
+      window.clearTimeout(commitTimerRef.current);
+      commitTimerRef.current = null;
+    }
+    layoutScaleRef.current = clamped;
+    setLayoutScale(clamped);
+    setScale(clamped);
+    setZoomCommitRevision((revision) => revision + 1);
+  }, []);
+
+  const paintLiveZoom = useCallback(() => {
+    zoomFrameRef.current = null;
+    const pages = pagesRef.current;
+    const reader = rootRef.current;
+    if (!pages) return;
+    const nextScale = layoutScaleRef.current;
+    const factor = pdfZoomPreviewFactor(nextScale, scaleRef.current);
+    const percent = zoomPercentRef.current;
+    if (percent) percent.textContent = `${Math.round(nextScale * 100)}%`;
+    if (bitmapPreviewRef.current?.paint(factor)) return;
+    // Coverage exhausted: return to live layout for the rest of this gesture.
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    const pageWidthPx = pdfZoomLivePageWidth(nativePageWidthRef.current ?? 820, nextScale);
+    applyPdfZoomPreview(pages, factor, pageWidthPx);
+    const position = pendingPositionRef.current;
+    if (reader && position) {
+      restorePositionInstantly(
+        reader,
+        toolbarRef.current,
+        position,
+        zoomAnchorXRef.current ?? undefined,
+        zoomReferenceYRef.current ?? undefined,
+      );
+    }
+  }, []);
+
+  const scheduleScaleCommit = useCallback(() => {
+    if (commitTimerRef.current != null) window.clearTimeout(commitTimerRef.current);
+    commitTimerRef.current = window.setTimeout(() => {
+      commitTimerRef.current = null;
+      commitPdfScale(layoutScaleRef.current);
+    }, PDF_SCALE_COMMIT_DELAY_MS);
+  }, [commitPdfScale]);
+
+  const beginZoomGesture = useCallback((_clientX?: number, clientY?: number) => {
+    const reader = rootRef.current;
+    if (!reader || commitTimerRef.current !== null) return;
+    zoomReferenceYRef.current = Number.isFinite(clientY) ? (clientY as number) : null;
+    pendingPositionRef.current = captureCurrentPosition(
+      reader,
+      toolbarRef.current,
+      currentPageRef.current,
+      ".pdf-page",
+      zoomReferenceYRef.current ?? undefined,
+    );
+    zoomAnchorXRef.current = capturePageCenterXRatio(
+      reader,
+      pendingPositionRef.current.page,
+    );
+    const pages = pagesRef.current;
+    const scroller = findReadingRoot(reader);
+    if (pages && scroller) {
+      bitmapPreviewRef.current = createPdfZoomPreview(pages, scroller, toolbarRef.current,
+        zoomReferenceYRef.current ?? undefined);
+    }
+  }, []);
+
+  const previewPdfScale = useCallback((next: number, clientX?: number, clientY?: number) => {
+    const clamped = clampPdfScale(next);
+    if (clamped === layoutScaleRef.current) return;
+    beginZoomGesture(clientX, clientY);
+    layoutScaleRef.current = clamped;
+    if (zoomFrameRef.current === null) {
+      zoomFrameRef.current = window.requestAnimationFrame(paintLiveZoom);
+    }
+    scheduleScaleCommit();
+  }, [beginZoomGesture, paintLiveZoom, scheduleScaleCommit]);
 
   const fitWidth = useCallback(async () => {
     const activeSession = session;
@@ -1299,16 +1494,49 @@ export function PdfReader({
       const fitted = spreadActive
         ? spreadFitScale(reader.clientWidth, nativeWidth)
         : singleFitScale(reader.clientWidth, nativeWidth);
-      setScale(Math.min(3, Math.max(.5, fitted)));
+      commitPdfScale(fitted);
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
     }
-  }, [session, spreadActive]);
+  }, [commitPdfScale, session, spreadActive]);
 
   const adjustScale = useCallback((direction: WheelZoomDirection) => {
     if (direction === 0) return;
-    setScale((value) => adjustPdfScale(value, direction));
-  }, []);
+    previewPdfScale(adjustPdfScale(layoutScaleRef.current, direction));
+  }, [previewPdfScale]);
+
+  const zoomByWheel = useCallback((deltaY: number, deltaMode = 0, clientX?: number, clientY?: number) => {
+    const pixels = wheelZoomDeltaPixels({ deltaY, deltaMode });
+    if (pixels === 0) return;
+    previewPdfScale(adjustPdfScaleByDelta(layoutScaleRef.current, pixels), clientX, clientY);
+  }, [previewPdfScale]);
+
+  useLayoutEffect(() => cancelZoomGesture, [cancelZoomGesture, sourceKey, mode, spreadActive]);
+
+  useEffect(() => {
+    const finish = () => {
+      if (commitTimerRef.current !== null || bitmapPreviewRef.current) commitPdfScale(layoutScaleRef.current);
+    };
+    window.addEventListener("blur", finish);
+    window.addEventListener("resize", finish);
+    const scroller = findReadingRoot(rootRef.current);
+    const finishOnScroll = () => { if (bitmapPreviewRef.current) finish(); };
+    scroller?.addEventListener("scroll", finishOnScroll, { passive: true });
+    let previousSize = scroller ? `${scroller.clientWidth}:${scroller.clientHeight}` : "";
+    const observer = new ResizeObserver(() => {
+      if (!scroller) return;
+      const size = `${scroller.clientWidth}:${scroller.clientHeight}`;
+      if (size !== previousSize) finish();
+      previousSize = size;
+    });
+    if (scroller) observer.observe(scroller);
+    return () => {
+      window.removeEventListener("blur", finish);
+      window.removeEventListener("resize", finish);
+      scroller?.removeEventListener("scroll", finishOnScroll);
+      observer.disconnect();
+    };
+  }, [commitPdfScale]);
 
   useEffect(() => {
     // 加载即适宽;spreadActive 改变 fitWidth 身份,切换双页/单页时
@@ -1527,11 +1755,12 @@ export function PdfReader({
       jumpToPage: (physicalPage) => jump(physicalPage),
       openPageCalibration,
       adjustScale,
+      zoomByWheel,
     };
     return () => {
       readerRef.current = null;
     };
-  }, [adjustScale, capturePosition, jump, mode, openPageCalibration, openReadingMode, readerRef, switchMode]);
+  }, [adjustScale, capturePosition, jump, mode, openPageCalibration, openReadingMode, readerRef, switchMode, zoomByWheel]);
 
   useEffect(() => {
     if (locator?.kind !== "pdfPage") return;
@@ -1560,20 +1789,29 @@ export function PdfReader({
   }, [jump, locator, mode, motionLevel, reading, session]);
 
   useLayoutEffect(() => {
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    const pages = pagesRef.current;
+    if (pages && !isPdfZoomPreviewing(layoutScale, scale)) {
+      applyPdfZoomPreview(pages, 1, 0);
+    }
     const position = pendingPositionRef.current;
     if (!position || (mode === "original" && !session) || (mode === "reading" && !reading)) return;
-    const frame = window.requestAnimationFrame(() => {
-      const reader = rootRef.current;
-      if (reader && restorePositionInstantly(reader, toolbarRef.current, position)) {
-        if (mode === "reading" || pageRatiosRef.current.has(position.page)) {
-          pendingPositionRef.current = null;
-        }
-        setActivePage(position.page);
+    const reader = rootRef.current;
+    if (!reader) return;
+    const xRatio = zoomAnchorXRef.current ?? undefined;
+    if (restorePositionInstantly(reader, toolbarRef.current, position, xRatio, zoomReferenceYRef.current ?? undefined)) {
+      const previewing = isPdfZoomPreviewing(layoutScale, scale);
+      if (!previewing && (mode === "reading" || pageRatiosRef.current.has(position.page))) {
+        pendingPositionRef.current = null;
+        zoomAnchorXRef.current = null;
+        zoomReferenceYRef.current = null;
       }
-    });
-    return () => window.cancelAnimationFrame(frame);
+      setActivePage(position.page);
+    }
     // spreadActive:双页/单页切换是一次布局重排,同样要回位(§3.2)。
-  }, [mode, reading, session, setActivePage, spreadActive]);
+    // scale:预览提交后页框换成新的 --pdf-page-width,清掉 live width 再回位。
+  }, [layoutScale, mode, reading, scale, session, setActivePage, spreadActive, zoomCommitRevision]);
 
   useEffect(() => {
     if ((mode === "original" && !session) || (mode === "reading" && !reading)) return;
@@ -1583,6 +1821,9 @@ export function PdfReader({
     let frame: number | null = null;
     const updateCurrentPage = () => {
       frame = null;
+      // The gesture has its own stable anchor. Avoid measuring every page in
+      // long documents again for the scroll events generated by that gesture.
+      if (commitTimerRef.current !== null || zoomFrameRef.current !== null) return;
       const viewport = scrollRoot.getBoundingClientRect();
       const selected = selectCurrentPdfPage(
         pageMeasurements(reader, pageSelector),
@@ -1609,7 +1850,7 @@ export function PdfReader({
       window.removeEventListener("resize", scheduleUpdate);
       if (frame !== null) window.cancelAnimationFrame(frame);
     };
-  }, [mode, pageSelector, reading, session, setActivePage]);
+  }, [mode, pageSelector, reading, scale, session, setActivePage]);
 
   return <div className={`pdf-reader${regionSelect ? " pdf-region-select-active" : ""}`} ref={rootRef}>
     <div className="pdf-toolbar" role="toolbar" aria-label="PDF 阅读工具" ref={toolbarRef}>
@@ -1695,9 +1936,9 @@ export function PdfReader({
           )}
         </div>}
         <div className="pdf-toolbar-group">
-          <button type="button" aria-label="缩小" onClick={() => setScale((value) => Math.max(.5, value - .1))}><Minus size={14} /></button>
-          <button type="button" title="实际大小" onClick={() => setScale(1)}>{Math.round(scale * 100)}%</button>
-          <button type="button" aria-label="放大" onClick={() => setScale((value) => Math.min(3, value + .1))}><Plus size={14} /></button>
+          <button type="button" aria-label="缩小" onClick={() => previewPdfScale(adjustPdfScale(layoutScaleRef.current, -1))}><Minus size={14} /></button>
+          <button ref={zoomPercentRef} type="button" title="实际大小" onClick={() => commitPdfScale(1)}>{Math.round(layoutScale * 100)}%</button>
+          <button type="button" aria-label="放大" onClick={() => previewPdfScale(adjustPdfScale(layoutScaleRef.current, 1))}><Plus size={14} /></button>
           <button type="button" onClick={() => void fitWidth()}>适宽</button>
         </div>
         <div className="pdf-toolbar-group">
@@ -1772,7 +2013,7 @@ export function PdfReader({
       </div>
     )}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
-    {mode === "original" && session && <div className="pdf-pages" data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
+    {mode === "original" && session && <div className="pdf-pages" ref={pagesRef} data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
       {Array.from({ length: session.pdf.numPages }, (_, index) => {
         const page = index + 1;
         return <PdfPage

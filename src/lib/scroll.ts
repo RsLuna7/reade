@@ -7,6 +7,23 @@ function isVerticalContainer(container: HTMLElement): boolean {
   return container.dataset.writing === "vertical";
 }
 
+/**
+ * Write scroll offsets without CSS `scroll-behavior: smooth`.
+ * `.reading-scroll` uses smooth scrolling for TOC/search jumps; a raw
+ * `scrollTop` assignment under that rule becomes a cancelled animation.
+ */
+export function setScrollInstant(
+  scroller: HTMLElement,
+  next: { top?: number; left?: number },
+): void {
+  if (next.top === undefined && next.left === undefined) return;
+  const previous = scroller.style.scrollBehavior;
+  scroller.style.scrollBehavior = "auto";
+  if (next.top !== undefined) scroller.scrollTop = next.top;
+  if (next.left !== undefined) scroller.scrollLeft = next.left;
+  scroller.style.scrollBehavior = previous;
+}
+
 export function scrollElementWithinContainer(
   container: HTMLElement | null,
   target: HTMLElement | null,

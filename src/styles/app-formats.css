@@ -382,7 +382,14 @@
 :root[data-motion="full"] .pdf-mode-indicator { opacity: 1; transition: transform var(--motion-standard) var(--motion-ease); }
 :root[data-motion="full"] .pdf-mode-toggle[data-mode="reading"] .pdf-mode-indicator { transform: translateX(calc(100% + 2px)); }
 :root[data-motion="full"] .pdf-mode-toggle button.active { background: transparent; }
-.pdf-pages { display: flex; align-items: center; flex-direction: column; gap: 22px; }
+.pdf-pages {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  gap: 22px;
+  width: max-content;
+  min-width: 100%;
+}
 
 /* ---- PDF 双页对开(plan-pdf-spread) ----
    spread=false 保持原 flex 路径零扰动;并排布局全部隔离在
@@ -392,7 +399,7 @@
   display: grid;
   align-items: start;
   justify-content: center;
-  grid-template-columns: repeat(2, minmax(0, min(var(--pdf-page-width), calc(50% - 11px))));
+  grid-template-columns: repeat(2, minmax(0, var(--pdf-live-page-width, var(--pdf-page-width))));
 }
 
 .pdf-pages[data-spread="true"] .pdf-page:nth-child(even) {
@@ -415,9 +422,29 @@
 }
 /* pdf.js text layer contract: --total-scale-factor is set per page from JS
    (PdfPage), --scale-round-x/y are required by setLayerDimensions' round(). */
-.pdf-page { position: relative; isolation: isolate; width: min(var(--pdf-page-width), 100%); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
+.pdf-page { position: relative; isolation: isolate; contain: layout; width: var(--pdf-live-page-width, var(--pdf-page-width)); overflow: hidden; background: white; box-shadow: 0 7px 28px rgba(34, 30, 24, .16); --scale-round-x: 1px; --scale-round-y: 1px; }
 .pdf-page canvas, .pdf-annotation-layer, .pdf-user-highlight-layer { position: absolute; inset: 0; width: 100% !important; height: 100% !important; }
 .pdf-page canvas { display: block; }
+/* Measured pages retain their individual sizes in the layout fallback. */
+.pdf-page[data-page-width] { width: calc(var(--pdf-page-width) * var(--pdf-preview-factor, 1)); }
+.pdf-pages[data-bitmap-preview] { visibility: hidden; }
+.pdf-zoom-bitmap-overlay {
+  position: fixed;
+  z-index: 20;
+  overflow: hidden;
+  contain: strict;
+  pointer-events: none;
+}
+/* Live wheel-zoom follows pdf.js `--scale-factor`: grow the page box and CSS-stretch
+   the existing bitmap. Do not transform `.pdf-pages` (that composites the whole stack). */
+.pdf-pages[data-zoom-preview] .pdf-text-layer,
+.pdf-pages[data-zoom-preview] .pdf-user-highlight-layer,
+.pdf-pages[data-zoom-preview] .pdf-annotation-layer {
+  /* Opacity alone still lays out every glyph during a live resize. */
+  display: none;
+  opacity: 0;
+  pointer-events: none;
+}
 
 /* "截取引用"框选层(plan-pdf-region-card):十字光标 + 半透明选框;
    模式激活时临时关闭文本层指针事件防选字冲突,退出即恢复。 */

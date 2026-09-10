@@ -212,6 +212,22 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.pdf-page\s*\{[^}]*--scale-round-y:\s*1px/s);
   });
 
+  it("scales PDF pages via a live width variable during wheel-zoom", () => {
+    expect(css).toMatch(
+      /\.pdf-page\s*\{[^}]*width:\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-pages\[data-spread="true"\]\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)\)\)/s,
+    );
+    expect(css).not.toMatch(/\.pdf-pages\[data-zoom-preview\]\s*\{[^}]*will-change:\s*transform/s);
+    expect(css).toMatch(
+      /\.pdf-pages\[data-zoom-preview\]\s+\.pdf-text-layer[\s\S]*opacity:\s*0/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-pages\[data-zoom-preview\]\s+\.pdf-text-layer[\s\S]*display:\s*none/s,
+    );
+  });
+
   it("does not force text layer dimensions over pdf.js setLayerDimensions", () => {
     const forcedSizeSelectors = Array.from(css.matchAll(/([^{}]+)\{([^{}]*)\}/g))
       .filter((match) => /(?:width|height):\s*100%\s*!important/.test(match[2]))

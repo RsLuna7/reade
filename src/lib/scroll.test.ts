@@ -6,7 +6,20 @@ import {
   scrollElementWithinContainer,
   scrollRangeIntoContainer,
   scrollToOffsetWithinElement,
+  setScrollInstant,
 } from "./scroll";
+
+describe("setScrollInstant", () => {
+  it("assigns offsets under an inline auto scroll-behavior so CSS smooth does not animate", () => {
+    const scroller = document.createElement("div");
+    Object.defineProperty(scroller, "scrollTop", { value: 10, writable: true });
+    Object.defineProperty(scroller, "scrollLeft", { value: 4, writable: true });
+    setScrollInstant(scroller, { top: 80, left: 12 });
+    expect(scroller.scrollTop).toBe(80);
+    expect(scroller.scrollLeft).toBe(12);
+    expect(scroller.style.scrollBehavior).toBe("");
+  });
+});
 
 describe("scroll annotation helpers", () => {
   it("scrolls a container by ratio", () => {
