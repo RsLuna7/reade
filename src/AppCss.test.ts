@@ -2,7 +2,12 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { THEME_IDS, THEME_META } from "./lib/themes";
 
-const css = readFileSync(new URL("./App.css", import.meta.url), "utf8");
+const appCssUrl = new URL("./App.css", import.meta.url);
+const appCssSource = readFileSync(appCssUrl, "utf8");
+const importedLayers = [...appCssSource.matchAll(/@import\s+"(\.\/styles\/app-[^"]+\.css)"/g)].map(
+  (match) => readFileSync(new URL(match[1], appCssUrl), "utf8"),
+);
+const css = importedLayers.length > 0 ? importedLayers.join("\n") : appCssSource;
 const themeTokens = readFileSync(
   new URL("./styles/theme-tokens.css", import.meta.url),
   "utf8",
@@ -33,6 +38,22 @@ const REQUIRED_TOKENS = [
 ] as const;
 
 describe("application CSS isolation", () => {
+  it("loads layered App.css imports in cascade order", () => {
+    expect(appCssSource).toContain('@import "./styles/app-base.css"');
+    expect(appCssSource).toContain('@import "./styles/app-layout.css"');
+    expect(appCssSource).toContain('@import "./styles/app-formats.css"');
+    expect(appCssSource).toContain('@import "./styles/app-components.css"');
+    expect(appCssSource).toContain('@import "./styles/app-views.css"');
+    const order = [
+      appCssSource.indexOf("app-base.css"),
+      appCssSource.indexOf("app-layout.css"),
+      appCssSource.indexOf("app-formats.css"),
+      appCssSource.indexOf("app-components.css"),
+      appCssSource.indexOf("app-views.css"),
+    ];
+    expect(order).toEqual([...order].sort((left, right) => left - right));
+  });
+
   it("does not expose an application-level .sidebar selector to PDF.js", () => {
     expect(css).not.toMatch(/\.sidebar(?=[\s,{:#.>])/);
     expect(css).toContain(".library-sidebar");
@@ -123,6 +144,15 @@ describe("application CSS isolation", () => {
     );
   });
 
+  it("lets local-data diagnostics wrap long paths inside the settings popover", () => {
+    expect(css).toMatch(/\.settings-popover\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.settings-popover\s*\{[^}]*overflow-x:\s*hidden/s);
+    expect(css).toMatch(/\.local-data-setting\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.local-data-error\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(css).toMatch(/\.local-data-error-path\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(css).toMatch(/\.setting-hint\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
   it("lets every sidebar footer control share the full width", () => {
     expect(css).toMatch(
       /\.theme-controls\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)/s,
@@ -195,6 +225,22 @@ describe("application CSS isolation", () => {
   it("fulfills the pdf.js text layer CSS variable contract on .pdf-page", () => {
     expect(css).toMatch(/\.pdf-page\s*\{[^}]*--scale-round-x:\s*1px/s);
     expect(css).toMatch(/\.pdf-page\s*\{[^}]*--scale-round-y:\s*1px/s);
+  });
+
+  it("scales PDF pages via a live width variable during wheel-zoom", () => {
+    expect(css).toMatch(
+      /\.pdf-page\s*\{[^}]*width:\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-pages\[data-spread="true"\]\s*\{[^}]*grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)\)\)/s,
+    );
+    expect(css).not.toMatch(/\.pdf-pages\[data-zoom-preview\]\s*\{[^}]*will-change:\s*transform/s);
+    expect(css).toMatch(
+      /\.pdf-pages\[data-zoom-preview\]\s+\.pdf-text-layer[\s\S]*opacity:\s*0/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-pages\[data-zoom-preview\]\s+\.pdf-text-layer[\s\S]*display:\s*none/s,
+    );
   });
 
   it("does not force text layer dimensions over pdf.js setLayerDimensions", () => {
@@ -394,6 +440,20 @@ describe("reader heading ladder", () => {
   it("tints inline strong with the theme accent", () => {
     expect(css).toMatch(
       /\.markdown-body strong\s*\{[^}]*color:\s*color-mix\(in srgb,\s*var\(--ink\) 92%,\s*var\(--accent\)\)/s,
+    );
+  });
+});
+
+describe("stats heatmap tooltip", () => {
+  it("gives the calendar hover chip a raised surface so it does not blend into labels", () => {
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*background:\s*var\(--paper-raised\)/s,
+    );
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*width:\s*max-content/s,
+    );
+    expect(css).toMatch(
+      /\.react-activity-calendar__tooltip\s*\{[^}]*z-index:\s*20/s,
     );
   });
 });

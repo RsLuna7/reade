@@ -8,6 +8,10 @@
     "url": "https://github.com/RsLuna7/reade.git"
   },
   "type": "module",
+  "packageManager": "pnpm@11.5.2",
+  "engines": {
+    "node": ">=24 <25"
+  },
   "scripts": {
     "dev": "vite",
     "dev:web": "pnpm generate:web && vite --mode web",
@@ -16,6 +20,8 @@
     "generate:web": "node scripts/generate-web-library.mjs",
     "test": "vitest run",
     "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "audit:deps": "pnpm audit --audit-level=high",
     "preview": "vite preview",
     "preview:web": "vite preview --mode web",
     "tauri": "tauri"

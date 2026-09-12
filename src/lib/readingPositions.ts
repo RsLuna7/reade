@@ -12,6 +12,13 @@
  * silently instead of failing the whole store.
  */
 
+import {
+  loadLibraryEnvelope,
+  saveLibraryEnvelope,
+  sanitizeEpochMs,
+} from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
+
 export const READING_POSITIONS_STORAGE_KEY = "reade-reading-positions";
 export const READING_POSITIONS_VERSION = 1;
 /** Per-library cap; the oldest entries by `updatedAt` are evicted first. */
@@ -63,16 +70,12 @@ function isRatio(value: unknown): value is number {
  * second-scale values are normalized with the same `< 10^10` heuristic as
  * `formatModified`, so LRU comparisons never mix units.
  */
-function sanitizeUpdatedAt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return value < 10_000_000_000 ? value * 1000 : value;
-}
 
 /** Field-by-field validation; anything unexpected drops the entry. */
 export function sanitizeReadingPosition(value: unknown): ReadingPosition | null {
   if (!value || typeof value !== "object") return null;
   const entry = value as Record<string, unknown>;
-  const updatedAt = sanitizeUpdatedAt(entry.updatedAt);
+  const updatedAt = sanitizeEpochMs(entry.updatedAt);
   if (updatedAt === null) return null;
 
   if (entry.kind === "scroll") {
@@ -105,67 +108,60 @@ export function sanitizeReadingPosition(value: unknown): ReadingPosition | null 
   return null;
 }
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
+function sanitizeLibraryPositions(raw: unknown): LibraryPositions | null {
+  if (!raw || typeof raw !== "object") return null;
+  const sanitized: LibraryPositions = {};
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    const position = sanitizeReadingPosition(entry);
+    if (position) sanitized[path] = position;
   }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+/**
+ * Folds two buckets that turned out to name the same library (for example the
+ * picker's `D:\books` and a `D:/books` rootKey). Per document the newer entry
+ * wins outright: `updatedAt` is the recency authority, and an explicit
+ * `resetPdfMaxPage` lowering must not be resurrected by a stale high-water
+ * mark from the other bucket.
+ */
+function mergeLibraryPositions(
+  existing: LibraryPositions,
+  incoming: LibraryPositions,
+): LibraryPositions {
+  const merged: LibraryPositions = { ...existing };
+  for (const [path, entry] of Object.entries(incoming)) {
+    const current = merged[path];
+    if (!current || entry.updatedAt >= current.updatedAt) merged[path] = entry;
+  }
+  return merged;
 }
 
 function loadEnvelope(): PositionsEnvelope {
-  const empty: PositionsEnvelope = { version: READING_POSITIONS_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(READING_POSITIONS_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<PositionsEnvelope>;
-  if (envelope.version !== READING_POSITIONS_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryPositions> = {};
-  for (const [root, entries] of Object.entries(envelope.libraries)) {
-    if (!entries || typeof entries !== "object") continue;
-    const sanitized: LibraryPositions = {};
-    for (const [path, entry] of Object.entries(entries)) {
-      const position = sanitizeReadingPosition(entry);
-      if (position) sanitized[path] = position;
-    }
-    if (Object.keys(sanitized).length > 0) libraries[root] = sanitized;
-  }
-  return { version: READING_POSITIONS_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryPositions>({
+    storageKey: READING_POSITIONS_STORAGE_KEY,
+    version: READING_POSITIONS_VERSION,
+    sanitizeLibrary: sanitizeLibraryPositions,
+    mergeLibrary: mergeLibraryPositions,
+  });
 }
 
 function saveEnvelope(envelope: PositionsEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(READING_POSITIONS_STORAGE_KEY, JSON.stringify(envelope));
-  } catch {
-    // Quota errors and private-mode restrictions lose only the position hint.
-  }
+  saveLibraryEnvelope(READING_POSITIONS_STORAGE_KEY, envelope);
 }
 
 export function readReadingPosition(
   libraryRoot: string,
   relativePath: string,
 ): ReadingPosition | null {
-  return loadEnvelope().libraries[libraryRoot]?.[relativePath] ?? null;
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)]?.[relativePath] ?? null;
 }
 
 /** Sanitized copy of one library's entries (web fallback and cold-start probe). */
 export function listLibraryReadingPositions(
   libraryRoot: string,
 ): Record<string, ReadingPosition> {
-  return loadEnvelope().libraries[libraryRoot] ?? {};
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)] ?? {};
 }
 
 function evictOverLimit(library: LibraryPositions, limit: number): void {
@@ -191,8 +187,9 @@ export function writeReadingPosition(
   if (!libraryRoot || !relativePath) return null;
   if (typeof now !== "number" || !Number.isFinite(now) || now <= 0) return null;
 
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot] ?? {};
+  const library = envelope.libraries[libraryKey] ?? {};
   const existing = library[relativePath];
 
   let entry: ReadingPosition;
@@ -233,7 +230,7 @@ export function writeReadingPosition(
 
   library[relativePath] = entry;
   evictOverLimit(library, READING_POSITIONS_LIBRARY_LIMIT);
-  envelope.libraries[libraryRoot] = library;
+  envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
   return entry;
 }
@@ -258,8 +255,9 @@ export function resetPdfMaxPage(
   }
 
   const maxPage = Math.max(1, Math.floor(page));
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot] ?? {};
+  const library = envelope.libraries[libraryKey] ?? {};
   const existing = library[relativePath];
 
   let entry: ReadingPosition;
@@ -284,7 +282,7 @@ export function resetPdfMaxPage(
 
   library[relativePath] = entry;
   evictOverLimit(library, READING_POSITIONS_LIBRARY_LIMIT);
-  envelope.libraries[libraryRoot] = library;
+  envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
   return entry;
 }

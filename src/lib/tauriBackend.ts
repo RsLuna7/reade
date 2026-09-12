@@ -26,6 +26,8 @@ import type {
   ReviewState,
   ReviewSummary,
   SearchResult,
+  LocalBackupResult,
+  LocalDataStatus,
 } from "./backend";
 import type {
   AnnotationEntryKind,
@@ -50,9 +52,14 @@ export async function chooseLibraryDirectory(): Promise<string | null> {
   const selection = await open({ directory: true, multiple: false, title: "选择本地文档库" });
   return typeof selection === "string" ? selection : null;
 }
-export function openLibrary(rootPath: string): Promise<DocumentInfo[]> { return invoke("open_library", { rootPath }); }
+/** Wire result of `open_library` / `refresh_library`: documents + normalized root identity. */
+export interface LibraryOpenResult {
+  rootKey: string;
+  documents: DocumentInfo[];
+}
+export function openLibrary(rootPath: string): Promise<LibraryOpenResult> { return invoke("open_library", { rootPath }); }
 export function probeLibraryPath(path: string): Promise<boolean> { return invoke("probe_library_path", { path }); }
-export function refreshLibrary(): Promise<DocumentInfo[]> { return invoke("refresh_library"); }
+export function refreshLibrary(): Promise<LibraryOpenResult> { return invoke("refresh_library"); }
 export function revealInFileManager(relativePath: string): Promise<void> {
   return invoke("reveal_in_file_manager", { relativePath });
 }
@@ -279,6 +286,28 @@ export function pickAnnotationsImportFile(): Promise<{
 export function recordReadingSession(session: ReadingSession): Promise<void> {
   return invoke("record_reading_session", { session });
 }
+export function startReadingSession(session: ReadingSession): Promise<void> {
+  return invoke("start_reading_session", { session });
+}
+export function approveWindowClose(): Promise<void> {
+  return invoke("approve_window_close");
+}
+export function localDataStatus(): Promise<LocalDataStatus> {
+  return invoke("local_data_status");
+}
+export function createLocalBackup(preferencesJson: string): Promise<LocalBackupResult> {
+  return invoke("create_local_backup", { preferencesJson });
+}
+export function stageLocalRestore(backupDir: string): Promise<string> {
+  return invoke("stage_local_restore", { backupDir });
+}
+export function exportDiagnosticReport(): Promise<string> {
+  return invoke("export_diagnostic_report");
+}
+export async function pickBackupDirectory(): Promise<string | null> {
+  const selected = await open({ directory: true, title: "选择 Reade 备份文件夹" });
+  return typeof selected === "string" ? selected : null;
+}
 export function listReadingSessions(fromMs: number, toMs: number): Promise<ReadingSession[]> {
   return invoke("list_reading_sessions", { fromMs, toMs });
 }
@@ -291,4 +320,7 @@ export function onLibraryIndexProgress(handler: (progress: IndexProgress) => voi
 }
 export function onDocumentIndexStatus(handler: (status: DocumentIndexEvent) => void): Promise<UnlistenFn> {
   return listen<DocumentIndexEvent>("document-index-status", (event) => handler(event.payload));
+}
+export function onWindowCloseRequested(handler: () => void | Promise<void>): Promise<UnlistenFn> {
+  return listen("reade-close-requested", () => { void handler(); });
 }

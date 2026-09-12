@@ -80,6 +80,33 @@ describe("per-document preference storage", () => {
     expect(readVerticalPreference(ROOT, "null.md")).toBe(false);
     expect(readVerticalPreference(ROOT, "good.md")).toBe(true);
   });
+
+  it("keeps flags written under every spelling of one library", () => {
+    // Regression: colliding spellings used to overwrite one another on load.
+    localStorage.setItem(
+      VERTICAL_WRITING_STORAGE_KEY,
+      JSON.stringify({
+        version: 1,
+        libraries: {
+          "D:\\library": { "a.md": { updatedAt: 1_000 } },
+          "d:/library": { "b.md": { updatedAt: 2_000 } },
+        },
+      }),
+    );
+    expect(readVerticalPreference(ROOT, "a.md")).toBe(true);
+    expect(readVerticalPreference("\\\\?\\D:\\library", "b.md")).toBe(true);
+  });
+
+  it("keeps evicting the oldest entries after repeated load/write cycles", () => {
+    // Regression: the old second-scale heuristic was not idempotent, so small
+    // stamps inflated on every load and eventually outranked newer entries.
+    for (let index = 0; index < VERTICAL_WRITING_LIBRARY_LIMIT + 5; index += 1) {
+      writeVerticalPreference(ROOT, `doc-${index}.md`, true, 1_000 + index);
+    }
+    expect(readVerticalPreference(ROOT, "doc-0.md")).toBe(false);
+    expect(readVerticalPreference(ROOT, `doc-${VERTICAL_WRITING_LIBRARY_LIMIT + 4}.md`)).toBe(true);
+  });
+
 });
 
 describe("verticalScrollRatio", () => {

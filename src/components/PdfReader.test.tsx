@@ -31,13 +31,38 @@ vi.mock("pdfjs-dist", () => {
   };
 });
 
+const backendMocks = vi.hoisted(() => ({
+  readDocumentRange: vi.fn(),
+}));
+
 vi.mock("../lib/backend", () => ({
   openExternalLink: vi.fn(),
-  readDocumentRange: vi.fn().mockResolvedValue(new Uint8Array()),
+  readDocumentRange: backendMocks.readDocumentRange,
   readPdfReadingMode: vi.fn(),
 }));
 
+const zoomPreviewMocks = vi.hoisted(() => ({
+  createPdfZoomPreview: vi.fn(),
+  actual: null as null | ((
+    pages: HTMLElement,
+    scroller: HTMLElement,
+    toolbar: HTMLElement | null,
+    referenceY?: number,
+  ) => import("../lib/pdfZoomPreview").PdfZoomPreview | null),
+}));
+
+vi.mock("../lib/pdfZoomPreview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/pdfZoomPreview")>();
+  zoomPreviewMocks.actual = actual.createPdfZoomPreview;
+  zoomPreviewMocks.createPdfZoomPreview.mockImplementation(actual.createPdfZoomPreview);
+  return {
+    ...actual,
+    createPdfZoomPreview: zoomPreviewMocks.createPdfZoomPreview,
+  };
+});
+
 import { readPdfReadingMode } from "../lib/backend";
+import { PDF_SCALE_COMMIT_DELAY_MS } from "../lib/readerWheelZoom";
 import {
   PdfReader,
   PdfSessionLifecycle,
@@ -74,6 +99,7 @@ beforeEach(() => {
     pdfMocks.tasks.push(task);
     return task;
   });
+  backendMocks.readDocumentRange.mockReset().mockResolvedValue(new Uint8Array());
   vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
   vi.stubGlobal("ResizeObserver", TestResizeObserver);
 });
@@ -807,6 +833,278 @@ describe("PDF tactical navigation (plan-pdf-tactical-nav A)", () => {
     await act(async () => readerRef.current!.setMode("reading"));
     fireEvent.keyDown(window, { key: "d", code: "KeyD" });
     expect(view.container.querySelector(".pdf-reading-page-label")).toHaveTextContent("Page 1");
+    act(() => view.unmount());
+  });
+});
+
+describe("PDF wheel zoom preview", () => {
+  function fakePdf(numPages = 3) {
+    return {
+      numPages,
+      getOutline: vi.fn().mockResolvedValue(null),
+      getPage: vi.fn().mockReturnValue(new Promise(() => undefined)),
+    };
+  }
+
+  const common = {
+    relativePath: "zoom.pdf",
+    size: 100,
+    modified: 1,
+    indexStatus: "ready" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  async function renderReady(
+    readerRef: { current: PdfReaderHandle | null },
+    wrapInScroller = false,
+  ) {
+    const reader = <PdfReader {...common} readerRef={readerRef} />;
+    const view = render(wrapInScroller ? <div className="reading-scroll">{reader}</div> : reader);
+    const task = pdfMocks.tasks[pdfMocks.tasks.length - 1];
+    await act(async () => {
+      task.resolve(fakePdf());
+      await Promise.resolve();
+    });
+    await waitFor(() => {
+      expect(view.container).toHaveTextContent(" / 3");
+    });
+    return view;
+  }
+
+  afterEach(() => {
+    vi.useRealTimers();
+    zoomPreviewMocks.createPdfZoomPreview.mockReset();
+    if (zoomPreviewMocks.actual) {
+      zoomPreviewMocks.createPdfZoomPreview.mockImplementation(zoomPreviewMocks.actual);
+    }
+    cleanup();
+  });
+
+  it("coalesces zoom events into one frame and commits pdf.js scale after the debounce", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+
+    vi.useFakeTimers();
+    act(() => readerRef.current!.adjustScale(1));
+    act(() => readerRef.current!.adjustScale(1));
+
+    const pages = view.container.querySelector<HTMLElement>(".pdf-pages")!;
+    expect(pages.dataset.zoomPreview).toBeUndefined();
+    act(() => vi.advanceTimersByTime(16));
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(pages.style.getPropertyValue("--pdf-live-page-width")).toBe("984px");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("820px");
+    expect(view.getByRole("button", { name: "120%" })).toHaveAttribute("title", "实际大小");
+
+    act(() => {
+      vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS - 17);
+    });
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("820px");
+
+    act(() => {
+      vi.advanceTimersByTime(1);
+    });
+    expect(pages.dataset.zoomPreview).toBeUndefined();
+    expect(pages.style.getPropertyValue("--pdf-live-page-width")).toBe("");
+    expect(pages.style.getPropertyValue("--pdf-page-width")).toBe("984px");
+    expect(view.getByRole("button", { name: "120%" })).toBeInTheDocument();
+
+    act(() => view.unmount());
+  });
+
+  it("applies fractional wheel deltas without snapping to 0.1", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef);
+    await waitFor(() => expect(readerRef.current).not.toBeNull());
+
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-12, 0));
+    act(() => vi.advanceTimersByTime(16));
+
+    const pages = view.container.querySelector<HTMLElement>(".pdf-pages")!;
+    expect(pages.dataset.zoomPreview).toBe("true");
+    expect(Number.parseFloat(pages.style.getPropertyValue("--pdf-live-page-width"))).toBe(
+      Math.round(820 * (1.1 ** 0.1)),
+    );
+    expect(view.getByRole("button", { name: "101%" })).toHaveAttribute("title", "实际大小");
+
+    act(() => view.unmount());
+  });
+
+  it("keeps the visible bitmap until the replacement render finishes", async () => {
+    const drawImage = vi.fn();
+    const context = vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({ drawImage } as unknown as CanvasRenderingContext2D);
+    const jobs: Array<{ finish: () => void; cancel: ReturnType<typeof vi.fn> }> = [];
+    const page = {
+      getViewport: ({ scale }: { scale: number }) => ({ width: 600 * scale, height: 800 * scale, scale, userUnit: 1 }),
+      render: vi.fn(() => {
+        let finish!: () => void;
+        const promise = new Promise<void>((resolve) => { finish = resolve; });
+        const cancel = vi.fn();
+        jobs.push({ finish, cancel });
+        return { promise, cancel };
+      }),
+      streamTextContent: vi.fn(),
+      getAnnotations: vi.fn().mockResolvedValue([]),
+    };
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = render(<PdfReader {...common} readerRef={readerRef} />);
+    try {
+      await act(async () => {
+        pdfMocks.tasks[pdfMocks.tasks.length - 1].resolve({ ...fakePdf(1), getPage: vi.fn().mockResolvedValue(page) });
+      });
+      await act(async () => { jobs[jobs.length - 1].finish(); });
+      const visible = view.container.querySelector("canvas")!;
+      const oldWidth = visible.width;
+      const oldDraws = drawImage.mock.calls.length;
+      const oldJobs = jobs.length;
+      vi.useFakeTimers();
+      act(() => readerRef.current!.adjustScale(1));
+      await act(async () => { vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS); });
+      expect(jobs).toHaveLength(oldJobs + 1);
+      expect(visible.width).toBe(oldWidth);
+      expect(drawImage).toHaveBeenCalledTimes(oldDraws);
+      await act(async () => { jobs[jobs.length - 1].finish(); });
+      expect(visible.width).toBeGreaterThan(oldWidth);
+      expect(drawImage).toHaveBeenCalledTimes(oldDraws + 1);
+    } finally {
+      view.unmount();
+      context.mockRestore();
+    }
+  });
+
+  it("recaptures the bounded snapshot when shrinking past coverage", async () => {
+    const dispose = vi.fn();
+    const paint = vi.fn((factor: number) => factor >= 0.95);
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef, true);
+    zoomPreviewMocks.createPdfZoomPreview.mockReturnValue({ paint, dispose });
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-400, 0));
+    act(() => vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS));
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    dispose.mockClear();
+    act(() => readerRef.current!.zoomByWheel(400, 0));
+    act(() => vi.advanceTimersByTime(16));
+    expect(zoomPreviewMocks.createPdfZoomPreview).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalled();
+    act(() => view.unmount());
+  });
+
+  it("disposes the zoom snapshot on commit so a shrink cannot leave a stuck overlay", async () => {
+    const dispose = vi.fn();
+    const paint = vi.fn(() => true);
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef, true);
+    zoomPreviewMocks.createPdfZoomPreview.mockReturnValue({ paint, dispose });
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-120, 0));
+    act(() => vi.advanceTimersByTime(16));
+    expect(zoomPreviewMocks.createPdfZoomPreview).toHaveBeenCalledTimes(1);
+    act(() => vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS));
+    expect(dispose).toHaveBeenCalled();
+    act(() => view.unmount());
+  });
+});
+
+describe("PDF range transport errors (D06)", () => {
+  const common = {
+    modified: 1,
+    indexStatus: "pending" as const,
+    indexError: null,
+    locator: null,
+    motionLevel: "subtle" as const,
+    onTocChange: vi.fn(),
+    onActiveChange: vi.fn(),
+  };
+
+  function rangeTransport(): { requestDataRange: (begin: number, end: number) => void; abort: () => void } {
+    const calls = pdfMocks.getDocument.mock.calls;
+    const call = calls[calls.length - 1]?.[0] as {
+      range?: { requestDataRange: (begin: number, end: number) => void; abort: () => void };
+    };
+    if (!call?.range) throw new Error("loading task has no range transport");
+    return call.range;
+  }
+
+  it("surfaces a range failure as a retryable error and rebuilds the session on retry", async () => {
+    backendMocks.readDocumentRange.mockRejectedValue(new Error("backend unavailable"));
+    const view = render(<PdfReader relativePath="a.pdf" size={500} {...common} />);
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(1));
+
+    // 模拟 PDF.js 解析期间的 Range 请求；传输失败必须可见、可重试。
+    rangeTransport().requestDataRange(0, 256);
+    await waitFor(() => expect(view.container).toHaveTextContent("PDF 数据读取失败"));
+    expect(view.container).toHaveTextContent("backend unavailable");
+    // 会话被终止（loadingTask.destroy）而非悬挂。
+    await waitFor(() => expect(pdfMocks.tasks[0].destroy).toHaveBeenCalledOnce());
+
+    fireEvent.click(view.getByRole("button", { name: "重试" }));
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(2));
+    // 旧会话已被 onError 阶段销毁（dispose 幂等，不重复销毁）；重试建立新会话。
+    expect(pdfMocks.tasks[0].destroy).toHaveBeenCalledOnce();
+    expect(pdfMocks.tasks).toHaveLength(2);
+    // 重试后错误态清除，回到加载中。
+    expect(view.container).not.toHaveTextContent("PDF 数据读取失败");
+    act(() => view.unmount());
+  });
+
+  it("runs at most four range reads at once and queues the rest", async () => {
+    const deferreds: Array<{ resolve: (value: Uint8Array) => void }> = [];
+    backendMocks.readDocumentRange.mockImplementation(
+      () =>
+        new Promise<Uint8Array>((resolve) => {
+          deferreds.push({ resolve });
+        }),
+    );
+    const view = render(<PdfReader relativePath="b.pdf" size={10_000} {...common} />);
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(1));
+
+    const range = rangeTransport();
+    for (let index = 0; index < 6; index += 1) {
+      range.requestDataRange(index * 256, (index + 1) * 256);
+    }
+    await waitFor(() => expect(backendMocks.readDocumentRange).toHaveBeenCalledTimes(4));
+    expect(deferreds.length).toBe(4);
+
+    await act(async () => {
+      deferreds.forEach((entry, index) => entry.resolve(new Uint8Array(index + 1)));
+      await Promise.resolve();
+    });
+    // 前四个完成后，队列里的剩余两个继续。
+    await waitFor(() => expect(backendMocks.readDocumentRange).toHaveBeenCalledTimes(6));
+    act(() => view.unmount());
+  });
+
+  it("fails a stalled range read after the timeout instead of hanging", async () => {
+    backendMocks.readDocumentRange.mockImplementation(
+      () => new Promise<Uint8Array>(() => undefined),
+    );
+    const view = render(<PdfReader relativePath="c.pdf" size={500} {...common} />);
+    await waitFor(() => expect(pdfMocks.getDocument).toHaveBeenCalledTimes(1));
+
+    // 渲染与 waitFor 用真实时钟；仅超时等待段用假时钟。
+    vi.useFakeTimers();
+    try {
+      rangeTransport().requestDataRange(0, 256);
+      expect(backendMocks.readDocumentRange).toHaveBeenCalledTimes(1);
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(view.container).toHaveTextContent("timed out");
+      expect(pdfMocks.tasks[0].destroy).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
     act(() => view.unmount());
   });
 });

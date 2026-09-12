@@ -18,6 +18,7 @@ public/reade-web/
 .env.*
 !.env.example
 .playwright-cli/
+.impeccable/
 artifacts/
 output/
 scratch/

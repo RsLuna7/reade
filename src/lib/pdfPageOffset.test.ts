@@ -16,6 +16,7 @@ import {
   readPdfPageOffset,
   writePdfPageOffset,
 } from "./pdfPageOffset";
+import { normalizeLibraryKey } from "./libraryKey";
 
 const ROOT = "D:\\books";
 const NOW = 1_755_000_000_000;
@@ -107,7 +108,8 @@ describe("offset round trips", () => {
       libraries: Record<string, Record<string, unknown>>;
     };
     expect(raw.version).toBe(PDF_PAGE_OFFSETS_VERSION);
-    expect(Object.keys(raw.libraries)).toEqual([ROOT]);
+    // Libraries are keyed by the normalized identity, not the raw spelling.
+    expect(Object.keys(raw.libraries)).toEqual([normalizeLibraryKey(ROOT)]);
   });
 
   it("keeps libraries isolated and drops a cleared entry", () => {
@@ -164,6 +166,21 @@ describe("defensive reads", () => {
       libraries: { [ROOT]: { "scan.pdf": { offset: 4, atPhysical: 5, updatedAt: NOW } } },
     });
     expect(readPdfPageOffset(ROOT, "scan.pdf")).toBeNull();
+  });
+
+  it("keeps calibrations written under every spelling of one library", () => {
+    seedRaw({
+      version: PDF_PAGE_OFFSETS_VERSION,
+      libraries: {
+        "D:\\books": { "a.pdf": { offset: 4, atPhysical: 5, updatedAt: NOW } },
+        "d:/books": { "b.pdf": { offset: 9, atPhysical: 10, updatedAt: NOW + 1_000 } },
+      },
+    });
+    expect(Object.keys(listLibraryPdfPageOffsets("D:\\books")).sort()).toEqual([
+      "a.pdf",
+      "b.pdf",
+    ]);
+    expect(readPdfPageOffset("\\\\?\\D:\\books", "b.pdf")).toMatchObject({ offset: 9 });
   });
 
   it("drops entries with zero offset, bad pages or missing stamps", () => {

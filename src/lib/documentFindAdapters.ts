@@ -90,27 +90,46 @@ export function rangeForFindMatch(
   match: DocumentFindMatch | null,
 ): Range | null {
   if (!article || !format || !match) return null;
+  return rangesForFindMatches(article, format, [match])[0] ?? null;
+}
 
-  if (format === "pdf-original" && match.pdfPage != null) {
-    if (match.needsOcr || !match.quote) return null;
-    const layer = pdfPageTextLayer(article, match.pdfPage);
-    if (!layer) return null;
-    const index = buildTextIndex(layer);
-    const located = firstMatchInIndex(index, match.quote);
-    if (!located) return null;
-    return rangeFromTextIndex(index, located.start, located.end);
-  }
-
-  if (format === "pdf-reading" && match.pdfPage != null) {
-    const pageRoot = pdfReadingPageRoot(article, match.pdfPage);
-    if (!pageRoot) return null;
-    const index = buildTextIndex(pageRoot);
-    return rangeFromTextIndex(index, match.start, match.end);
-  }
-
+/** Reuse each surface's text index for one paint; never retain stale DOM nodes. */
+export function rangesForFindMatches(
+  article: HTMLElement,
+  format: DocumentFindFormat,
+  matches: readonly DocumentFindMatch[],
+): Array<Range | null> {
+  const indexes = new Map<HTMLElement, TextIndex>();
+  const pageRoots = new Map<number, HTMLElement | null>();
   const root = findableRoot(article, format);
-  const index = buildTextIndex(root);
-  return rangeFromTextIndex(index, match.start, match.end);
+  const indexFor = (surface: HTMLElement): TextIndex => {
+    let index = indexes.get(surface);
+    if (!index) {
+      index = buildTextIndex(surface);
+      indexes.set(surface, index);
+    }
+    return index;
+  };
+  return matches.map((match) => {
+    if ((format === "pdf-original" || format === "pdf-reading") && match.pdfPage != null) {
+      if (!pageRoots.has(match.pdfPage)) {
+        pageRoots.set(match.pdfPage, format === "pdf-original"
+          ? pdfPageTextLayer(article, match.pdfPage)
+          : pdfReadingPageRoot(article, match.pdfPage));
+      }
+      const pageRoot = pageRoots.get(match.pdfPage);
+      if (!pageRoot) return null;
+      if (format === "pdf-original") {
+        if (match.needsOcr || !match.quote) return null;
+        const index = indexFor(pageRoot);
+        const located = firstMatchInIndex(index, match.quote);
+        return located ? rangeFromTextIndex(index, located.start, located.end) : null;
+      }
+      return rangeFromTextIndex(indexFor(pageRoot), match.start, match.end);
+    }
+
+    return rangeFromTextIndex(indexFor(root), match.start, match.end);
+  });
 }
 
 export function scrollRangeIntoReader(

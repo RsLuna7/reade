@@ -91,9 +91,11 @@ describe("web v6 annotation repository", () => {
       sortIndex: "M|00000|00001024",
     }, null);
     const [legacy] = await listWebAnnotations("notes/a.md");
+    // Relocation upserts carry the annotation's own color (green for sage,
+    // mirroring the desktop twin test); a real recolor flows through the v6
+    // appearance API and is covered by webAnnotations.test.ts.
     await upsertWebAnnotation({
       ...legacy,
-      color: "yellow",
       selectedText: "relocated quote",
       locator: {
         kind: "markdown",

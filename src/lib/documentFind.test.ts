@@ -19,6 +19,25 @@ describe("findAllMatches", () => {
     expect(findAllMatches("hello", "  ").matches).toEqual([]);
   });
 
+  it("keeps original UTF-16 offsets after an expanding lowercase character", () => {
+    const text = "İ🙂 Alpha ALPHA";
+    const { matches } = findAllMatches(text, "alpha");
+    expect(matches.map(({ start, end }) => [start, end, text.slice(start, end)]))
+      .toEqual([[4, 9, "Alpha"], [10, 15, "ALPHA"]]);
+  });
+
+  it("maps the full normalized needle back to the original characters", () => {
+    expect(findAllMatches("i\u0307", "İ").matches).toMatchObject([{ start: 0, end: 2 }]);
+    expect(findAllMatches("İ", "i\u0307").matches).toMatchObject([{ start: 0, end: 1 }]);
+    expect(findAllMatches("İ", "İ", { caseSensitive: true }).matches)
+      .toMatchObject([{ start: 0, end: 1 }]);
+    const multiple = findAllMatches("İxİxİ", "x", { maxMatches: 1 });
+    expect(multiple.matches).toMatchObject([{ start: 1, end: 2 }]);
+    expect(multiple.truncated).toBe(true);
+    expect(findAllMatches("İxİxİ", "İ").matches)
+      .toMatchObject([{ start: 0, end: 1 }, { start: 2, end: 3 }, { start: 4, end: 5 }]);
+  });
+
   it("reports truncation when capped", () => {
     const haystack = "aa".repeat(DOCUMENT_FIND_MAX_MATCHES + 5);
     const { matches, truncated } = findAllMatches(haystack, "a", {
@@ -49,6 +68,12 @@ describe("findMatchesInPdfPages", () => {
       "scan",
     );
     expect(matches).toEqual([]);
+  });
+
+  it("keeps the original PDF quote after an expanding lowercase prefix", () => {
+    expect(findMatchesInPdfPages([
+      { page: 1, markdown: "İ Alpha", needsOcr: false },
+    ], "alpha").matches).toMatchObject([{ start: 2, end: 7, pdfPage: 1, quote: "Alpha" }]);
   });
 });
 

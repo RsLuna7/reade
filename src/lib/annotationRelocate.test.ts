@@ -4,6 +4,7 @@ import type { Annotation } from "./backend";
 import {
   applyRelocatedAnnotation,
   captureRelocatedSelection,
+  collectRelocationRoots,
   findRelocationRange,
   isRelocatableAnnotation,
 } from "./annotationRelocate";
@@ -172,5 +173,40 @@ describe("applyRelocatedAnnotation", () => {
       9_000,
     );
     expect(userTitled.title).toBe("我的重点");
+  });
+});
+
+describe("collectRelocationRoots", () => {
+  it("returns the markdown body when present", () => {
+    const article = document.createElement("article");
+    article.innerHTML = '<div class="markdown-body">hello</div>';
+    const roots = collectRelocationRoots(article, {
+      kind: "markdown",
+      quote: "hello",
+      prefix: "",
+      suffix: "",
+      headingId: null,
+    });
+    expect(roots).toHaveLength(1);
+    expect(roots[0].className).toBe("markdown-body");
+  });
+
+  it("orders PDF pages by proximity to the stored page", () => {
+    const article = document.createElement("article");
+    article.innerHTML = `
+      <div class="pdf-page" data-page-number="1"><div class="textLayer">one</div></div>
+      <div class="pdf-page" data-page-number="8"><div class="textLayer">eight</div></div>
+      <div class="pdf-page" data-page-number="3"><div class="textLayer">three</div></div>
+    `;
+    const roots = collectRelocationRoots(article, {
+      kind: "pdf",
+      quote: "three",
+      prefix: "",
+      suffix: "",
+      page: 3,
+      view: "original",
+      rects: [],
+    });
+    expect(roots.map((root) => root.textContent)).toEqual(["three", "one", "eight"]);
   });
 });

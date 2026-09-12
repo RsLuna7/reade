@@ -13,6 +13,9 @@
  * (those are LRU'd as "where I was" and must not evict calibration).
  */
 
+import { loadLibraryEnvelope, saveLibraryEnvelope, sanitizeEpochMs } from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
+
 export const PDF_PAGE_OFFSETS_STORAGE_KEY = "reade-pdf-page-offsets";
 export const PDF_PAGE_OFFSETS_VERSION = 1;
 /** Per-library cap; oldest entries by `updatedAt` are evicted first. */
@@ -48,19 +51,6 @@ export function subscribePdfPageOffsets(listener: OffsetListener): () => void {
 
 function notifyOffsetListeners(): void {
   for (const listener of listeners) listener();
-}
-
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeUpdatedAt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return value < 10_000_000_000 ? value * 1000 : value;
 }
 
 function isInt(value: unknown): value is number {
@@ -125,7 +115,7 @@ export function effectiveOffset(offset: number, numPages: number): number {
 export function sanitizePdfPageOffsetEntry(value: unknown): PdfPageOffsetEntry | null {
   if (!value || typeof value !== "object") return null;
   const entry = value as Record<string, unknown>;
-  const updatedAt = sanitizeUpdatedAt(entry.updatedAt);
+  const updatedAt = sanitizeEpochMs(entry.updatedAt);
   if (updatedAt === null) return null;
   if (!isInt(entry.offset) || entry.offset === 0) return null;
   if (!isInt(entry.atPhysical) || entry.atPhysical < 1) return null;
@@ -136,46 +126,40 @@ export function sanitizePdfPageOffsetEntry(value: unknown): PdfPageOffsetEntry |
   };
 }
 
+function sanitizeLibraryOffsets(raw: unknown): LibraryOffsets | null {
+  if (!raw || typeof raw !== "object") return null;
+  const sanitized: LibraryOffsets = {};
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    const offset = sanitizePdfPageOffsetEntry(entry);
+    if (offset) sanitized[path] = offset;
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+/** Two buckets for the same library union their documents; newest calibration wins. */
+function mergeLibraryOffsets(
+  existing: LibraryOffsets,
+  incoming: LibraryOffsets,
+): LibraryOffsets {
+  const merged: LibraryOffsets = { ...existing };
+  for (const [path, entry] of Object.entries(incoming)) {
+    const current = merged[path];
+    if (!current || entry.updatedAt >= current.updatedAt) merged[path] = entry;
+  }
+  return merged;
+}
+
 function loadEnvelope(): OffsetsEnvelope {
-  const empty: OffsetsEnvelope = { version: PDF_PAGE_OFFSETS_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(PDF_PAGE_OFFSETS_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<OffsetsEnvelope>;
-  if (envelope.version !== PDF_PAGE_OFFSETS_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryOffsets> = {};
-  for (const [root, entries] of Object.entries(envelope.libraries)) {
-    if (!entries || typeof entries !== "object") continue;
-    const sanitized: LibraryOffsets = {};
-    for (const [path, entry] of Object.entries(entries)) {
-      const offset = sanitizePdfPageOffsetEntry(entry);
-      if (offset) sanitized[path] = offset;
-    }
-    if (Object.keys(sanitized).length > 0) libraries[root] = sanitized;
-  }
-  return { version: PDF_PAGE_OFFSETS_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryOffsets>({
+    storageKey: PDF_PAGE_OFFSETS_STORAGE_KEY,
+    version: PDF_PAGE_OFFSETS_VERSION,
+    sanitizeLibrary: sanitizeLibraryOffsets,
+    mergeLibrary: mergeLibraryOffsets,
+  });
 }
 
 function saveEnvelope(envelope: OffsetsEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(PDF_PAGE_OFFSETS_STORAGE_KEY, JSON.stringify(envelope));
-    notifyOffsetListeners();
-  } catch {
-    // Quota / private-mode: lose only the calibration hint.
-  }
+  if (saveLibraryEnvelope(PDF_PAGE_OFFSETS_STORAGE_KEY, envelope)) notifyOffsetListeners();
 }
 
 function evictOverLimit(library: LibraryOffsets, limit: number): void {
@@ -191,13 +175,13 @@ export function readPdfPageOffset(
   libraryRoot: string,
   relativePath: string,
 ): PdfPageOffsetEntry | null {
-  return loadEnvelope().libraries[libraryRoot]?.[relativePath] ?? null;
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)]?.[relativePath] ?? null;
 }
 
 export function listLibraryPdfPageOffsets(
   libraryRoot: string,
 ): Record<string, PdfPageOffsetEntry> {
-  return loadEnvelope().libraries[libraryRoot] ?? {};
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)] ?? {};
 }
 
 export function writePdfPageOffset(
@@ -211,8 +195,9 @@ export function writePdfPageOffset(
   if (!isInt(input.offset) || input.offset === 0) return null;
   if (!isInt(input.atPhysical) || input.atPhysical < 1) return null;
 
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot] ?? {};
+  const library = envelope.libraries[libraryKey] ?? {};
   const entry: PdfPageOffsetEntry = {
     offset: input.offset,
     atPhysical: input.atPhysical,
@@ -220,18 +205,19 @@ export function writePdfPageOffset(
   };
   library[relativePath] = entry;
   evictOverLimit(library, PDF_PAGE_OFFSETS_LIBRARY_LIMIT);
-  envelope.libraries[libraryRoot] = library;
+  envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
   return entry;
 }
 
 export function deletePdfPageOffset(libraryRoot: string, relativePath: string): void {
   if (!libraryRoot || !relativePath) return;
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot];
+  const library = envelope.libraries[libraryKey];
   if (!library || !(relativePath in library)) return;
   delete library[relativePath];
-  if (Object.keys(library).length === 0) delete envelope.libraries[libraryRoot];
-  else envelope.libraries[libraryRoot] = library;
+  if (Object.keys(library).length === 0) delete envelope.libraries[libraryKey];
+  else envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
 }

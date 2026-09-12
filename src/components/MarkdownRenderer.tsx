@@ -187,6 +187,31 @@ async function createCoreHighlighter() {
 let coreHighlighter: ReturnType<typeof createCoreHighlighter> | undefined;
 const languageLoads = new Map<string, Promise<void>>();
 
+// D11: 有界高亮结果缓存（键 = 语言 + 代码原文）。同一代码块重复渲染
+// （重排/切页回来/双栏）不再重复跑主线程高亮；超限按插入序淘汰最旧。
+const HIGHLIGHT_CACHE_LIMIT = 200;
+const highlightCache = new Map<string, string>();
+
+/**
+ * D11: 大代码块阈值（计划 §4 D11.6 候选值：100 KiB 或 2,000 行）。超过
+ * 阈值的单块先按纯文本显示并给出提示，用户点击后再按需高亮——避免一次
+ * 打开长代码文档就在主线程上做秒级高亮。
+ */
+const LARGE_CODE_CHARS = 100 * 1024;
+const LARGE_CODE_LINES = 2_000;
+
+function isLargeCode(code: string): boolean {
+  if (code.length > LARGE_CODE_CHARS) return true;
+  let lines = 1;
+  for (const char of code) {
+    if (char === "\n") {
+      lines += 1;
+      if (lines > LARGE_CODE_LINES) return true;
+    }
+  }
+  return false;
+}
+
 async function highlightCode(code: string, requestedLanguage: string | null) {
   if (!requestedLanguage) return null;
   const language =
@@ -196,7 +221,24 @@ async function highlightCode(code: string, requestedLanguage: string | null) {
       : null);
   if (!language) return null;
 
-  const highlighter = await (coreHighlighter ??= createCoreHighlighter());
+  const cacheKey = `${language}\u0000${code}`;
+  const cached = highlightCache.get(cacheKey);
+  if (cached !== undefined) {
+    // 触碰以维持 LRU 语义（Map 迭代序即插入序）。
+    highlightCache.delete(cacheKey);
+    highlightCache.set(cacheKey, cached);
+    return cached;
+  }
+
+  const highlighterPromise = (coreHighlighter ??= createCoreHighlighter());
+  let highlighter;
+  try {
+    highlighter = await highlighterPromise;
+  } catch (cause) {
+    // 失败的 highlighter Promise 不能常驻缓存：重置后允许下次重试。
+    if (coreHighlighter === highlighterPromise) coreHighlighter = undefined;
+    throw cause;
+  }
   let load = languageLoads.get(language);
   if (!load) {
     load = languageLoaders[language]().then(async ({ default: registration }) => {
@@ -204,13 +246,25 @@ async function highlightCode(code: string, requestedLanguage: string | null) {
     });
     languageLoads.set(language, load);
   }
-  await load;
+  try {
+    await load;
+  } catch (cause) {
+    // 同上：语言加载失败要从缓存移除，下次渲染允许重新加载。
+    languageLoads.delete(language);
+    throw cause;
+  }
 
-  return highlighter.codeToHtml(code, {
+  const html = highlighter.codeToHtml(code, {
     lang: language,
     themes: { light: "github-light", dark: "github-dark" },
     defaultColor: false,
   });
+  highlightCache.set(cacheKey, html);
+  if (highlightCache.size > HIGHLIGHT_CACHE_LIMIT) {
+    const oldest = highlightCache.keys().next().value;
+    if (oldest !== undefined) highlightCache.delete(oldest);
+  }
+  return html;
 }
 
 function CodeBlock({
@@ -226,10 +280,14 @@ function CodeBlock({
 }) {
   const [highlightedHtml, setHighlightedHtml] = useState<string | null>(null);
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  // D11: 大代码块默认纯文本，用户显式点击后才做高亮。
+  const [largeBlockHighlighted, setLargeBlockHighlighted] = useState(false);
+  const largeBlock = isLargeCode(code);
 
   useEffect(() => {
     let cancelled = false;
     setHighlightedHtml(null);
+    if (largeBlock && !largeBlockHighlighted) return;
 
     void highlightCode(code, language)
       .then((html) => {
@@ -244,7 +302,7 @@ function CodeBlock({
     return () => {
       cancelled = true;
     };
-  }, [code, language]);
+  }, [code, language, largeBlock, largeBlockHighlighted]);
 
   const copy = async () => {
     try {
@@ -264,6 +322,16 @@ function CodeBlock({
     >
       <figcaption className="markdown-code-toolbar">
         <span className="markdown-code-language">{language ?? "text"}</span>
+        {largeBlock && !highlightedHtml && language ? (
+          <button
+            className="markdown-code-highlight-toggle"
+            type="button"
+            onClick={() => setLargeBlockHighlighted(true)}
+            aria-label="对大代码块执行语法高亮"
+          >
+            大代码块已按纯文本显示 · 点击高亮
+          </button>
+        ) : null}
         <button className="markdown-code-copy" type="button" onClick={copy} aria-label="复制代码">
           {copyState === "copied" ? "已复制" : copyState === "failed" ? "复制失败" : "复制"}
         </button>

@@ -17,6 +17,7 @@ import {
   togglePinSlot,
   writePdfPagePins,
 } from "./pdfPagePins";
+import { normalizeLibraryKey } from "./libraryKey";
 
 const ROOT = "D:\\books";
 const NOW = 1_755_000_000_000;
@@ -87,7 +88,8 @@ describe("envelope round trips", () => {
       libraries: Record<string, Record<string, unknown>>;
     };
     expect(raw.version).toBe(PDF_PAGE_PINS_VERSION);
-    expect(Object.keys(raw.libraries)).toEqual([ROOT]);
+    // Libraries are keyed by the normalized identity, not the raw spelling.
+    expect(Object.keys(raw.libraries)).toEqual([normalizeLibraryKey(ROOT)]);
   });
 
   it("deletes when every slot is cleared", () => {
@@ -124,6 +126,21 @@ describe("per-library LRU", () => {
 });
 
 describe("defensive reads", () => {
+  it("keeps pins written under every spelling of one library", () => {
+    seedRaw({
+      version: PDF_PAGE_PINS_VERSION,
+      libraries: {
+        "D:\\books": { "a.pdf": { slots: [1, null, null, null, null], updatedAt: NOW } },
+        "d:/books": { "b.pdf": { slots: [2, null, null, null, null], updatedAt: NOW + 1_000 } },
+      },
+    });
+    expect(Object.keys(listLibraryPdfPagePins("D:\\books")).sort()).toEqual([
+      "a.pdf",
+      "b.pdf",
+    ]);
+    expect(readPdfPagePins("\\\\?\\D:\\books", "b.pdf")).toEqual([2, null, null, null, null]);
+  });
+
   it("survives invalid JSON and unknown versions", () => {
     seedRaw("{not json");
     expect(readPdfPagePins(ROOT, "scan.pdf")).toEqual(emptyPdfPagePins());

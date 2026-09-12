@@ -43,6 +43,40 @@ export interface RelocationMatch {
 }
 
 /**
+ * Search roots for the §5.6 relocate pass, matching where the annotation's
+ * quote could live. PDF roots are ordered by page proximity to the stored
+ * page so the nearest rendered occurrence wins.
+ */
+export function collectRelocationRoots(
+  article: HTMLElement,
+  locator: QuoteBearingLocator,
+): HTMLElement[] {
+  if (locator.kind === "markdown") {
+    const root = article.querySelector<HTMLElement>(".markdown-body");
+    return root ? [root] : [];
+  }
+  if (locator.kind === "epub") {
+    const root = article.querySelector<HTMLElement>(".epub-reader");
+    return root ? [root] : [];
+  }
+  const pageSelector = locator.view === "reading" ? ".pdf-reading-page" : ".pdf-page";
+  const entries: Array<{ page: number; root: HTMLElement }> = [];
+  for (const page of Array.from(article.querySelectorAll<HTMLElement>(pageSelector))) {
+    const root =
+      locator.view === "reading"
+        ? page.querySelector<HTMLElement>(".markdown-body")
+        : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer");
+    if (!root || !root.textContent?.trim()) continue;
+    const pageNumber = Number(page.dataset.pageNumber);
+    entries.push({ page: Number.isFinite(pageNumber) ? pageNumber : 0, root });
+  }
+  entries.sort(
+    (a, b) => Math.abs(a.page - locator.page) - Math.abs(b.page - locator.page),
+  );
+  return entries.map((entry) => entry.root);
+}
+
+/**
  * Finds the closest occurrence of the annotation's quote across the given
  * search roots (first root that resolves wins; PDF callers order roots by
  * page proximity). Returns null when no root yields a match even with the

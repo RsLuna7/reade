@@ -10,6 +10,7 @@ import {
   sanitizeReadingPosition,
   writeReadingPosition,
 } from "./readingPositions";
+import { normalizeLibraryKey } from "./libraryKey";
 
 const ROOT = "D:\\books";
 const NOW = 1_755_000_000_000;
@@ -41,7 +42,8 @@ describe("reading position round trips", () => {
       libraries: Record<string, Record<string, unknown>>;
     };
     expect(raw.version).toBe(READING_POSITIONS_VERSION);
-    expect(Object.keys(raw.libraries)).toEqual([ROOT]);
+    // Libraries are keyed by the normalized identity, not the raw spelling.
+    expect(Object.keys(raw.libraries)).toEqual([normalizeLibraryKey(ROOT)]);
   });
 
   it("writes and reads a pdf position and keeps libraries isolated", () => {
@@ -262,5 +264,52 @@ describe("defensive reads", () => {
     const entries = listLibraryReadingPositions(ROOT);
     expect(entries["legacy.md"].updatedAt).toBeLessThan(entries["fresh.md"].updatedAt);
     expect(entries["legacy.md"].updatedAt).toBeGreaterThan(NOW - 1_000);
+  });
+
+  it("reads one position regardless of how the library path was spelled", () => {
+    writeReadingPosition("D:\\books", "guide.md", { kind: "scroll", scrollRatio: 0.5 }, NOW);
+    expect(readReadingPosition("d:/books/", "guide.md")).toMatchObject({ scrollRatio: 0.5 });
+    expect(readReadingPosition("\\\\?\\D:\\books", "guide.md")).toMatchObject({
+      scrollRatio: 0.5,
+    });
+  });
+
+  it("merges colliding libraries and keeps the newest entry per document", () => {
+    // Regression: the later bucket used to overwrite the earlier one wholesale.
+    seedRaw({
+      version: READING_POSITIONS_VERSION,
+      libraries: {
+        "D:\\books": {
+          "shared.md": { kind: "scroll", scrollRatio: 0.2, maxScrollRatio: 0.2, updatedAt: NOW },
+          "only-a.md": { kind: "scroll", scrollRatio: 0.3, maxScrollRatio: 0.3, updatedAt: NOW },
+        },
+        "d:/books": {
+          "shared.md": { kind: "scroll", scrollRatio: 0.9, maxScrollRatio: 0.9, updatedAt: NOW + 5_000 },
+          "only-b.md": { kind: "scroll", scrollRatio: 0.4, maxScrollRatio: 0.4, updatedAt: NOW },
+        },
+      },
+    });
+    const entries = listLibraryReadingPositions("D:\\books");
+    expect(Object.keys(entries).sort()).toEqual(["only-a.md", "only-b.md", "shared.md"]);
+    expect(entries["shared.md"]).toMatchObject({ scrollRatio: 0.9, updatedAt: NOW + 5_000 });
+  });
+
+  it("does not resurrect a high-water mark above an explicit PDF reset", () => {
+    seedRaw({
+      version: READING_POSITIONS_VERSION,
+      libraries: {
+        "D:\\books": {
+          "paper.pdf": { kind: "pdf", page: 40, offsetRatio: 0, maxPage: 40, updatedAt: NOW },
+        },
+        "d:/books": {
+          // Newer explicit reset back to page 5 must win over the stale max of 40.
+          "paper.pdf": { kind: "pdf", page: 5, offsetRatio: 0, maxPage: 5, updatedAt: NOW + 1_000 },
+        },
+      },
+    });
+    expect(readReadingPosition("D:\\books", "paper.pdf")).toMatchObject({
+      page: 5,
+      maxPage: 5,
+    });
   });
 });

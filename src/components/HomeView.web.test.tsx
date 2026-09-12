@@ -45,7 +45,7 @@ beforeEach(() => {
   vi.mocked(readDocument).mockClear();
   const documents = [doc("a.md", { title: "较早的文档" }), doc("b.md", { title: "最近的文档" })];
   useReaderStore.setState({
-    snapshot: { rootPath: WEB_ROOT, documents },
+    snapshot: { rootPath: WEB_ROOT, rootKey: WEB_ROOT, documents },
     documents,
     currentPath: null,
     currentContent: null,

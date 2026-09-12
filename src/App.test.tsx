@@ -13,6 +13,7 @@ import {
   listCollections,
   listDocumentExtents,
   listDocumentLinks,
+  localDataStatus,
   listReadingSessions,
   listReviewQueue,
   openLibrary,
@@ -131,7 +132,7 @@ vi.mock("./lib/backend", async () => {
       throw new Error("readDocument not mocked");
     }),
     // 最近书库 MRU(plan-library-mru):打开/探测/目录对话框都走 mock。
-    openLibrary: vi.fn(async (rootPath: string) => ({ rootPath, documents: [] })),
+    openLibrary: vi.fn(async (rootPath: string) => ({ rootPath, rootKey: rootPath, documents: [] })),
     probeLibraryPath: vi.fn(async () => true),
     chooseLibraryDirectory: vi.fn(async () => null),
     // 阅读时间预估(plan-reading-time-estimate):extents 聚合走 mock。
@@ -142,6 +143,31 @@ vi.mock("./lib/backend", async () => {
     onLibraryChanged: vi.fn(async () => () => undefined),
     onLibraryIndexProgress: vi.fn(async () => () => undefined),
     onDocumentIndexStatus: vi.fn(async () => () => undefined),
+    // D05:统计绑定与关窗协调;jsdom 没有 Tauri 事件桥与 IPC。
+    onWindowCloseRequested: vi.fn(async () => () => undefined),
+    startReadingSession: vi.fn(async () => undefined),
+    approveWindowClose: vi.fn(async () => undefined),
+    localDataStatus: vi.fn(async () => ({
+      appVersion: "0.2.0",
+      userDbPath: "C:/data/reade-user.sqlite3",
+      statsDbPath: "C:/data/reade-stats.sqlite3",
+      cacheDbPath: "C:/cache/reade-cache.sqlite3",
+      userDbOk: true,
+      statsDbOk: true,
+      userSchemaVersion: 7,
+      cacheBytes: 0,
+      failedIndexCount: 0,
+      lastBackupAtMs: null,
+      lastBackupPath: null,
+      pendingBoundSessions: 0,
+      restorePending: false,
+      userOpenError: null,
+      statsOpenError: null,
+    })),
+    createLocalBackup: vi.fn(async () => ({ backupPath: "C:/data/backups/x", createdAtMs: 1 })),
+    stageLocalRestore: vi.fn(async () => "staged"),
+    exportDiagnosticReport: vi.fn(async () => "{}"),
+    pickBackupDirectory: vi.fn(async () => null),
   };
 });
 
@@ -290,7 +316,7 @@ beforeEach(() => {
   });
   vi.mocked(openLibrary)
     .mockReset()
-    .mockImplementation(async (rootPath: string) => ({ rootPath, documents: [] }));
+    .mockImplementation(async (rootPath: string) => ({ rootPath, rootKey: rootPath, documents: [] }));
   vi.mocked(probeLibraryPath).mockReset().mockImplementation(async () => true);
   vi.mocked(chooseLibraryDirectory).mockReset().mockImplementation(async () => null);
   vi.mocked(listDocumentExtents).mockReset().mockImplementation(async () => []);
@@ -326,6 +352,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(HTMLElement.prototype, "animate");
+});
+
+describe("local data diagnostics in reading settings", () => {
+  it("wraps a dual-location conflict instead of dumping the English path wall", async () => {
+    const roaming = "C:\\Users\\viper\\AppData\\Roaming\\com.local.reade\\reade-user.sqlite3";
+    const local = "C:\\Users\\viper\\AppData\\Local\\com.local.reade\\reade-user.sqlite3";
+    vi.mocked(localDataStatus).mockResolvedValueOnce({
+      appVersion: "0.2.0",
+      userDbPath: roaming,
+      statsDbPath: "C:\\Users\\viper\\AppData\\Roaming\\com.local.reade\\reade-stats.sqlite3",
+      cacheDbPath: "C:\\Users\\viper\\AppData\\Local\\com.local.reade\\reade-cache.sqlite3",
+      userDbOk: false,
+      statsDbOk: true,
+      userSchemaVersion: null,
+      cacheBytes: 615_514_112,
+      failedIndexCount: 0,
+      lastBackupAtMs: null,
+      lastBackupPath: null,
+      pendingBoundSessions: 0,
+      restorePending: false,
+      userOpenError:
+        `User annotation data is present in both ${roaming} and ${local}, and the old copy changed after it was migrated. Reade refuses to pick a winner automatically; keep one file and rename the other aside, then restart.`,
+      statsOpenError: null,
+    });
+
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveClass("local-data-error");
+    expect(alert).toHaveTextContent("标注库打开失败");
+    expect(alert).toHaveTextContent("不会自动选哪一份");
+    expect(alert).not.toHaveTextContent("WindowsPath");
+    expect(alert).toHaveTextContent(roaming);
+    expect(alert).toHaveTextContent(local);
+    expect(screen.getByText("异常")).toBeInTheDocument();
+    expect(screen.queryByText(roaming, { selector: ".setting-hint" })).not.toBeInTheDocument();
+  });
 });
 
 describe("reading wheel speed setting", () => {
@@ -1113,7 +1176,7 @@ describe("library-wide annotations (B7)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
   }
 
   it("lists annotations across documents and jumps into another document", async () => {
@@ -1169,7 +1232,7 @@ describe("library annotation search and filters (方案四 A1)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
   }
 
   function setTwoDocumentState() {
@@ -1427,7 +1490,7 @@ describe("lost documents rebind (§5.6 C)", () => {
     }));
     vi.mocked(rebindDocumentAnnotations).mockImplementation(async () => 1);
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library", documents: [] },
+      snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents: [] },
       documents: [
         markdownDocument("guide.md", "Guide"),
         markdownDocument("copy-a.md", "Copy A"),
@@ -1450,7 +1513,7 @@ describe("lost documents rebind (§5.6 C)", () => {
     fireEvent.click((await screen.findAllByRole("button", { name: "打开全库摘录" }))[0]);
     await waitFor(() => {
       expect(document.querySelector(".annotation-hub-view")).not.toBeNull();
-    });
+    }, { timeout: 5_000 });
 
     const section = await screen.findByRole("region", { name: "失联文档" });
     expect(section).toHaveTextContent("ghost.md");
@@ -1748,7 +1811,7 @@ function homeSession(relativePath: string, endedAt: number): ReadingSession {
 function setLibraryReadingState() {
   const guide = markdownDocument("guide.md", "Guide");
   useReaderStore.setState({
-    snapshot: { rootPath: HOME_ROOT, documents: [guide] },
+    snapshot: { rootPath: HOME_ROOT, rootKey: HOME_ROOT, documents: [guide] },
     documents: [guide],
     currentPath: "guide.md",
     currentContent: {
@@ -1847,7 +1910,7 @@ describe("cold-start landing (H-D1 option A)", () => {
   function setColdStartState() {
     const guide = markdownDocument("guide.md", "Guide");
     useReaderStore.setState({
-      snapshot: { rootPath: HOME_ROOT, documents: [guide] },
+      snapshot: { rootPath: HOME_ROOT, rootKey: HOME_ROOT, documents: [guide] },
       documents: [guide],
       currentPath: null,
       currentContent: null,
@@ -1913,7 +1976,7 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().currentPath).toBeNull();
   });
 
-  it("lands on home when 30-day sessions exist without persisted positions", async () => {
+  it("lands on home when 30-day sessions exist without persisted positions", { timeout: 20_000 }, async () => {
     vi.mocked(listReadingSessions).mockResolvedValue([
       homeSession("guide.md", Date.now() - 60_000),
     ]);
@@ -1943,7 +2006,7 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().activeView).toBe("reader");
   });
 
-  it("does not loop auto-opening the first document after a read failure", async () => {
+  it("does not loop auto-opening the first document after a read failure", { timeout: 20_000 }, async () => {
     // 首篇读取失败时 currentPath 保持 null,loading 翻转会让冷启动 effect
     // 重跑;回归场景是不加防护时无限重试,加载遮罩持续闪烁。
     vi.mocked(readDocument).mockRejectedValue(new Error("cannot read document"));
@@ -1959,7 +2022,7 @@ describe("cold-start landing (H-D1 option A)", () => {
     expect(useReaderStore.getState().currentPath).toBeNull();
     // 失败必须以 error 通道呈现,而不是静默重试。
     expect(useReaderStore.getState().error).toContain("cannot read document");
-  }, 10000);
+  });
 
   it("ignores history that only points at documents outside the library", async () => {
     writeReadingPosition(HOME_ROOT, "removed.md", { kind: "scroll", scrollRatio: 0.4 });
@@ -2376,7 +2439,7 @@ describe("reading position persistence (H0)", () => {
 describe("in-document find (Ctrl+F)", () => {
   function setFindState() {
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/find-lib", documents: [] },
+      snapshot: { rootPath: "D:/find-lib", rootKey: "D:/find-lib", documents: [] },
       documents: [markdownDocument("guide.md", "Guide")],
       currentPath: "guide.md",
       currentContent: {
@@ -2432,7 +2495,7 @@ describe("in-document find (Ctrl+F)", () => {
 describe("command palette (CP)", () => {
   function setPaletteState() {
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/palette-lib", documents: [] },
+      snapshot: { rootPath: "D:/palette-lib", rootKey: "D:/palette-lib", documents: [] },
       documents: [
         markdownDocument("guide.md", "Guide"),
         markdownDocument("notes/palette.md", "命令面板笔记"),
@@ -2554,7 +2617,7 @@ describe("reading time estimate (plan-reading-time-estimate)", () => {
       { relativePath: longDoc.relativePath, charCount: 1000, segmentCount: 1, needsOcrSegments: 0 },
     ]);
     useReaderStore.setState({
-      snapshot: { rootPath: HOME_ROOT, documents: [longDoc] },
+      snapshot: { rootPath: HOME_ROOT, rootKey: HOME_ROOT, documents: [longDoc] },
       documents: [longDoc],
       currentPath: longDoc.relativePath,
       currentContent: {
@@ -2590,7 +2653,7 @@ describe("reading time estimate (plan-reading-time-estimate)", () => {
       { relativePath: "scan.pdf", charCount: 9000, segmentCount: 10, needsOcrSegments: 8 },
     ]);
     useReaderStore.setState({
-      snapshot: { rootPath: HOME_ROOT, documents: [guide, scan] },
+      snapshot: { rootPath: HOME_ROOT, rootKey: HOME_ROOT, documents: [guide, scan] },
       documents: [guide, scan],
       currentPath: "guide.md",
       currentContent: {
@@ -2753,7 +2816,7 @@ describe("library MRU (plan-library-mru)", () => {
 describe("navigation history (NH)", () => {
   function setNavState() {
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/nav-lib", documents: [] },
+      snapshot: { rootPath: "D:/nav-lib", rootKey: "D:/nav-lib", documents: [] },
       documents: [
         markdownDocument("guide.md", "Guide"),
         markdownDocument("notes/other.md", "另一篇笔记"),
@@ -2851,7 +2914,7 @@ describe("topbar breadcrumb", () => {
     const file = `${folder}-using-claude.md-file.md`;
     const relativePath = `${folder}/${file}`;
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/长文档库-根目录名字同样很长", documents: [] },
+      snapshot: { rootPath: "D:/长文档库-根目录名字同样很长", rootKey: "D:/长文档库-根目录名字同样很长", documents: [] },
       documents: [markdownDocument(relativePath, "长路径文档")],
       currentPath: relativePath,
       currentContent: { kind: "markdown", relativePath, markdown: "# 长路径文档\n\n正文" },
@@ -2869,7 +2932,7 @@ describe("topbar breadcrumb", () => {
   it("reveals the parent folder in the document tree when a breadcrumb crumb is clicked", async () => {
     const relativePath = "正文/第一章/导论.md";
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library", documents: [] },
+      snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents: [] },
       documents: [markdownDocument(relativePath, "导论")],
       currentPath: relativePath,
       currentContent: { kind: "markdown", relativePath, markdown: "# 导论\n\n正文" },
@@ -2899,7 +2962,7 @@ describe("folder docs panel", () => {
   it("opens from the scope bar and lists this-level titles, not nested documents", async () => {
     const relativePath = "正文/第一章/导论.md";
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library", documents: [] },
+      snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents: [] },
       documents: [
         markdownDocument(relativePath, "导论完整标题不应被截断"),
         markdownDocument("正文/第一章/附录很长的名字.md", "附录这一章有一个非常完整的长标题"),

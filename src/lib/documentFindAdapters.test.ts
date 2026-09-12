@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from "vitest";
-import { attachPdfReadingPageNumbers, resolveDocumentFindFormat } from "./documentFindAdapters";
+import { describe, expect, it, vi } from "vitest";
+import { attachPdfReadingPageNumbers, rangesForFindMatches, resolveDocumentFindFormat } from "./documentFindAdapters";
 
 describe("resolveDocumentFindFormat", () => {
   it("maps content kinds and pdf modes", () => {
@@ -33,5 +33,54 @@ describe("attachPdfReadingPageNumbers", () => {
     ]);
     expect(attached[0]).toMatchObject({ pdfPage: 1, start: 0, end: 1 });
     expect(attached[1]).toMatchObject({ pdfPage: 2, start: 2, end: 5 });
+  });
+});
+
+describe("rangesForFindMatches", () => {
+  it("walks a dense Markdown surface once for a batch of highlights", () => {
+    const article = document.createElement("article");
+    for (let i = 0; i < 200; i += 1) {
+      const paragraph = document.createElement("p");
+      paragraph.textContent = "needle ";
+      article.append(paragraph);
+    }
+    const matches = Array.from({ length: 200 }, (_, i) => ({
+      id: String(i), start: i * 7, end: i * 7 + 6,
+    }));
+    const walker = vi.spyOn(document, "createTreeWalker");
+    try {
+      const ranges = rangesForFindMatches(article, "markdown", matches);
+      expect(ranges).toHaveLength(200);
+      expect(ranges.every((range) => range?.toString() === "needle")).toBe(true);
+      expect(walker.mock.calls.filter((call) => call[1] === NodeFilter.SHOW_TEXT)).toHaveLength(1);
+    } finally {
+      walker.mockRestore();
+    }
+    article.replaceChildren(document.createTextNode("changed"));
+    expect(rangesForFindMatches(article, "markdown", [{ id: "new", start: 0, end: 7 }])[0]?.toString()).toBe("changed");
+  });
+
+  it("indexes each mounted PDF page once and preserves null slots for absent pages", () => {
+    const article = document.createElement("article");
+    for (const page of [1, 2]) {
+      const section = document.createElement("section");
+      section.id = `pdf-page-${page}`;
+      section.className = "pdf-reading-page";
+      section.textContent = "one two";
+      article.append(section);
+    }
+    const walker = vi.spyOn(document, "createTreeWalker");
+    try {
+      const ranges = rangesForFindMatches(article, "pdf-reading", [
+        { id: "1a", pdfPage: 1, start: 0, end: 3 },
+        { id: "1b", pdfPage: 1, start: 4, end: 7 },
+        { id: "2", pdfPage: 2, start: 0, end: 3 },
+        { id: "3", pdfPage: 3, start: 0, end: 3 },
+      ]);
+      expect(ranges.map((range) => range?.toString() ?? null)).toEqual(["one", "two", "one", null]);
+      expect(walker.mock.calls.filter((call) => call[1] === NodeFilter.SHOW_TEXT)).toHaveLength(2);
+    } finally {
+      walker.mockRestore();
+    }
   });
 });

@@ -28,6 +28,24 @@ describe("MarkdownRenderer", () => {
     expect(container.querySelector("section[data-footnotes]")).toHaveTextContent("Footnote body");
   });
 
+
+  it("keeps oversized code blocks plain until the user requests highlighting (D11)", async () => {
+    const bigLines = Array.from({ length: 2_100 }, (_, index) => "x = " + index).join("\n");
+    const fenced = "```rust\n" + bigLines + "\n```";
+    const { container } = render(<MarkdownRenderer content={fenced} />);
+    // 超阈值块默认纯文本，且带显式高亮按钮。
+    expect(container.querySelector(".markdown-code-highlight")).toBeNull();
+    const toggle = container.querySelector(".markdown-code-highlight-toggle");
+    expect(toggle).not.toBeNull();
+    // 长代码仍可完整复制（复制的是原文）。
+    const code = container.querySelector(".markdown-code-plain code");
+    expect(code?.textContent).toBe(bigLines);
+
+    const small = render(<MarkdownRenderer content={"```rust\nfn main() {}\n```"} />);
+    expect(small.container.querySelector(".markdown-code-highlight-toggle")).toBeNull();
+    small.unmount();
+  });
+
   it("drops raw HTML instead of injecting or executing it", () => {
     const { container } = render(
       <MarkdownRenderer

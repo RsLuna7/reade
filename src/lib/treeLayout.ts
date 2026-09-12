@@ -7,7 +7,8 @@
  * 存储一律视为不可信输入：坏条目静默丢弃。
  */
 
-import { normalizeLibraryPathKey } from "./libraryMru";
+import { loadLibraryEnvelope, saveLibraryEnvelope } from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
 import {
   buildDocumentTree,
   compareTreeNodesDefault,
@@ -290,14 +291,6 @@ function commitFolder(
   return { ...layout, [parentPath]: folder };
 }
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function sanitizeKeyList(value: unknown): string[] {
   if (!Array.isArray(value)) return [];
   const seen = new Set<string>();
@@ -349,52 +342,51 @@ function sanitizeLibraryLayout(value: unknown): LibraryTreeLayout {
 }
 
 function loadEnvelope(): LayoutEnvelope {
-  const empty: LayoutEnvelope = { version: TREE_LAYOUT_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(TREE_LAYOUT_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<LayoutEnvelope>;
-  if (envelope.version !== TREE_LAYOUT_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryTreeLayout> = {};
-  for (const [root, folders] of Object.entries(envelope.libraries)) {
-    if (typeof root !== "string" || !root.trim()) continue;
-    const libKey = normalizeLibraryPathKey(root);
-    const sanitized = sanitizeLibraryLayout(folders);
-    if (Object.keys(sanitized).length > 0) libraries[libKey] = sanitized;
-  }
-  return { version: TREE_LAYOUT_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryTreeLayout>({
+    storageKey: TREE_LAYOUT_STORAGE_KEY,
+    version: TREE_LAYOUT_VERSION,
+    sanitizeLibrary: (raw) => {
+      const sanitized = sanitizeLibraryLayout(raw);
+      return Object.keys(sanitized).length > 0 ? sanitized : null;
+    },
+    // Equivalent spellings of one library union instead of overwriting. Pinned
+    // keys from both buckets are kept (existing order first) and a manual order
+    // survives as long as either bucket had one.
+    mergeLibrary: (existing, incoming) => {
+      const merged: LibraryTreeLayout = { ...existing };
+      for (const [parent, folder] of Object.entries(incoming)) {
+        const current = merged[parent];
+        if (!current) {
+          merged[parent] = folder;
+          continue;
+        }
+        const pinned = sanitizeKeyList([...current.pinned, ...folder.pinned]);
+        const pinSet = new Set(pinned);
+        const order = sanitizeKeyList([
+          ...(current.order ?? []),
+          ...(folder.order ?? []),
+        ]).filter((key) => !pinSet.has(key));
+        const hasOrder = current.order !== null || folder.order !== null;
+        merged[parent] = { pinned, order: hasOrder ? order : null };
+      }
+      return merged;
+    },
+  });
 }
 
 function saveEnvelope(envelope: LayoutEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(TREE_LAYOUT_STORAGE_KEY, JSON.stringify(envelope));
-  } catch {
-    // 配额/隐私模式只丢浏览顺序，不影响打开书库。
-  }
+  saveLibraryEnvelope(TREE_LAYOUT_STORAGE_KEY, envelope);
 }
 
 export function readTreeLayout(libraryRoot: string): LibraryTreeLayout {
   if (!libraryRoot.trim()) return {};
-  return loadEnvelope().libraries[normalizeLibraryPathKey(libraryRoot)] ?? {};
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)] ?? {};
 }
 
 export function writeTreeLayout(libraryRoot: string, layout: LibraryTreeLayout): void {
   if (!libraryRoot.trim()) return;
   const envelope = loadEnvelope();
-  const libKey = normalizeLibraryPathKey(libraryRoot);
+  const libKey = normalizeLibraryKey(libraryRoot);
   const cleaned = sanitizeLibraryLayout(layout);
   if (Object.keys(cleaned).length === 0) delete envelope.libraries[libKey];
   else envelope.libraries[libKey] = cleaned;

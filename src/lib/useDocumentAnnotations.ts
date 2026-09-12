@@ -71,6 +71,22 @@ export function useDocumentAnnotations(relativePath: string | null) {
   // Only the latest reload may commit, so a slow response from a previous
   // document cannot overwrite the current bundle.
   const reloadTokenRef = useRef(0);
+  // D03: document epoch increments on every document switch. Every mutation
+  // captures it before awaiting and drops ALL local state writes (bundle,
+  // undo stack, loading, error) when the user switched away. Backend writes
+  // that already succeeded are never rolled back — they belong to their own
+  // document and show up again on the next open.
+  const documentEpochRef = useRef(0);
+  // D03: per-document serial mutation queue. Same-document writes apply in
+  // order (a color update cannot clobber a just-landed note); switching
+  // documents resets the chain so the new document never waits behind the
+  // old one's in-flight work.
+  const mutationQueueRef = useRef<Promise<unknown>>(Promise.resolve());
+  // D03: bumped after every successful local commit. A reload that started
+  // before a mutation must not commit its (possibly older) server snapshot
+  // over the mutation's optimistic state — it reschedules instead.
+  const dataVersionRef = useRef(0);
+  const reloadRef = useRef<() => void>(() => {});
 
   const commitBundle = useCallback((next: DocumentAnnotationBundle) => {
     const projected = annotationsFromBundle(next);
@@ -94,6 +110,7 @@ export function useDocumentAnnotations(relativePath: string | null) {
 
   const reload = useCallback(async () => {
     const token = ++reloadTokenRef.current;
+    const versionAtStart = dataVersionRef.current;
     if (!relativePath) {
       commitBundle(emptyBundle());
       setError(null);
@@ -106,6 +123,13 @@ export function useDocumentAnnotations(relativePath: string | null) {
     try {
       const next = await listDocumentAnnotations(relativePath);
       if (token !== reloadTokenRef.current) return;
+      if (dataVersionRef.current !== versionAtStart) {
+        // A mutation committed while this reload was in flight; the server
+        // snapshot may predate it. Refresh again rather than regressing the
+        // local state, and leave loading to the rescheduled reload.
+        reloadRef.current();
+        return;
+      }
       commitBundle(next);
       setError(null);
     } catch (cause) {
@@ -117,6 +141,13 @@ export function useDocumentAnnotations(relativePath: string | null) {
   }, [commitBundle, relativePath, syncUndoFlag]);
 
   useEffect(() => {
+    ++documentEpochRef.current;
+    reloadRef.current = reload;
+    // A new document starts with an empty queue, empty version and no undo
+    // history; stale mutations from the previous document are dropped by
+    // their epoch check instead of being replayed here.
+    mutationQueueRef.current = Promise.resolve();
+    dataVersionRef.current = 0;
     undoStackRef.current = [];
     syncUndoFlag();
     void reload();
@@ -125,117 +156,158 @@ export function useDocumentAnnotations(relativePath: string | null) {
     };
   }, [reload, syncUndoFlag]);
 
+  const runMutation = useCallback(<T,>(task: () => Promise<T>): Promise<T> => {
+    const run = mutationQueueRef.current.then(task, task);
+    // The stored chain never rejects; each caller still sees its own result.
+    mutationQueueRef.current = run.catch(() => undefined);
+    return run;
+  }, []);
+
   const save = useCallback(
     async (annotation: Annotation, options?: { recordUndo?: boolean }) => {
-      const existed = annotationsRef.current.some((item) => item.id === annotation.id);
-      const saved = await upsertAnnotation(annotation);
-      // Bookmarks and relocation still use the legacy command. Reload the v6
-      // source of truth; reload records an error without turning a committed
-      // mutation into a false save failure.
-      await reload();
-      if (options?.recordUndo !== false && !existed) {
-        pushUndo({
-          type: "create",
-          id: saved.id,
-          entryKind: entryKindForAnnotation(saved),
-        });
-      }
-      return saved;
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const existed = annotationsRef.current.some((item) => item.id === annotation.id);
+        const saved = await upsertAnnotation(annotation);
+        // Bookmarks and relocation still use the legacy command. Reload the v6
+        // source of truth; reload records an error without turning a committed
+        // mutation into a false save failure.
+        if (documentEpochRef.current !== epoch) return saved;
+        dataVersionRef.current += 1;
+        await reload();
+        if (documentEpochRef.current !== epoch) return saved;
+        if (options?.recordUndo !== false && !existed) {
+          pushUndo({
+            type: "create",
+            id: saved.id,
+            entryKind: entryKindForAnnotation(saved),
+          });
+        }
+        return saved;
+      });
     },
-    [pushUndo, reload],
+    [pushUndo, reload, runMutation],
   );
 
   const saveExcerpt = useCallback(
     async (draft: ExcerptDraft, reflectionBody: string | null = null) => {
-      const captured = await createExcerpt(draft, reflectionBody);
-      const next: DocumentAnnotationBundle = {
-        ...bundleRef.current,
-        excerpts: [
-          captured.excerpt,
-          ...bundleRef.current.excerpts.filter((item) => item.id !== captured.excerpt.id),
-        ],
-        reflections: captured.reflection
-          ? [
-              captured.reflection,
-              ...bundleRef.current.reflections.filter(
-                (item) => item.entryId !== captured.reflection?.entryId,
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const captured = await createExcerpt(draft, reflectionBody);
+        if (documentEpochRef.current !== epoch) return captured;
+        const next: DocumentAnnotationBundle = {
+          ...bundleRef.current,
+          excerpts: [
+            captured.excerpt,
+            ...bundleRef.current.excerpts.filter((item) => item.id !== captured.excerpt.id),
+          ],
+          reflections: captured.reflection
+            ? [
+                captured.reflection,
+                ...bundleRef.current.reflections.filter(
+                  (item) => item.entryId !== captured.reflection?.entryId,
+                ),
+              ]
+            : bundleRef.current.reflections.filter(
+                (item) => item.entryId !== captured.excerpt.id,
               ),
-            ]
-          : bundleRef.current.reflections.filter(
-              (item) => item.entryId !== captured.excerpt.id,
-            ),
-      };
-      commitBundle(next);
-      pushUndo({ type: "create", id: captured.excerpt.id, entryKind: "excerpt" });
-      return captured;
+        };
+        commitBundle(next);
+        dataVersionRef.current += 1;
+        pushUndo({ type: "create", id: captured.excerpt.id, entryKind: "excerpt" });
+        return captured;
+      });
     },
-    [commitBundle, pushUndo],
+    [commitBundle, pushUndo, runMutation],
   );
 
   const remove = useCallback(
     async (id: string, options?: { recordUndo?: boolean }) => {
-      const existing = annotationsRef.current.find((item) => item.id === id);
-      if (!existing) return;
-      const entryKind = entryKindForAnnotation(existing);
-      await deleteAnnotation(id);
-      commitBundle({
-        excerpts: bundleRef.current.excerpts.filter((item) => item.id !== id),
-        places: bundleRef.current.places.filter((item) => item.id !== id),
-        reflections: bundleRef.current.reflections.filter((item) => item.entryId !== id),
-        reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
-          (item) => item.excerptId !== id,
-        ),
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const existing = annotationsRef.current.find((item) => item.id === id);
+        if (!existing) return;
+        const entryKind = entryKindForAnnotation(existing);
+        await deleteAnnotation(id);
+        if (documentEpochRef.current !== epoch) return;
+        commitBundle({
+          excerpts: bundleRef.current.excerpts.filter((item) => item.id !== id),
+          places: bundleRef.current.places.filter((item) => item.id !== id),
+          reflections: bundleRef.current.reflections.filter((item) => item.entryId !== id),
+          reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
+            (item) => item.excerptId !== id,
+          ),
+        });
+        dataVersionRef.current += 1;
+        if (options?.recordUndo !== false) {
+          pushUndo({ type: "delete", id, entryKind });
+        }
       });
-      if (options?.recordUndo !== false) {
-        pushUndo({ type: "delete", id, entryKind });
-      }
     },
-    [commitBundle, pushUndo],
+    [commitBundle, pushUndo, runMutation],
   );
 
   const clearAll = useCallback(async () => {
-    if (!relativePath) return;
-    const snapshot = await clearDocumentAnnotations(relativePath);
-    commitBundle(emptyBundle());
-    // Physical clear also purges tombstones, so earlier undo entries can no
-    // longer be replayed safely. The returned full v6 snapshot is the sole
-    // recoverable action for this document.
-    undoStackRef.current = hasBundleEntries(snapshot)
-      ? [{ type: "clear", relativePath, snapshot }]
-      : [];
-    syncUndoFlag();
-  }, [commitBundle, relativePath, syncUndoFlag]);
+    const path = relativePath;
+    if (!path) return;
+    const epoch = documentEpochRef.current;
+    return runMutation(async () => {
+      const snapshot = await clearDocumentAnnotations(path);
+      if (documentEpochRef.current !== epoch) return;
+      commitBundle(emptyBundle());
+      dataVersionRef.current += 1;
+      // Physical clear also purges tombstones, so earlier undo entries can no
+      // longer be replayed safely. The returned full v6 snapshot is the sole
+      // recoverable action for this document.
+      undoStackRef.current = hasBundleEntries(snapshot)
+        ? [{ type: "clear", relativePath: path, snapshot }]
+        : [];
+      syncUndoFlag();
+    });
+  }, [commitBundle, relativePath, runMutation, syncUndoFlag]);
 
   const undo = useCallback(async () => {
-    const entry = undoStackRef.current[undoStackRef.current.length - 1];
-    if (!entry) return false;
+    const epoch = documentEpochRef.current;
+    return runMutation(async () => {
+      const entry = undoStackRef.current[undoStackRef.current.length - 1];
+      if (!entry) return false;
 
-    if (entry.type === "create") {
-      await deleteAnnotation(entry.id);
-      commitBundle({
-        excerpts: bundleRef.current.excerpts.filter((item) => item.id !== entry.id),
-        places: bundleRef.current.places.filter((item) => item.id !== entry.id),
-        reflections: bundleRef.current.reflections.filter((item) => item.entryId !== entry.id),
-        reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
-          (item) => item.excerptId !== entry.id,
-        ),
-      });
-    } else if (entry.type === "delete") {
-      await restoreAnnotationEntry(entry.id, entry.entryKind);
-      await reload();
-    } else {
-      const restored = await restoreDocumentAnnotations(entry.relativePath, entry.snapshot);
-      commitBundle(restored);
-    }
+      if (entry.type === "create") {
+        await deleteAnnotation(entry.id);
+        if (documentEpochRef.current !== epoch) return true;
+        commitBundle({
+          excerpts: bundleRef.current.excerpts.filter((item) => item.id !== entry.id),
+          places: bundleRef.current.places.filter((item) => item.id !== entry.id),
+          reflections: bundleRef.current.reflections.filter((item) => item.entryId !== entry.id),
+          reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
+            (item) => item.excerptId !== entry.id,
+          ),
+        });
+        dataVersionRef.current += 1;
+      } else if (entry.type === "delete") {
+        await restoreAnnotationEntry(entry.id, entry.entryKind);
+        if (documentEpochRef.current !== epoch) return true;
+        dataVersionRef.current += 1;
+        await reload();
+      } else {
+        const restored = await restoreDocumentAnnotations(entry.relativePath, entry.snapshot);
+        if (documentEpochRef.current !== epoch) return true;
+        commitBundle(restored);
+        dataVersionRef.current += 1;
+      }
 
-    // Only spend the undo entry after the backend action succeeds. A failed
-    // restore remains retryable instead of losing the user's escape.
-    if (undoStackRef.current[undoStackRef.current.length - 1] === entry) {
-      undoStackRef.current.pop();
-    }
-    syncUndoFlag();
-    return true;
-  }, [commitBundle, reload, syncUndoFlag]);
+      // Only spend the undo entry after the backend action succeeds. A failed
+      // restore remains retryable instead of losing the user's escape.
+      if (
+        documentEpochRef.current === epoch &&
+        undoStackRef.current[undoStackRef.current.length - 1] === entry
+      ) {
+        undoStackRef.current.pop();
+      }
+      syncUndoFlag();
+      return true;
+    });
+  }, [commitBundle, reload, runMutation, syncUndoFlag]);
 
   const updateNote = useCallback(
     async (annotation: Annotation, note: string | null) =>
@@ -248,55 +320,74 @@ export function useDocumentAnnotations(relativePath: string | null) {
       if (!isAnnotationMarkKind(annotation.kind)) {
         return save({ ...annotation, color, updatedAt: Date.now() }, { recordUndo: false });
       }
-      const saved = await updateExcerptAppearance(annotation.id, {
-        style: annotation.kind,
-        tone: legacyColorToTone(color),
-      });
-      commitBundle({
-        ...bundleRef.current,
-        excerpts: [
-          saved,
-          ...bundleRef.current.excerpts.filter((item) => item.id !== saved.id),
-        ],
+      // Capture the narrowed kind for use inside the queued closure (narrowing
+      // does not survive the callback boundary).
+      const markKind = annotation.kind;
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const saved = await updateExcerptAppearance(annotation.id, {
+          style: markKind,
+          tone: legacyColorToTone(color),
+        });
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          excerpts: [
+            saved,
+            ...bundleRef.current.excerpts.filter((item) => item.id !== saved.id),
+          ],
+        });
+        dataVersionRef.current += 1;
+        return saved;
       });
     },
-    [commitBundle, save],
+    [commitBundle, runMutation, save],
   );
 
   const saveReflection = useCallback(
     async (entryId: string, entryKind: AnnotationEntryKind, body: string) => {
-      const saved = await upsertReflection(entryId, entryKind, body);
-      commitBundle({
-        ...bundleRef.current,
-        reflections: [
-          saved,
-          ...bundleRef.current.reflections.filter((item) => item.entryId !== saved.entryId),
-        ],
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const saved = await upsertReflection(entryId, entryKind, body);
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          reflections: [
+            saved,
+            ...bundleRef.current.reflections.filter((item) => item.entryId !== saved.entryId),
+          ],
+        });
+        dataVersionRef.current += 1;
+        return saved;
       });
-      return saved;
     },
-    [commitBundle],
+    [commitBundle, runMutation],
   );
 
   const setEnrollment = useCallback(
     async (excerptId: string, enabled: boolean) => {
-      const saved = await setReviewEnrollment(excerptId, enabled);
-      commitBundle({
-        ...bundleRef.current,
-        reviewEnrollments: saved
-          ? [
-              saved,
-              ...bundleRef.current.reviewEnrollments.filter(
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const saved = await setReviewEnrollment(excerptId, enabled);
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          reviewEnrollments: saved
+            ? [
+                saved,
+                ...bundleRef.current.reviewEnrollments.filter(
+                  (item) => item.excerptId !== excerptId,
+                ),
+              ]
+            : bundleRef.current.reviewEnrollments.filter(
                 (item) => item.excerptId !== excerptId,
               ),
-            ]
-          : bundleRef.current.reviewEnrollments.filter(
-              (item) => item.excerptId !== excerptId,
-            ),
+        });
+        dataVersionRef.current += 1;
+        return saved;
       });
-      return saved;
     },
-    [commitBundle],
+    [commitBundle, runMutation],
   );
 
   return {

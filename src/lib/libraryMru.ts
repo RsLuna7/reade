@@ -10,6 +10,8 @@
  * 坏条目静默丢弃（与 readingPositions 同一治理姿态）。
  */
 
+import { normalizeLibraryKey } from "./libraryKey";
+
 export const LIBRARY_MRU_STORAGE_KEY = "reade-library-mru";
 export const LIBRARY_MRU_VERSION = 1;
 export const LIBRARY_MRU_LIMIT = 8;
@@ -32,14 +34,16 @@ interface MruEnvelope {
 }
 
 /**
- * Windows 语义的路径比较键：统一反斜杠、去尾分隔符、大小写不敏感。
- * `D:\lib`、`d:/lib/`、`D:/LIB` 视为同一书库；展示始终保留原字符串。
+ * Windows 语义的路径比较键：统一反斜杠、去尾分隔符、大小写不敏感，
+ * 并剥离 canonicalize 的 `\\?\` 前缀。保留原名供既有调用点使用，
+ * 实现委托给 `libraryKey.ts`，以免与其它存储模块的比较规则漂移。
+ * `D:\lib`、`d:/lib/`、`\\?\D:\lib` 视为同一书库；展示始终保留原字符串。
+ *
+ * 末段 `.toLowerCase()` 是 MRU 的历史契约（全部路径都不敏感），比
+ * `libraryKey` 的共享规则更宽：共享规则只对 Windows 盘符/UNC 根不敏感。
  */
 export function normalizeLibraryPathKey(path: string): string {
-  const unified = path.trim().replace(/\//g, "\\");
-  const trimmed = unified.replace(/\\+$/, "");
-  // 全分隔符字符串（如 "\\"）去尾后为空，回退原串避免空键碰撞。
-  return (trimmed || unified).toLowerCase();
+  return normalizeLibraryKey(path).toLowerCase();
 }
 
 /** 书库标题 = 路径末段目录名（与 App 的 fileName 同规）。 */

@@ -1,17 +1,43 @@
 // @vitest-environment jsdom
+
+const backendMocks = vi.hoisted(() => ({
+  readEpubAsset: vi.fn(),
+  openExternalLink: vi.fn(),
+}));
+
+vi.mock("../lib/backend", () => ({
+  readEpubAsset: backendMocks.readEpubAsset,
+  openExternalLink: backendMocks.openExternalLink,
+}));
 import "@testing-library/jest-dom/vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Annotation, EpubDocument } from "../lib/backend";
+
+let ioInstances: TestIntersectionObserver[] = [];
 import { EpubReader, buildEpubToc, epubChapterTocId } from "./EpubReader";
 
 class TestIntersectionObserver {
+  callback: (entries: Array<{ isIntersecting: boolean }>) => void;
+  constructor(callback: (entries: Array<{ isIntersecting: boolean }>) => void) {
+    this.callback = callback;
+    ioInstances.push(this);
+  }
   observe() {}
   unobserve() {}
   disconnect() {}
 }
 
+/** D11 测试辅助：手动触发所有已注册观察器的进入视口事件。 */
+function triggerAllIntersections(): void {
+  const instances = ioInstances;
+  ioInstances = [];
+  for (const instance of instances) instance.callback([{ isIntersecting: true }]);
+}
+
 beforeEach(() => {
+  ioInstances = [];
+  backendMocks.readEpubAsset.mockReset().mockResolvedValue(new Uint8Array([1, 2, 3]));
   vi.stubGlobal("IntersectionObserver", TestIntersectionObserver);
   Object.defineProperty(HTMLElement.prototype, "scrollIntoView", { configurable: true, value: vi.fn() });
 });
@@ -281,5 +307,105 @@ describe("EpubReader", () => {
     expect(mark!.classList.contains("annotation-mark--approx")).toBe(true);
     expect(onBroken.mock.calls[onBroken.mock.calls.length - 1]?.[0]).toEqual([]);
     expect(onApproximate.mock.calls[onApproximate.mock.calls.length - 1]?.[0]).toEqual(["ann-epub-stale-block"]);
+  });
+
+  // ---- D07: 同书双开的 DOM id 实例隔离 ----
+
+  it("scopes in-book anchor and note ids per reader instance", () => {
+    const document: EpubDocument = {
+      title: "Dual Book",
+      assets: [],
+      notes: [{ id: "fn1", kind: "footnote", blocks: [{ kind: "paragraph", content: [{ kind: "text", text: "脚注内容", bold: false, italic: false, strike: false, code: false }] }] }],
+      chapters: [{
+        id: "one",
+        title: "第一章",
+        level: 1,
+        blocks: [
+          { kind: "paragraph", content: [
+            { kind: "noteRef", id: "fn1" },
+            { kind: "anchor", id: "target" },
+            { kind: "link", content: [{ kind: "text", text: "跳转", bold: false, italic: false, strike: false, code: false }], target: { kind: "anchor", value: "target" } },
+          ] },
+        ],
+      }],
+    };
+
+    const first = render(<EpubReader relativePath="dual.epub" document={document} locator={null} motionLevel="subtle" onTocChange={() => undefined} onActiveChange={() => undefined} />);
+    const second = render(<EpubReader relativePath="dual.epub" document={document} locator={null} motionLevel="subtle" onTocChange={() => undefined} onActiveChange={() => undefined} />);
+
+    const firstNote = first.container.querySelector("aside.epub-notes aside, .epub-notes aside") as HTMLElement | null;
+    const secondNote = second.container.querySelector(".epub-notes aside") as HTMLElement | null;
+    expect(firstNote).not.toBeNull();
+    expect(secondNote).not.toBeNull();
+    // 同一注释 id 在两个实例中渲染为不同 DOM id（命名空间互不冲突）。
+    expect(firstNote!.id).not.toBe(secondNote!.id);
+    // 每个实例内部的 noteRef href 指向自己实例的注释元素。
+    const firstRef = first.container.querySelector<HTMLAnchorElement>("a.epub-note-ref")!;
+    expect(first.container.querySelector(`#${CSS.escape(firstRef.getAttribute("href")!.slice(1))}`)).not.toBeNull();
+    expect(second.container.querySelector(`#${CSS.escape(firstRef.getAttribute("href")!.slice(1))}`)).toBeNull();
+
+    // 书内锚点链接在自己实例内解析目标，而不是全局第一个匹配。
+    const secondInstanceLink = second.container.querySelector<HTMLAnchorElement>("a[href^='#epub-anchor']")!;
+    const secondInstanceRoot = second.container.querySelector<HTMLElement>(".epub-reader")!;
+    const targetInSecond = secondInstanceRoot.querySelector(`#${CSS.escape(secondInstanceLink.getAttribute("href")!.slice(1))}`);
+    expect(targetInSecond).not.toBeNull();
+    // 链接 click 不逃逸出实例（handleSelect 使用 closest(".epub-reader")）。
+    fireEvent.click(secondInstanceLink);
+    first.unmount();
+    second.unmount();
+  });
+
+  // ---- D11: 图片资产按需加载 / 请求合并 / 引用计数释放 ----
+
+  it("delays asset IPC until the image nears the viewport and merges duplicate requests", async () => {
+    const document: EpubDocument = {
+      title: "Lazy Book",
+      assets: [{ id: 0, mediaType: "image/png", allowed: true, alt: "图" }],
+      notes: [],
+      chapters: [{
+        id: "one",
+        title: "第一章",
+        level: 1,
+        blocks: [
+          { kind: "paragraph", content: [{ kind: "image", alt: "a", source: { kind: "asset", value: 0 } }] },
+          { kind: "paragraph", content: [{ kind: "image", alt: "b", source: { kind: "asset", value: 0 } }] },
+        ],
+      }],
+    };
+    const view = render(<EpubReader relativePath="lazy.epub" document={document} locator={null} motionLevel="subtle" onTocChange={() => undefined} onActiveChange={() => undefined} />);
+    // 可控 IO 未触发：不发生任何 IPC 读取（首屏不读全书图片）。
+    expect(backendMocks.readEpubAsset).not.toHaveBeenCalled();
+
+    triggerAllIntersections();
+    await waitFor(() => expect(backendMocks.readEpubAsset).toHaveBeenCalledTimes(1));
+    // 两个消费者共享一次读取。
+    expect(view.container.querySelectorAll("img.epub-image")).toHaveLength(2);
+    const firstSrc = view.container.querySelector("img.epub-image")!.getAttribute("src");
+    expect(view.container.querySelectorAll("img.epub-image[src='" + firstSrc + "']")).toHaveLength(2);
+    view.unmount();
+  });
+
+  it("revokes the shared blob url after the last consumer unmounts", async () => {
+    const document: EpubDocument = {
+      title: "Revoke Book",
+      assets: [{ id: 0, mediaType: "image/png", allowed: true, alt: "图" }],
+      notes: [],
+      chapters: [{ id: "one", title: "第一章", level: 1, blocks: [{ kind: "paragraph", content: [{ kind: "image", alt: "a", source: { kind: "asset", value: 0 } }] }] }],
+    };
+    const createObjectURL = vi.fn(() => "blob:shared");
+    const revokeObjectURL = vi.fn();
+    Object.defineProperty(URL, "createObjectURL", { configurable: true, value: createObjectURL });
+    Object.defineProperty(URL, "revokeObjectURL", { configurable: true, value: revokeObjectURL });
+    const first = render(<EpubReader relativePath="revoke.epub" document={document} locator={null} motionLevel="subtle" onTocChange={() => undefined} onActiveChange={() => undefined} />);
+    const second = render(<EpubReader relativePath="revoke.epub" document={document} locator={null} motionLevel="subtle" onTocChange={() => undefined} onActiveChange={() => undefined} />);
+    triggerAllIntersections();
+    await waitFor(() => expect(createObjectURL).toHaveBeenCalledTimes(1));
+    expect(backendMocks.readEpubAsset).toHaveBeenCalledTimes(1);
+
+    first.unmount();
+    expect(revokeObjectURL).not.toHaveBeenCalled();
+    second.unmount();
+    // 最后一个消费者卸载后才撤销。
+    expect(revokeObjectURL).toHaveBeenCalledWith("blob:shared");
   });
 });

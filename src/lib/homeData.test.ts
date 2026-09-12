@@ -294,4 +294,22 @@ describe("home baseline storage", () => {
     writeHomeBaseline("D:\\books", Number.NaN);
     expect(readHomeBaseline("D:\\books")).toBeNull();
   });
+
+  it("reads one baseline no matter how the library path was spelled", () => {
+    writeHomeBaseline("D:\\books", NOW);
+    expect(readHomeBaseline("d:/books/")).toBe(NOW);
+    expect(readHomeBaseline("\\\\?\\D:\\books")).toBe(NOW);
+  });
+
+  it("keeps the newer visit when two spellings collide", () => {
+    // Regression: colliding libraries used to overwrite one another on load.
+    localStorage.setItem(
+      HOME_BASELINE_STORAGE_KEY,
+      JSON.stringify({
+        version: HOME_BASELINE_VERSION,
+        libraries: { "D:\\books": NOW - HOUR_MS, "d:/books": NOW },
+      }),
+    );
+    expect(readHomeBaseline("D:\\books")).toBe(NOW);
+  });
 });

@@ -66,6 +66,43 @@ describe("readReadMarks / writeReadMarks", () => {
     writeReadMarks("D:/library", {});
     expect(readReadMarks("D:/library")).toEqual({});
   });
+
+  it("keeps marks written under every spelling of one library", () => {
+    // Regression: two buckets for one physical library used to overwrite each
+    // other on load, silently discarding the earlier set of read marks.
+    localStorage.setItem(
+      READ_MARKS_STORAGE_KEY,
+      JSON.stringify({
+        version: READ_MARKS_VERSION,
+        libraries: {
+          "D:\\books": { "alpha.md": 1_700_000_000_000 },
+          "d:/books": { "beta.md": 1_700_000_000_001 },
+        },
+      }),
+    );
+    expect(readReadMarks("D:\\books")).toEqual({
+      "alpha.md": 1_700_000_000_000,
+      "beta.md": 1_700_000_000_001,
+    });
+  });
+
+  it("addresses one bucket no matter which spelling reads or writes it", () => {
+    // A write under the plain spelling is visible through a canonicalize-
+    // prefixed read, so callers do not have to agree on path formatting.
+    writeReadMarks("D:/library", { "a.md": 1_700_000_000_000 });
+    expect(readReadMarks("\\\\?\\D:\\library")).toEqual({ "a.md": 1_700_000_000_000 });
+    expect(readReadMarks("d:\\LIBRARY\\")).toEqual({ "a.md": 1_700_000_000_000 });
+
+    // `writeReadMarks` replaces the library's complete mark set (the store
+    // always passes a reconciled full set), so the prefixed write targets the
+    // same single bucket rather than creating a second one.
+    writeReadMarks("\\\\?\\D:\\library", { "b.md": 1_700_000_000_001 });
+    expect(readReadMarks("D:/library")).toEqual({ "b.md": 1_700_000_000_001 });
+    const raw = JSON.parse(localStorage.getItem(READ_MARKS_STORAGE_KEY) ?? "{}") as {
+      libraries: Record<string, unknown>;
+    };
+    expect(Object.keys(raw.libraries)).toHaveLength(1);
+  });
 });
 
 describe("reconcileReadMarks", () => {

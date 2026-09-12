@@ -65,7 +65,7 @@ function session(
 
 function setHomeState(documents: DocumentInfo[]): void {
   useReaderStore.setState({
-    snapshot: { rootPath: ROOT, documents },
+    snapshot: { rootPath: ROOT, rootKey: ROOT, documents },
     documents,
     currentPath: null,
     currentContent: null,
@@ -118,13 +118,19 @@ function memoryAnnotation(
 }
 
 beforeEach(() => {
+  // 固定时钟到正午：用例以 now-1h 等构造"今日"会话，午夜后一小时内真实
+  // 时钟会让今日进度/天数判定翻车（CI 任意时段运行都会踩中）。
+  vi.useFakeTimers({ shouldAdvanceTime: true, now: new Date(2026, 8, 5, 10, 0, 0) });
   localStorage.clear();
   vi.mocked(listAnnotations).mockReset().mockImplementation(async () => []);
   vi.mocked(listReadingSessions).mockReset().mockImplementation(async () => []);
   vi.mocked(readDocument).mockClear();
 });
 
-afterEach(cleanup);
+afterEach(() => {
+  vi.useRealTimers();
+  cleanup();
+});
 
 describe("HomeView (desktop)", () => {
   it("lists recent documents with progress and reopens one on click", async () => {

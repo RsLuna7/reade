@@ -7,6 +7,7 @@ import {
   type EpubDocument,
 } from "./backend";
 import { pickEpubCoverAsset, pngBase64FromDataUrl, thumbnailDimensions } from "./coverArt";
+import { COVER_STORED_EVENT } from "./coverCaptureEvent";
 
 /**
  * 封面缩略图的浏览器侧生产管线（docs/plan-bookshelf-covers.md §3.3）。
@@ -21,7 +22,7 @@ import { pickEpubCoverAsset, pngBase64FromDataUrl, thumbnailDimensions } from ".
  */
 
 /** 书架端封面刷新通知（EPUB 打开捕获后让已挂载的书架重取该文档）。 */
-export const COVER_STORED_EVENT = "reade:cover-stored";
+export { COVER_STORED_EVENT };
 
 function notifyCoverStored(relativePath: string): void {
   try {
@@ -46,9 +47,11 @@ function canvasToStoredPng(canvas: HTMLCanvasElement): string | null {
 export async function capturePdfCoverThumbnail(
   relativePath: string,
   size: number,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
-  if (APP_RUNTIME === "web") return false;
+  if (APP_RUNTIME === "web" || !isCurrent()) return false;
   const pdfjs = await import("pdfjs-dist");
+  if (!isCurrent()) return false;
   if (!pdfjs.GlobalWorkerOptions.workerSrc) {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL(
       "pdfjs-dist/build/pdf.worker.mjs",
@@ -104,6 +107,9 @@ export async function capturePdfCoverThumbnail(
     await page.render({ canvas, canvasContext: context, viewport }).promise;
     const png = canvasToStoredPng(canvas);
     if (!png) return false;
+    // The shelf can switch libraries while pdf.js is rendering. Never let a
+    // stale task write a same-named document's thumbnail into the new cache.
+    if (!isCurrent()) return false;
     await storeDocumentThumbnail(relativePath, png, canvas.width, canvas.height);
     return true;
   } finally {

@@ -6,7 +6,8 @@
  * 书库键走 `normalizeLibraryPathKey`。存储一律视为不可信输入：坏条目静默丢弃。
  */
 
-import { normalizeLibraryPathKey } from "./libraryMru";
+import { normalizeLibraryKey } from "./libraryKey";
+import { loadLibraryEnvelope, saveLibraryEnvelope, sanitizeEpochMs } from "./localEnvelope";
 import { normalizeRelativePath } from "./tree";
 
 export const READ_MARKS_STORAGE_KEY = "reade-read-marks";
@@ -18,19 +19,6 @@ export type LibraryReadMarks = Record<string, number>;
 interface MarksEnvelope {
   version: number;
   libraries: Record<string, LibraryReadMarks>;
-}
-
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeUpdatedAt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return value < 10_000_000_000 ? value * 1000 : value;
 }
 
 function sanitizeRelativePath(value: unknown): string | null {
@@ -45,7 +33,7 @@ export function sanitizeLibraryReadMarks(value: unknown): LibraryReadMarks {
   const result: LibraryReadMarks = {};
   for (const [rawPath, rawAt] of Object.entries(value as Record<string, unknown>)) {
     const path = sanitizeRelativePath(rawPath);
-    const markedAt = sanitizeUpdatedAt(rawAt);
+    const markedAt = sanitizeEpochMs(rawAt);
     if (!path || markedAt === null) continue;
     result[path] = markedAt;
   }
@@ -53,53 +41,39 @@ export function sanitizeLibraryReadMarks(value: unknown): LibraryReadMarks {
 }
 
 function loadEnvelope(): MarksEnvelope {
-  const empty: MarksEnvelope = { version: READ_MARKS_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(READ_MARKS_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<MarksEnvelope>;
-  if (envelope.version !== READ_MARKS_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryReadMarks> = {};
-  for (const [root, marks] of Object.entries(envelope.libraries)) {
-    if (typeof root !== "string" || !root.trim()) continue;
-    const sanitized = sanitizeLibraryReadMarks(marks);
-    if (Object.keys(sanitized).length > 0) {
-      libraries[normalizeLibraryPathKey(root)] = sanitized;
-    }
-  }
-  return { version: READ_MARKS_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryReadMarks>({
+    storageKey: READ_MARKS_STORAGE_KEY,
+    version: READ_MARKS_VERSION,
+    sanitizeLibrary: (raw) => {
+      const sanitized = sanitizeLibraryReadMarks(raw);
+      return Object.keys(sanitized).length > 0 ? sanitized : null;
+    },
+    // Equivalent spellings of one library union instead of overwriting;
+    // the newest stamp per document wins.
+    mergeLibrary: (existing, incoming) => {
+      const merged: LibraryReadMarks = { ...existing };
+      for (const [path, markedAt] of Object.entries(incoming)) {
+        const current = merged[path];
+        if (current === undefined || markedAt >= current) merged[path] = markedAt;
+      }
+      return merged;
+    },
+  });
 }
 
 function saveEnvelope(envelope: MarksEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(READ_MARKS_STORAGE_KEY, JSON.stringify(envelope));
-  } catch {
-    // 配额/隐私模式只丢已阅标记，不影响打开书库。
-  }
+  saveLibraryEnvelope(READ_MARKS_STORAGE_KEY, envelope);
 }
 
 export function readReadMarks(libraryRoot: string): LibraryReadMarks {
   if (!libraryRoot.trim()) return {};
-  return loadEnvelope().libraries[normalizeLibraryPathKey(libraryRoot)] ?? {};
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)] ?? {};
 }
 
 export function writeReadMarks(libraryRoot: string, marks: LibraryReadMarks): void {
   if (!libraryRoot.trim()) return;
   const envelope = loadEnvelope();
-  const libKey = normalizeLibraryPathKey(libraryRoot);
+  const libKey = normalizeLibraryKey(libraryRoot);
   const cleaned = sanitizeLibraryReadMarks(marks);
   if (Object.keys(cleaned).length === 0) delete envelope.libraries[libKey];
   else envelope.libraries[libKey] = cleaned;

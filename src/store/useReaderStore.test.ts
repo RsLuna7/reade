@@ -58,7 +58,7 @@ describe("reading settings", () => {
     backendMocks.clearConversionCache.mockReset().mockResolvedValue(undefined);
     backendMocks.openLibrary
       .mockReset()
-      .mockImplementation(async (rootPath) => ({ rootPath, documents: [] }));
+      .mockImplementation(async (rootPath) => ({ rootPath, rootKey: rootPath, documents: [] }));
     backendMocks.readDocument.mockReset().mockImplementation(async (relativePath) => ({ kind: "markdown", relativePath, markdown: "# Test" }));
     backendMocks.retryDocumentIndex.mockReset().mockResolvedValue(undefined);
     backendMocks.searchDocuments.mockReset().mockResolvedValue([]);
@@ -223,13 +223,36 @@ describe("reading settings", () => {
 
   it("applies background index status without replacing the open PDF", () => {
     useReaderStore.setState({
+      snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents: [] },
       documents: [{ relativePath: "paper.pdf", title: "paper", size: 10, modified: 1, format: "pdf", indexStatus: "indexing", indexError: null }],
       currentPath: "paper.pdf",
       currentContent: { kind: "pdf", relativePath: "paper.pdf", size: 10, indexStatus: "indexing", indexError: null },
     });
-    useReaderStore.getState().applyDocumentIndexStatus({ relativePath: "paper.pdf", title: "Paper title", status: "partial", error: "第 3 页缺少文本" });
+    useReaderStore.getState().applyDocumentIndexStatus({ libraryRoot: "D:/library", relativePath: "paper.pdf", title: "Paper title", status: "partial", error: "第 3 页缺少文本" });
     expect(useReaderStore.getState().documents[0]).toMatchObject({ title: "Paper title", indexStatus: "partial" });
     expect(useReaderStore.getState().currentContent).toMatchObject({ kind: "pdf", indexStatus: "partial", indexError: "第 3 页缺少文本" });
+  });
+
+  it("drops index events that belong to a previously open library (D02)", () => {
+    // A→B switch: B is open, but a late event from A arrives for the
+    // same-named document. B's state must not change.
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library-b", rootKey: "D:/library-b", documents: [] },
+      documents: [{ relativePath: "same-name.md", title: "B title", size: 1, modified: 1, format: "markdown", indexStatus: "pending", indexError: null }],
+    });
+    useReaderStore.getState().applyDocumentIndexStatus({ libraryRoot: "D:/library-a", relativePath: "same-name.md", title: "A title", status: "ready", error: null });
+    expect(useReaderStore.getState().documents[0]).toMatchObject({ title: "B title", indexStatus: "pending" });
+  });
+
+  it("drops index progress that belongs to a previously open library (D02)", () => {
+    useReaderStore.setState({
+      snapshot: { rootPath: "D:/library-b", rootKey: "D:/library-b", documents: [] },
+      indexProgress: null,
+    });
+    useReaderStore.getState().setIndexProgress({ libraryRoot: "D:/library-a", total: 5, completed: 2, ready: 2, partial: 0, failed: 0 });
+    expect(useReaderStore.getState().indexProgress).toBeNull();
+    useReaderStore.getState().setIndexProgress({ libraryRoot: "D:/library-b", total: 5, completed: 2, ready: 2, partial: 0, failed: 0 });
+    expect(useReaderStore.getState().indexProgress).toMatchObject({ libraryRoot: "D:/library-b", completed: 2 });
   });
 
   it("derives the first-run motion level from the system preference", () => {
@@ -542,7 +565,7 @@ describe("reading settings", () => {
     useReaderStore.setState({
       documents: [{ relativePath: "paper.pdf", title: "paper", size: 10, modified: 1, format: "pdf", indexStatus: "ready", indexError: null }],
       currentContent: { kind: "pdf", relativePath: "paper.pdf", size: 10, indexStatus: "ready", indexError: null },
-      indexProgress: { total: 1, completed: 1, ready: 1, partial: 0, failed: 0 },
+      indexProgress: { libraryRoot: "D:/library", total: 1, completed: 1, ready: 1, partial: 0, failed: 0 },
     });
 
     await expect(useReaderStore.getState().clearDocumentCache()).resolves.toBe(true);
@@ -1084,7 +1107,7 @@ describe("reading settings", () => {
         }),
     );
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library-a", documents: [] },
+      snapshot: { rootPath: "D:/library-a", rootKey: "D:/library-a", documents: [] },
       documents: [],
       currentPath: null,
       currentContent: null,
@@ -1111,7 +1134,7 @@ describe("reading settings", () => {
         }),
     );
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library-a", documents: [] },
+      snapshot: { rootPath: "D:/library-a", rootKey: "D:/library-a", documents: [] },
       documents: [],
       searchQuery: "old",
       searchResults: [],
@@ -1152,7 +1175,7 @@ describe("reading settings", () => {
         }),
     );
     useReaderStore.setState({
-      snapshot: { rootPath: "D:/library-a", documents: [] },
+      snapshot: { rootPath: "D:/library-a", rootKey: "D:/library-a", documents: [] },
       documents: [],
       error: null,
     });
@@ -1178,7 +1201,7 @@ describe("navigation history (plan-nav-history)", () => {
   beforeEach(() => {
     backendMocks.openLibrary
       .mockReset()
-      .mockImplementation(async (rootPath) => ({ rootPath, documents: [] }));
+      .mockImplementation(async (rootPath) => ({ rootPath, rootKey: rootPath, documents: [] }));
     useReaderStore.setState({
       navHistory: { back: [], forward: [] },
       expandedPaths: [],
@@ -1228,6 +1251,7 @@ describe("navigation history (plan-nav-history)", () => {
       .mockImplementationOnce(async () => slow)
       .mockImplementationOnce(async (rootPath) => ({
         rootPath,
+        rootKey: rootPath,
         documents: [
           {
             relativePath: "fast.md",
@@ -1247,6 +1271,7 @@ describe("navigation history (plan-nav-history)", () => {
 
     resolveSlow?.({
       rootPath: "D:/slow-library",
+      rootKey: "D:/slow-library",
       documents: [
         {
           relativePath: "slow.md",
@@ -1292,6 +1317,7 @@ describe("document tree layout", () => {
   beforeEach(() => {
     backendMocks.openLibrary.mockReset().mockImplementation(async (rootPath) => ({
       rootPath,
+      rootKey: rootPath,
       documents,
     }));
     useReaderStore.setState({
@@ -1335,6 +1361,7 @@ describe("document read marks", () => {
   beforeEach(() => {
     backendMocks.openLibrary.mockReset().mockImplementation(async (rootPath) => ({
       rootPath,
+      rootKey: rootPath,
       documents,
     }));
     useReaderStore.setState({

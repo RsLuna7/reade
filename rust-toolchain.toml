@@ -1,0 +1,7 @@
+# 固定 D00 已验证的 Rust 工具链（2026-09-05，rustc 1.94.0）。
+# cargo 从调用目录向上查找本文件，因此置于仓库根（CI 从根目录以
+# --manifest-path 调用）。本地与 CI 保持一致；升级需走显式验证。
+[toolchain]
+channel = "1.94.0"
+profile = "minimal"
+components = ["rustfmt", "clippy"]

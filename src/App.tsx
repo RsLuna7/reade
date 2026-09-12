@@ -8,19 +8,18 @@ import {
   useState,
   Suspense,
   type CSSProperties,
-  type ChangeEvent,
   type KeyboardEvent as ReactKeyboardEvent,
   type PointerEvent as ReactPointerEvent,
 } from "react";
 import {
-  AlertCircle,
+  FolderOpen,
   ArrowLeft,
   ArrowRight,
   BarChart3,
-  BookOpen,
+
   Clock3,
   Columns2,
-  FolderOpen,
+
   FolderPlus,
   Globe2,
   HardDrive,
@@ -30,10 +29,9 @@ import {
   ListTree,
   Moon,
   RefreshCw,
-  RotateCcw,
   Search,
   Settings2,
-  ShieldCheck,
+
   Sun,
   Type,
   X,
@@ -41,10 +39,8 @@ import {
 import {
   getThemeColor,
   getThemeSeriesLabel,
-  SERIES_FONT_PRESET,
   THEME_META,
   THEME_SERIES,
-  type ThemeSeriesId,
 } from "./lib/themes";
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
@@ -52,6 +48,12 @@ import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
 import { BookshelfView } from "./components/BookshelfView";
 import { BrandCompanion } from "./components/BrandCompanion";
 import { DocumentTree } from "./components/DocumentTree";
+import { MotionNotice } from "./components/MotionNotice";
+import { LocalDataHealthNotice } from "./components/LocalDataHealthNotice";
+import { ReadingSettingsPanel, ThemeStylePicker } from "./components/ReadingSettingsPanel";
+import { SidePanel, type SidePanelTab } from "./components/SidePanel";
+import { TocNavigation } from "./components/TocNavigation";
+import { Welcome } from "./components/WelcomeView";
 import { EpubReader, epubChapterTocId } from "./components/EpubReader";
 import { buildLibraryStatusDetail } from "./lib/libraryStatus";
 // 主题墨水扩散(plan-theme-ink-transition):点击处理器写入一次性
@@ -78,9 +80,11 @@ import {
   listDocumentFingerprints,
   listReadingSessions,
   listReviewQueue,
+  approveWindowClose,
   onDocumentIndexStatus,
   onLibraryChanged,
   onLibraryIndexProgress,
+  onWindowCloseRequested,
   openExternalLink,
   pickAnnotationImportFile,
   probeLibraryPath,
@@ -91,6 +95,7 @@ import {
   recordReadingSession,
   saveAnnotationExportFile,
   searchAnnotations,
+  startReadingSession,
   type Annotation,
   type AnnotationColor,
   type CollectionSummary,
@@ -111,12 +116,13 @@ import { canNavBack, canNavForward, type NavLocation } from "./lib/navHistory";
 // 最近书库 MRU(plan-library-mru):localStorage 纯函数,打开动作仍走
 // openLibrary 的完整校验边界。
 import {
-  formatLastOpened,
+
   migrateLibraryMru,
   normalizeLibraryPathKey,
   removeLibraryMru,
   upsertLibraryMru,
   type LibraryMruEntry,
+  formatLastOpened,
 } from "./lib/libraryMru";
 import { RELATED_MIN_SELECTION_CHARS } from "./lib/relatedFragments";
 import { RelatedPassagesPopover, type RelatedPassagesStatus } from "./components/RelatedPassages";
@@ -128,6 +134,7 @@ import { useHoverPreview } from "./lib/useHoverPreview";
 import { FindBar } from "./components/FindBar";
 import { ScrollMap } from "./components/ScrollMap";
 import { useDocumentFind } from "./lib/useDocumentFind";
+import { useReaderHotkeys } from "./lib/useReaderHotkeys";
 import {
   buildScrollMapMarks,
   collectAnnotationScrollPoints,
@@ -135,7 +142,7 @@ import {
   collectSearchScrollPoints,
   type ScrollMapMark,
 } from "./lib/scrollMap";
-import { rangeForFindMatch } from "./lib/documentFindAdapters";
+import { rangesForFindMatches } from "./lib/documentFindAdapters";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
@@ -168,12 +175,10 @@ import { RereadBanner } from "./components/RereadBanner";
 // 竖排模式(plan-vertical-writing §8):每文档记忆与纯判定在 lib,
 // App 负责激活条件、滚轮换轴与禁用矩阵接线。
 import {
-  VERTICAL_DISABLED_FEATURES,
   verticalScrollRatio,
   verticalWritingUnavailableReason,
 } from "./lib/verticalWriting";
 import {
-  ANNOTATION_COLOR_NAME_MAX_CHARS,
   buildTextIndex,
   clearAnnotationMarks,
   collectElementText,
@@ -187,6 +192,7 @@ import {
 import {
   applyRelocatedAnnotation,
   captureRelocatedSelection,
+  collectRelocationRoots,
   findRelocationRange,
   isRelocatableAnnotation,
   type QuoteBearingLocator,
@@ -225,8 +231,6 @@ import {
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
 import {
-  ANNOTATION_TONES,
-  ANNOTATION_TONE_META,
   legacyColorToTone,
   toneToLegacyColor,
 } from "./lib/annotationModel";
@@ -285,14 +289,9 @@ import {
   type ReadNextSuggestion,
 } from "./lib/readNext";
 import { documentTreeName } from "./lib/tree";
+import { decodePath, fileName, formatFileSize, formatModified, transferDateStamp } from "./lib/displayFormat";
+import { useMediaQuery } from "./lib/useMediaQuery";
 import { buildTocHeat, type TocHeatResult } from "./lib/tocHeat";
-import {
-  findTocScrollParent,
-  measureTocIndicator,
-  scrollTocLinkIntoView,
-  tocScrollBehaviorFromMotion,
-  type TocIndicatorBox,
-} from "./lib/tocActiveIndicator";
 import { buildWebRouteUrl, parseWebRoute } from "./lib/webRouting";
 // Web 段落分享深链(plan-web-text-deeplink):归一定位纯函数在 lib,
 // 高亮复用 CSS Custom Highlight(零 DOM 侵入,与标注 mark 分开)。
@@ -314,28 +313,17 @@ import {
   createWheelSpeedController,
   isDefaultWheelSpeed,
   scaleWheelDelta,
-  WHEEL_SPEED_MAX,
-  WHEEL_SPEED_MIN,
-  WHEEL_SPEED_STEP,
   wheelDeltaPixels,
 } from "./lib/readerWheelSpeed";
 import { scrollContainerByRatio, scrollElementWithinContainer, scrollToOffsetWithinElement } from "./lib/scroll";
 import {
-  READER_CJK_FONTS,
-  READER_FONT_PAIRS,
-  READER_LATIN_FONTS,
   loadResolvedReaderFonts,
   headingWeightLadder,
   resolveReaderFontSelection,
-  type ReaderFontId,
-  type ReaderFontPairId,
 } from "./lib/readerFonts";
 import {
   CONTENT_WIDTH_MAX,
-  CONTENT_WIDTH_MIN,
   useReaderStore,
-  type ReaderFontFamily,
-  type ReaderMotionLevel,
 } from "./store/useReaderStore";
 import { cancelMotion, runMotion } from "./lib/motion";
 import type { PdfPagePosition, PdfReaderHandle } from "./components/PdfReader";
@@ -363,259 +351,6 @@ const ReviewView = lazy(() => import("./components/ReviewView").then((module) =>
 const AnnotationHubView = lazy(() => import("./components/AnnotationHubView").then((module) => ({ default: module.AnnotationHubView })));
 const BookDigestView = lazy(() => import("./components/BookDigestView").then((module) => ({ default: module.BookDigestView })));
 
-function useMediaQuery(query: string): boolean {
-  const [matches, setMatches] = useState(() =>
-    typeof window !== "undefined" && typeof window.matchMedia === "function"
-      ? window.matchMedia(query).matches
-      : false,
-  );
-
-  useEffect(() => {
-    if (typeof window.matchMedia !== "function") return;
-    const media = window.matchMedia(query);
-    const update = () => setMatches(media.matches);
-    update();
-    media.addEventListener?.("change", update);
-    return () => media.removeEventListener?.("change", update);
-  }, [query]);
-
-  return matches;
-}
-
-function fileName(path: string): string {
-  return path.split(/[\\/]/).filter(Boolean).pop() ?? path;
-}
-
-/** 本地日期戳(YYYYMMDD),用于导出文件的默认文件名。 */
-function transferDateStamp(now = new Date()): string {
-  const pad = (value: number) => String(value).padStart(2, "0");
-  return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}`;
-}
-
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KiB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MiB`;
-}
-
-function formatModified(value: number): string {
-  const milliseconds = value < 10_000_000_000 ? value * 1000 : value;
-  const date = new Date(milliseconds);
-  if (Number.isNaN(date.getTime())) return "修改时间未知";
-  return new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  }).format(date);
-}
-
-function decodePath(value: string): string {
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-/**
- * Search roots for the §5.6 relocate pass, matching where the annotation's
- * quote could live. PDF roots are ordered by page proximity to the stored
- * page so the nearest rendered occurrence wins.
- */
-function collectRelocationRoots(
-  article: HTMLElement,
-  locator: QuoteBearingLocator,
-): HTMLElement[] {
-  if (locator.kind === "markdown") {
-    const root = article.querySelector<HTMLElement>(".markdown-body");
-    return root ? [root] : [];
-  }
-  if (locator.kind === "epub") {
-    const root = article.querySelector<HTMLElement>(".epub-reader");
-    return root ? [root] : [];
-  }
-  const pageSelector = locator.view === "reading" ? ".pdf-reading-page" : ".pdf-page";
-  const entries: Array<{ page: number; root: HTMLElement }> = [];
-  for (const page of Array.from(article.querySelectorAll<HTMLElement>(pageSelector))) {
-    const root =
-      locator.view === "reading"
-        ? page.querySelector<HTMLElement>(".markdown-body")
-        : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer");
-    if (!root || !root.textContent?.trim()) continue;
-    const pageNumber = Number(page.dataset.pageNumber);
-    entries.push({ page: Number.isFinite(pageNumber) ? pageNumber : 0, root });
-  }
-  entries.sort(
-    (a, b) => Math.abs(a.page - locator.page) - Math.abs(b.page - locator.page),
-  );
-  return entries.map((entry) => entry.root);
-}
-
-/** 欢迎页"最近打开"列表（plan-library-mru §2.2）：桌面专属。 */
-function WelcomeRecentLibraries({
-  entries,
-  unavailableKeys,
-  onOpen,
-  onRemove,
-}: {
-  entries: LibraryMruEntry[];
-  unavailableKeys: ReadonlySet<string>;
-  onOpen: (entry: LibraryMruEntry) => void;
-  onRemove: (path: string) => void;
-}) {
-  if (entries.length === 0) return null;
-  return (
-    <div className="welcome-recent">
-      <p className="welcome-recent-title" id="welcome-recent-title">
-        最近打开
-      </p>
-      <ul className="welcome-recent-list" aria-labelledby="welcome-recent-title">
-        {entries.map((entry) => {
-          const missing = unavailableKeys.has(normalizeLibraryPathKey(entry.path));
-          const meta = [
-            entry.documentCount !== null ? `${entry.documentCount.toLocaleString()} 篇` : null,
-            formatLastOpened(entry.lastOpenedAt),
-          ]
-            .filter(Boolean)
-            .join(" · ");
-          return (
-            <li
-              className={`welcome-recent-item${missing ? " welcome-recent-item--missing" : ""}`}
-              key={normalizeLibraryPathKey(entry.path)}
-            >
-              <button
-                className="welcome-recent-open"
-                type="button"
-                disabled={missing}
-                title={missing ? "路径不可访问" : entry.path}
-                onClick={() => onOpen(entry)}
-              >
-                <span className="welcome-recent-name">{entry.title}</span>
-                <span className="welcome-recent-path">{entry.path}</span>
-                {(missing || meta) && (
-                  <span className="welcome-recent-meta">
-                    {missing ? "路径不可访问" : meta}
-                  </span>
-                )}
-              </button>
-              <button
-                className="icon-button welcome-recent-remove"
-                type="button"
-                aria-label={`从最近书库中移除 ${entry.title}`}
-                title="从列表中移除"
-                onClick={() => onRemove(entry.path)}
-              >
-                <X size={14} aria-hidden="true" />
-              </button>
-            </li>
-          );
-        })}
-      </ul>
-    </div>
-  );
-}
-
-function Welcome({
-  hasLibrary,
-  documentCount,
-  onOpen,
-  isWeb,
-  recentLibraries = [],
-  unavailableKeys = new Set<string>(),
-  onOpenRecent,
-  onRemoveRecent,
-}: {
-  hasLibrary: boolean;
-  documentCount: number;
-  onOpen: () => void;
-  isWeb: boolean;
-  recentLibraries?: LibraryMruEntry[];
-  unavailableKeys?: ReadonlySet<string>;
-  onOpenRecent?: (entry: LibraryMruEntry) => void;
-  onRemoveRecent?: (path: string) => void;
-}) {
-  return (
-    <section className="welcome" aria-labelledby="welcome-title">
-      <div className="welcome-card">
-        <div className="welcome-eyebrow">
-          {isWeb ? "Published reading" : "Local-first reading"}
-        </div>
-        <h1 id="welcome-title">
-          {hasLibrary
-            ? "文档库已经就绪。"
-            : isWeb
-              ? "正在打开在线文档。"
-              : "把屏幕，重新留给文字。"}
-        </h1>
-        <p className="welcome-lead">
-          {hasLibrary
-            ? documentCount > 0
-              ? `已发现 ${documentCount.toLocaleString()} 篇 Markdown 文档，正在打开第一篇。`
-              : "这个文件夹中暂时没有 Markdown 文档，可以换一个文件夹继续。"
-            : isWeb
-              ? "Reade Web 从 GitHub Pages 按需读取公开 Markdown，并保留桌面版的排版、目录、检索与安全渲染体验。"
-              : "Reade 专注本地长文的阅读体验。选择一个文件夹，即可在不上传内容、不依赖网络的前提下浏览、检索与阅读。"}
-        </p>
-        <div className="welcome-actions">
-          <button className="primary-button" type="button" onClick={onOpen}>
-            <FolderOpen size={17} aria-hidden="true" />
-            {isWeb
-              ? "重新加载在线文档"
-              : hasLibrary
-                ? "更换文档库"
-                : "选择文档文件夹"}
-          </button>
-          <span
-            className="secondary-button"
-            aria-label={isWeb ? "由 GitHub Pages 发布" : "快捷键 Control O"}
-          >
-            {isWeb ? "GitHub Pages" : "Ctrl + O"}
-          </span>
-        </div>
-        {!isWeb && onOpenRecent && onRemoveRecent && (
-          <WelcomeRecentLibraries
-            entries={recentLibraries}
-            unavailableKeys={unavailableKeys}
-            onOpen={onOpenRecent}
-            onRemove={onRemoveRecent}
-          />
-        )}
-        <div className="welcome-features" aria-label="核心能力">
-          <div className="welcome-feature">
-            <span className="welcome-feature-icon">
-              <BookOpen size={15} aria-hidden="true" />
-            </span>
-            <strong>长文优先</strong>
-            <p>稳定版心、章节目录与阅读进度，让技术文档也有书页般的节奏。</p>
-          </div>
-          <div className="welcome-feature">
-            <span className="welcome-feature-icon">
-              <Search size={15} aria-hidden="true" />
-            </span>
-            <strong>{isWeb ? "静态检索" : "本地检索"}</strong>
-            <p>
-              {isWeb
-                ? "搜索数据随站点构建生成，浏览器按需加载并快速定位标题和正文。"
-                : "索引留在电脑中，快速定位大型文档库里的标题和正文。"}
-            </p>
-          </div>
-          <div className="welcome-feature">
-            <span className="welcome-feature-icon">
-              <ShieldCheck size={15} aria-hidden="true" />
-            </span>
-            <strong>默认安全</strong>
-            <p>不执行原始 HTML；危险协议和越界资源默认拦截。</p>
-          </div>
-        </div>
-      </div>
-    </section>
-  );
-}
-
-/**
- * 侧栏书库名点击弹出的最近书库菜单（plan-library-mru §2.3，MR-D3）。
- * 打开动作复用 openLibrary 的全部校验；"选择新文件夹…"直达原对话框。
- */
 function LibrarySwitcherPopover({
   entries,
   currentKey,
@@ -706,1094 +441,8 @@ function LibrarySwitcherPopover({
   );
 }
 
-export function MotionNotice({
-  id,
-  message,
-  kind = "status",
-  motionLevel,
-  autoDismiss = false,
-  actionLabel,
-  onAction,
-  onClose,
-}: {
-  id: number | string;
-  message: string;
-  kind?: "status" | "error";
-  motionLevel: ReaderMotionLevel;
-  autoDismiss?: boolean;
-  actionLabel?: string;
-  onAction?: () => void;
-  onClose: () => void;
-}) {
-  const ref = useRef<HTMLDivElement>(null);
-  const closingRef = useRef(false);
 
-  const closeWithMotion = useCallback(() => {
-    if (closingRef.current) return;
-    closingRef.current = true;
-    const element = ref.current;
-    if (!element || motionLevel === "off") {
-      onClose();
-      return;
-    }
-    const scale = motionLevel === "full" ? 0.98 : 0.99;
-    const animation = runMotion(
-      element,
-      "notice-exit",
-      [
-        { opacity: 1, transform: "scale(1)" },
-        { opacity: 0, transform: `scale(${scale})` },
-      ],
-      {
-        duration: motionLevel === "full" ? 220 : 180,
-        easing: "cubic-bezier(0.4, 0, 1, 1)",
-        fill: "forwards",
-      },
-      motionLevel,
-    );
-    if (!animation) {
-      onClose();
-      return;
-    }
-    void animation.finished.then(onClose).catch(() => undefined);
-  }, [motionLevel, onClose]);
-
-  useEffect(() => {
-    const element = ref.current;
-    if (!element) return;
-    closingRef.current = false;
-    const scale = motionLevel === "full" ? 0.98 : 0.99;
-    runMotion(
-      element,
-      "notice-enter",
-      [
-        { opacity: 0, transform: `scale(${scale})` },
-        { opacity: 1, transform: "scale(1)" },
-      ],
-      {
-        duration: motionLevel === "full" ? 220 : 180,
-        easing: "cubic-bezier(0.2, 0.8, 0.2, 1)",
-      },
-      motionLevel,
-    );
-    return () => cancelMotion(element);
-  }, [id, motionLevel]);
-
-  useEffect(() => {
-    if (!autoDismiss) return;
-    const timer = window.setTimeout(closeWithMotion, 4200);
-    return () => window.clearTimeout(timer);
-  }, [autoDismiss, closeWithMotion, id]);
-
-  return (
-    <div ref={ref} className={`notice${kind === "error" ? " error" : ""}`} role={kind === "error" ? "alert" : "status"}>
-      {kind === "error" ? <AlertCircle size={17} aria-hidden="true" /> : <ShieldCheck size={17} aria-hidden="true" />}
-      <span>{message}</span>
-      {onAction && actionLabel && (
-        <button
-          className="notice-action"
-          type="button"
-          onClick={() => {
-            onAction();
-            closeWithMotion();
-          }}
-        >
-          {actionLabel}
-        </button>
-      )}
-      {kind === "error" && (
-        <button className="icon-button" type="button" onClick={closeWithMotion} aria-label="关闭错误提示">
-          <X size={14} aria-hidden="true" />
-        </button>
-      )}
-    </div>
-  );
-}
-
-export function ReadingSettingsPanel({
-  open,
-  onClose,
-  onNotice,
-  focusUnavailableReason = null,
-  verticalUnavailableReason = null,
-  isWeb = IS_WEB_RUNTIME,
-}: {
-  open: boolean;
-  onClose: () => void;
-  onNotice: (message: string) => void;
-  /** 聚焦模式在当前内容不适用的原因(如 PDF 原版式);null = 可用。 */
-  focusUnavailableReason?: string | null;
-  /** 竖排开关对当前文档不可用的原因(如 PDF/mdx);null = 可用。 */
-  verticalUnavailableReason?: string | null;
-  /** Explicit runtime seam keeps desktop-only controls independently testable. */
-  isWeb?: boolean;
-}) {
-  const settings = useReaderStore((state) => state.readingSettings);
-  const update = useReaderStore((state) => state.updateReadingSettings);
-  const motionLevel = useReaderStore((state) => state.motionLevel);
-  const setMotionLevel = useReaderStore((state) => state.setMotionLevel);
-  const fuzzyAnnotationAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
-  const setFuzzyAnnotationAnchoring = useReaderStore(
-    (state) => state.setFuzzyAnnotationAnchoring,
-  );
-  const allowRemoteImages = useReaderStore((state) => state.allowRemoteImages);
-  const setAllowRemoteImages = useReaderStore((state) => state.setAllowRemoteImages);
-  const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
-  const setShowHighlightCaret = useReaderStore((state) => state.setShowHighlightCaret);
-  const showScrollMap = useReaderStore((state) => state.showScrollMap);
-  const setShowScrollMap = useReaderStore((state) => state.setShowScrollMap);
-  const focusSpotlight = useReaderStore((state) => state.focusSpotlight);
-  const setFocusSpotlight = useReaderStore((state) => state.setFocusSpotlight);
-  const typewriterScroll = useReaderStore((state) => state.typewriterScroll);
-  const setTypewriterScroll = useReaderStore((state) => state.setTypewriterScroll);
-  const readingRuler = useReaderStore((state) => state.readingRuler);
-  const setReadingRuler = useReaderStore((state) => state.setReadingRuler);
-  const autoPaceEnabled = useReaderStore((state) => state.autoPaceEnabled);
-  const setAutoPaceEnabled = useReaderStore((state) => state.setAutoPaceEnabled);
-  const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
-  const setReadNextEnabled = useReaderStore((state) => state.setReadNextEnabled);
-  const verticalWriting = useReaderStore((state) => state.verticalWriting);
-  const setVerticalWriting = useReaderStore((state) => state.setVerticalWriting);
-  const annotationColorNames = useReaderStore((state) => state.annotationColorNames);
-  const setAnnotationColorName = useReaderStore((state) => state.setAnnotationColorName);
-  const resetAnnotationColorNames = useReaderStore(
-    (state) => state.resetAnnotationColorNames,
-  );
-  const resetReaderPreferences = useReaderStore((state) => state.resetReaderPreferences);
-  const clearDocumentCache = useReaderStore((state) => state.clearDocumentCache);
-  const [clearingCache, setClearingCache] = useState(false);
-  // 命名输入草稿:空值回落默认只在提交(blur/Enter)时发生,而非每个键击。
-  const [colorNameDrafts, setColorNameDrafts] = useState(annotationColorNames);
-  useEffect(() => {
-    setColorNameDrafts(annotationColorNames);
-  }, [annotationColorNames]);
-
-  const numericSetting =
-    (key: "fontSize" | "lineHeight" | "contentWidth" | "paragraphSpacing" | "wheelSpeed") =>
-    (event: ChangeEvent<HTMLInputElement>) => {
-      update({ [key]: Number(event.target.value) });
-    };
-  const resolvedFontSelection = resolveReaderFontSelection(settings);
-
-  return (
-    <div
-      className="settings-popover reade-motion-panel"
-      role="dialog"
-      aria-label="阅读设置"
-      aria-hidden={!open}
-      data-open={open}
-      inert={!open}
-    >
-      <div className="settings-heading">
-        <span>阅读设置</span>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="关闭阅读设置">
-          <X size={15} aria-hidden="true" />
-        </button>
-      </div>
-
-      <label className="setting-row">
-        <span className="setting-label">
-          <span>正文字号</span>
-          <span className="setting-value">{settings.fontSize}px</span>
-        </span>
-        <input
-          type="range"
-          min="13"
-          max="26"
-          step="1"
-          value={settings.fontSize}
-          onChange={numericSetting("fontSize")}
-        />
-      </label>
-
-      <label className="setting-row">
-        <span className="setting-label">
-          <span>正文行高</span>
-          <span className="setting-value">{settings.lineHeight.toFixed(2)}</span>
-        </span>
-        <input
-          type="range"
-          min="1.4"
-          max="2.4"
-          step="0.05"
-          value={settings.lineHeight}
-          onChange={numericSetting("lineHeight")}
-        />
-      </label>
-
-      <label className="setting-row">
-        <span className="setting-label">
-          <span>最大正文宽度</span>
-          <span className="setting-value">
-            {settings.contentWidth >= CONTENT_WIDTH_MAX
-              ? "随窗口"
-              : `${settings.contentWidth}px`}
-          </span>
-        </span>
-        <input
-          type="range"
-          min={CONTENT_WIDTH_MIN}
-          max={CONTENT_WIDTH_MAX}
-          step="20"
-          value={settings.contentWidth}
-          onChange={numericSetting("contentWidth")}
-        />
-      </label>
-
-      <label className="setting-row">
-        <span className="setting-label">
-          <span>段落间距</span>
-          <span className="setting-value">{settings.paragraphSpacing.toFixed(1)}×</span>
-        </span>
-        <input
-          type="range"
-          min="0.5"
-          max="2"
-          step="0.1"
-          value={settings.paragraphSpacing}
-          onChange={numericSetting("paragraphSpacing")}
-        />
-      </label>
-
-      <label className="setting-row">
-        <span className="setting-label">
-          <span>滚轮速度</span>
-          <span className="setting-value">{settings.wheelSpeed.toFixed(1)}×</span>
-        </span>
-        <input
-          type="range"
-          min={WHEEL_SPEED_MIN}
-          max={WHEEL_SPEED_MAX}
-          step={WHEEL_SPEED_STEP}
-          value={settings.wheelSpeed}
-          onChange={numericSetting("wheelSpeed")}
-          aria-label="滚轮速度"
-        />
-      </label>
-
-      {isWeb ? (
-        <label className="setting-row">
-          <span className="setting-label">字体风格</span>
-          <select
-            className="setting-select"
-            value={settings.fontFamily}
-            onChange={(event) =>
-              update({ fontFamily: event.target.value as ReaderFontFamily })
-            }
-          >
-            <option value="system">系统均衡</option>
-            <option value="sans">清晰无衬线</option>
-            <option value="serif">书刊衬线</option>
-          </select>
-        </label>
-      ) : (
-        <fieldset className="setting-row font-setting">
-          <legend className="setting-label">中西文字体</legend>
-          <div className="font-mode-control" role="group" aria-label="字体选择模式">
-            {([
-              ["theme", "跟随主题"],
-              ["pair", "搭配预设"],
-              ["custom", "高级选择"],
-            ] as const).map(([mode, label]) => (
-              <button
-                type="button"
-                key={mode}
-                aria-pressed={settings.fontMode === mode}
-                className={settings.fontMode === mode ? "active" : undefined}
-                onClick={() => update({ fontMode: mode })}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-
-          {settings.fontMode === "theme" && (
-            <label className="font-setting-field">
-              <span>主题字体风格</span>
-              <select
-                className="setting-select"
-                value={settings.fontFamily}
-                onChange={(event) =>
-                  update({ fontFamily: event.target.value as ReaderFontFamily })
-                }
-              >
-                <option value="system">系统均衡</option>
-                <option value="sans">清晰无衬线</option>
-                <option value="serif">书刊衬线</option>
-              </select>
-            </label>
-          )}
-
-          {settings.fontMode === "pair" && (
-            <label className="font-setting-field">
-              <span>策展搭配</span>
-              <select
-                className="setting-select"
-                aria-label="字体搭配预设"
-                value={settings.fontPairId}
-                onChange={(event) =>
-                  update({
-                    fontMode: "pair",
-                    fontPairId: event.target.value as ReaderFontPairId,
-                  })
-                }
-              >
-                {READER_FONT_PAIRS.map((pair) => (
-                  <option value={pair.id} key={pair.id}>
-                    {pair.label} · {pair.description}
-                  </option>
-                ))}
-              </select>
-            </label>
-          )}
-
-          {settings.fontMode === "custom" && (
-            <div className="font-custom-grid">
-              <label className="font-setting-field">
-                <span>中文字体</span>
-                <select
-                  className="setting-select"
-                  aria-label="中文字体"
-                  value={settings.cjkFontId}
-                  onChange={(event) =>
-                    update({
-                      fontMode: "custom",
-                      cjkFontId: event.target.value as ReaderFontId,
-                    })
-                  }
-                >
-                  {READER_CJK_FONTS.map((font) => (
-                    <option value={font.id} key={font.id}>
-                      {font.label}{font.bodyRecommended ? "" : "（展示/特定方向）"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-              <label className="font-setting-field">
-                <span>西文字体</span>
-                <select
-                  className="setting-select"
-                  aria-label="西文字体"
-                  value={settings.latinFontId}
-                  onChange={(event) =>
-                    update({
-                      fontMode: "custom",
-                      latinFontId: event.target.value as ReaderFontId,
-                    })
-                  }
-                >
-                  {READER_LATIN_FONTS.map((font) => (
-                    <option value={font.id} key={font.id}>
-                      {font.label}{font.bodyRecommended ? "" : "（展示/特定方向）"}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            </div>
-          )}
-
-          <p className="font-selection-summary">当前：{resolvedFontSelection.label}</p>
-          {resolvedFontSelection.warnings.map((warning) => (
-            <p className="setting-hint font-warning" key={warning}>
-              {warning}
-            </p>
-          ))}
-          <p className="setting-hint">仅桌面版注册字体；实际只加载当前选择及正文所需字重。</p>
-        </fieldset>
-      )}
-
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">动态效果</legend>
-        <div className="motion-level-control" role="group" aria-label="动态效果级别">
-          {([
-            ["off", "关闭"],
-            ["subtle", "克制"],
-            ["full", "完整"],
-          ] as const).map(([level, label]) => (
-            <button
-              type="button"
-              key={level}
-              aria-pressed={motionLevel === level}
-              className={motionLevel === level ? "active" : undefined}
-              onClick={() => setMotionLevel(level)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">标注模糊定位</legend>
-        <div className="motion-level-control" role="group" aria-label="标注模糊定位开关">
-          {([
-            [false, "关闭"],
-            [true, "开启"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={fuzzyAnnotationAnchoring === enabled}
-              className={fuzzyAnnotationAnchoring === enabled ? "active" : undefined}
-              onClick={() => setFuzzyAnnotationAnchoring(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          文档修改后按相似度匹配失锚标注；可能把标注定位到相似但不同的文本。
-        </p>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">远程图片</legend>
-        <div className="motion-level-control" role="group" aria-label="远程图片开关">
-          {([
-            [false, "拦截"],
-            [true, "加载"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={allowRemoteImages === enabled}
-              className={allowRemoteImages === enabled ? "active" : undefined}
-              onClick={() => setAllowRemoteImages(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          默认不联网请求 Markdown 中的 HTTPS 图片；开启后仅加载 https 地址，仍拒绝 http 与危险协议。
-        </p>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">高亮角标</legend>
-        <div className="motion-level-control" role="group" aria-label="高亮角标开关">
-          {([
-            [false, "关闭"],
-            [true, "开启"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={showHighlightCaret === enabled}
-              className={showHighlightCaret === enabled ? "active" : undefined}
-              onClick={() => setShowHighlightCaret(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          在高亮标注左上角显示红色倒三角，便于扫视定位；不影响下划线标注。
-        </p>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting">
-        <legend className="setting-label">读完接着读</legend>
-        <div className="motion-level-control" role="group" aria-label="读完接着读开关">
-          {([
-            [false, "关闭"],
-            [true, "开启"],
-          ] as const).map(([enabled, label]) => (
-            <button
-              type="button"
-              key={label}
-              aria-pressed={readNextEnabled === enabled}
-              className={readNextEnabled === enabled ? "active" : undefined}
-              onClick={() => setReadNextEnabled(enabled)}
-            >
-              {label}
-            </button>
-          ))}
-        </div>
-        <p className="setting-hint">
-          滚动到文档末尾时推荐下一篇：合集顺序优先，其次同文件夹，再次互链最多的文档。
-        </p>
-      </fieldset>
-
-      <fieldset className="setting-row motion-setting focus-mode-setting">
-        <legend className="setting-label">聚焦模式</legend>
-        {([
-          ["段落聚焦", focusSpotlight, setFocusSpotlight, "focus-spotlight"],
-          ["打字机滚动", typewriterScroll, setTypewriterScroll, "typewriter-scroll"],
-          ["阅读标尺", readingRuler, setReadingRuler, "reading-ruler"],
-        ] as const).map(([label, value, setValue, key]) => (
-          <div className="focus-mode-row" key={key}>
-            <span className="focus-mode-row-label">{label}</span>
-            <div
-              className="motion-level-control"
-              role="group"
-              aria-label={`${label}开关`}
-            >
-              {([
-                [false, "关闭"],
-                [true, "开启"],
-              ] as const).map(([enabled, optionLabel]) => (
-                <button
-                  type="button"
-                  key={optionLabel}
-                  aria-pressed={value === enabled}
-                  className={value === enabled ? "active" : undefined}
-                  disabled={focusUnavailableReason !== null}
-                  onClick={() => setValue(enabled)}
-                >
-                  {optionLabel}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
-        <p className="setting-hint">
-          {focusUnavailableReason ??
-            "段落聚焦淡化当前段落以外的内容；打字机滚动把阅读行保持在视口中部；阅读标尺是跟随指针的横向色带。"}
-        </p>
-      </fieldset>
-
-      <details className="settings-advanced">
-        <summary className="settings-advanced-summary">实验 / 进阶</summary>
-
-        <fieldset className="setting-row motion-setting">
-          <legend className="setting-label">文档地图</legend>
-          <div className="motion-level-control" role="group" aria-label="文档地图开关">
-            {([
-              [false, "关闭"],
-              [true, "开启"],
-            ] as const).map(([enabled, label]) => (
-              <button
-                type="button"
-                key={label}
-                aria-pressed={showScrollMap === enabled}
-                className={showScrollMap === enabled ? "active" : undefined}
-                onClick={() => setShowScrollMap(enabled)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="setting-hint">
-            正文右缘的刻度层：标出标注三色、书签与搜索命中，点击可跳转。
-          </p>
-        </fieldset>
-
-        <fieldset className="setting-row motion-setting">
-          <legend className="setting-label">自动推进</legend>
-          <div className="motion-level-control" role="group" aria-label="自动推进开关">
-            {([
-              [false, "关闭"],
-              [true, "开启"],
-            ] as const).map(([enabled, label]) => (
-              <button
-                type="button"
-                key={label}
-                aria-pressed={autoPaceEnabled === enabled}
-                className={autoPaceEnabled === enabled ? "active" : undefined}
-                disabled={focusUnavailableReason !== null}
-                onClick={() => setAutoPaceEnabled(enabled)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="setting-hint">
-            {focusUnavailableReason ??
-              "按段停留后跳到下一段，并根据你的抢滚/回退自感应调速。"}
-          </p>
-        </fieldset>
-
-        {/* 竖排模式(plan-vertical-writing VW-D1):每文档开关,实验档。 */}
-        <fieldset className="setting-row motion-setting">
-          <legend className="setting-label">
-            竖排模式<span className="setting-badge">实验</span>
-          </legend>
-          <div className="motion-level-control" role="group" aria-label="竖排模式开关">
-            {([
-              [false, "关闭"],
-              [true, "开启"],
-            ] as const).map(([enabled, label]) => (
-              <button
-                type="button"
-                key={label}
-                aria-pressed={verticalWriting === enabled}
-                className={verticalWriting === enabled ? "active" : undefined}
-                disabled={verticalUnavailableReason !== null}
-                onClick={() => setVerticalWriting(enabled)}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="setting-hint">
-            {verticalUnavailableReason ??
-              `当前文档改为竖排（从右往左）阅读，逐文档记忆。竖排下暂停：${VERTICAL_DISABLED_FEATURES}；关闭后完全恢复。`}
-          </p>
-        </fieldset>
-      </details>
-
-      <fieldset className="setting-row color-names-setting">
-        <legend className="setting-label">颜色外观名</legend>
-        <div className="color-name-grid">
-          {ANNOTATION_TONES.map((tone) => {
-            const legacyColor = ANNOTATION_TONE_META[tone].legacyColor;
-            return (
-              <label className="color-name-row" key={tone}>
-                <span
-                  className={`annotation-tone-swatch annotation-tone-swatch--${tone}`}
-                  aria-hidden="true"
-                />
-                <input
-                  type="text"
-                  className="color-name-input"
-                  value={colorNameDrafts[legacyColor]}
-                  maxLength={ANNOTATION_COLOR_NAME_MAX_CHARS}
-                  aria-label={`${ANNOTATION_TONE_META[tone].label}的外观名`}
-                  onChange={(event) =>
-                    setColorNameDrafts((drafts) => ({
-                      ...drafts,
-                      [legacyColor]: event.target.value,
-                    }))
-                  }
-                  onBlur={(event) => setAnnotationColorName(legacyColor, event.target.value)}
-                  onKeyDown={(event) => {
-                    if (event.key === "Enter") event.currentTarget.blur();
-                  }}
-                />
-              </label>
-            );
-          })}
-        </div>
-        <p className="setting-hint">
-          命名显示在颜色选择、筛选与图例中；清空某项则恢复该色默认名。新标记只有暖砂、青灰、墨蓝三种外观。
-        </p>
-        <button
-          className="settings-reset color-names-reset"
-          type="button"
-          onClick={resetAnnotationColorNames}
-        >
-          <RotateCcw size={13} aria-hidden="true" />
-          恢复默认命名
-        </button>
-      </fieldset>
-
-      <button
-        className="settings-reset"
-        type="button"
-        onClick={resetReaderPreferences}
-      >
-        <RotateCcw size={13} aria-hidden="true" />
-        恢复默认
-      </button>
-      {!IS_WEB_RUNTIME && <button
-        className="settings-reset settings-cache-clear"
-        type="button"
-        disabled={clearingCache}
-        onClick={() => {
-          if (clearingCache) return;
-          setClearingCache(true);
-          void clearDocumentCache().then((succeeded) => {
-            if (succeeded) onNotice("文档索引缓存已清理，将在后台重新建立索引。");
-          }).finally(() => setClearingCache(false));
-        }}
-      >
-        <RotateCcw size={13} aria-hidden="true" />
-        {clearingCache ? "正在清理缓存…" : "清理文档索引缓存"}
-      </button>}
-    </div>
-  );
-}
-
-/**
- * 「界面风格」popover: one swatch tile per theme series (5.5). Selecting a tile
- * applies the series immediately, keeping the current light/dark mode; the
- * series' typography preset lands with it (D4) and a hint line explains the
- * serif preset. Reuses the settings-popover / reade-motion-panel pattern.
- */
-export function ThemeStylePicker({
-  open,
-  onClose,
-}: {
-  open: boolean;
-  onClose: () => void;
-}) {
-  const theme = useReaderStore((state) => state.theme);
-  const setThemeSeries = useReaderStore((state) => state.setThemeSeries);
-  const [hint, setHint] = useState<string | null>(null);
-  const groupRef = useRef<HTMLDivElement>(null);
-  const activeSeries = THEME_META[theme].series;
-  const mode = THEME_META[theme].mode;
-
-  useEffect(() => {
-    if (!open) setHint(null);
-  }, [open]);
-
-  const pickSeries = (series: ThemeSeriesId, anchor?: HTMLElement | null) => {
-    if (series === activeSeries) return;
-    // 墨水扩散以色卡中心为圆心(TT-D3 定稿修订);等值早退在上一行,
-    // 不会留下陈旧 origin。
-    if (anchor) {
-      const rect = anchor.getBoundingClientRect();
-      setNextThemeTransitionOrigin({
-        x: rect.left + rect.width / 2,
-        y: rect.top + rect.height / 2,
-      });
-    }
-    setThemeSeries(series);
-    const fontMode = useReaderStore.getState().readingSettings.fontMode;
-    setHint(
-      fontMode === "theme" && SERIES_FONT_PRESET[series] === "serif"
-        ? "已切换为书刊衬线，可在阅读设置中调整"
-        : null,
-    );
-  };
-
-  // Radio-group keyboard pattern: arrows cycle (with wrap) and select as they
-  // move — the instant-preview behavior of the tiles — Home/End jump.
-  const onGroupKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
-    const { key } = event;
-    if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(key)) {
-      return;
-    }
-    event.preventDefault();
-    const focused = groupRef.current?.querySelector<HTMLButtonElement>(
-      ".theme-style-tile:focus",
-    );
-    const focusedIndex = THEME_SERIES.findIndex(
-      (series) => series.id === focused?.dataset.series,
-    );
-    const currentIndex =
-      focusedIndex >= 0
-        ? focusedIndex
-        : THEME_SERIES.findIndex((series) => series.id === activeSeries);
-    let nextIndex = currentIndex;
-    if (key === "Home") nextIndex = 0;
-    else if (key === "End") nextIndex = THEME_SERIES.length - 1;
-    else {
-      const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
-      nextIndex = (currentIndex + delta + THEME_SERIES.length) % THEME_SERIES.length;
-    }
-    const nextSeries = THEME_SERIES[nextIndex].id;
-    const tile = groupRef.current?.querySelector<HTMLButtonElement>(
-      `.theme-style-tile[data-series="${nextSeries}"]`,
-    );
-    tile?.focus();
-    pickSeries(nextSeries, tile);
-  };
-
-  return (
-    <div
-      className="settings-popover reade-motion-panel theme-style-popover"
-      role="dialog"
-      aria-label="界面风格"
-      aria-hidden={!open}
-      data-open={open}
-      inert={!open}
-    >
-      <div className="settings-heading">
-        <span>界面风格</span>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="关闭界面风格">
-          <X size={15} aria-hidden="true" />
-        </button>
-      </div>
-      <div
-        ref={groupRef}
-        className="theme-style-options"
-        role="radiogroup"
-        aria-label="界面风格系列"
-        onKeyDown={onGroupKeyDown}
-      >
-        {THEME_SERIES.map((series) => {
-          const meta = THEME_META[`${series.id}-${mode}`];
-          const active = series.id === activeSeries;
-          return (
-            <button
-              key={series.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              data-series={series.id}
-              tabIndex={active ? 0 : -1}
-              className={`theme-style-tile${active ? " active" : ""}`}
-              aria-label={`${series.label}系列${active ? "（当前使用）" : ""}`}
-              onClick={(event) => pickSeries(series.id, event.currentTarget)}
-            >
-              <span className="theme-style-swatch" aria-hidden="true">
-                <i style={{ background: meta.swatch.paper }} />
-                <i style={{ background: meta.swatch.chrome }} />
-                <i style={{ background: meta.swatch.accent }} />
-              </span>
-              <span className="theme-style-name">{series.label}</span>
-            </button>
-          );
-        })}
-      </div>
-      {hint && (
-        <p className="theme-style-hint" role="status">
-          {hint}
-        </p>
-      )}
-    </div>
-  );
-}
-
-export function TocNavigation({
-  items,
-  activeId,
-  onSelect,
-  heat,
-  onSelectTop,
-  estimateLine,
-}: {
-  items: TocItem[];
-  activeId: string | null;
-  onSelect: (id: string) => void;
-  /** 方案三 T1 批注密度;不传时不渲染热力点/文首提示。 */
-  heat?: TocHeatResult | null;
-  /** 文首/失效章节说明行的跳转目标(滚动到文档顶部)。 */
-  onSelectTop?: () => void;
-  /** 阅读时间预估(plan-reading-time-estimate §3.3):目录顶部一行。 */
-  estimateLine?: string | null;
-}) {
-  const wrapRef = useRef<HTMLDivElement>(null);
-  const linkRefs = useRef(new Map<string, HTMLAnchorElement>());
-  const [indicator, setIndicator] = useState<TocIndicatorBox | null>(null);
-
-  const setLinkRef = useCallback(
-    (id: string) => (node: HTMLAnchorElement | null) => {
-      if (node) linkRefs.current.set(id, node);
-      else linkRefs.current.delete(id);
-    },
-    [],
-  );
-
-  const measureActive = useCallback(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || !activeId) {
-      setIndicator(null);
-      return null as HTMLAnchorElement | null;
-    }
-    const link = linkRefs.current.get(activeId);
-    if (!link) {
-      setIndicator(null);
-      return null;
-    }
-    setIndicator(measureTocIndicator(wrap, link));
-    return link;
-  }, [activeId]);
-
-  useLayoutEffect(() => {
-    measureActive();
-  }, [measureActive, items, heat, estimateLine]);
-
-  useLayoutEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || !activeId) return;
-    const link = linkRefs.current.get(activeId);
-    if (!link) return;
-    const scrollParent = findTocScrollParent(wrap);
-    if (!scrollParent) return;
-    scrollTocLinkIntoView(
-      scrollParent,
-      link,
-      tocScrollBehaviorFromMotion(document.documentElement.dataset.motion),
-    );
-  }, [activeId]);
-
-  useEffect(() => {
-    const wrap = wrapRef.current;
-    if (!wrap || typeof ResizeObserver === "undefined") return;
-    const observer = new ResizeObserver(() => {
-      measureActive();
-    });
-    observer.observe(wrap);
-    return () => observer.disconnect();
-  }, [measureActive]);
-
-  return (
-    <div className="toc-section">
-      {estimateLine ? <p className="toc-estimate">{estimateLine}</p> : null}
-      {heat && heat.unassignedCount > 0 ? (
-        <button type="button" className="toc-unassigned" onClick={onSelectTop}>
-          文首或已变更章节另有 {heat.unassignedCount} 条标注
-        </button>
-      ) : null}
-      {items.length ? (
-        <div className="toc-list-wrap" ref={wrapRef}>
-          {indicator ? (
-            <div
-              className="toc-active-indicator"
-              style={{ top: indicator.top, height: indicator.height }}
-              aria-hidden="true"
-            />
-          ) : null}
-          <ol className="toc-list">
-            {items.map((item, index) => {
-              const heatEntry = heat?.byId.get(item.id);
-              const heatLabel = heatEntry ? `本节 ${heatEntry.count} 条标注` : null;
-              return (
-                <li key={`${item.id}:${index}`}>
-                  <a
-                    ref={setLinkRef(item.id)}
-                    className={`toc-link${activeId === item.id ? " active" : ""}${
-                      heatEntry ? " has-heat" : ""
-                    }`}
-                    style={{ "--toc-depth": item.level } as CSSProperties}
-                    href={`#${item.id}`}
-                    aria-current={activeId === item.id ? "location" : undefined}
-                    title={heatLabel ? `${item.title}（${heatLabel}）` : item.title}
-                    aria-label={heatLabel ? `${item.title}，${heatLabel}` : undefined}
-                    onClick={(event) => {
-                      event.preventDefault();
-                      onSelect(item.id);
-                    }}
-                  >
-                    {item.title}
-                    {heatEntry ? (
-                      <span
-                        className="toc-heat"
-                        data-level={heatEntry.level}
-                        aria-hidden="true"
-                      />
-                    ) : null}
-                  </a>
-                </li>
-              );
-            })}
-          </ol>
-        </div>
-      ) : (
-        <p className="toc-empty">这篇文档没有可导航的标题。</p>
-      )}
-    </div>
-  );
-}
-
-type SidePanelTab = "toc" | "annotations";
-
-function SidePanel({
-  tab,
-  onTabChange,
-  tocItems,
-  activeId,
-  onSelectHeading,
-  tocHeat,
-  onSelectDocumentTop,
-  tocEstimateLine,
-  annotations,
-  brokenIds,
-  approximateIds,
-  geometricFallbackIds,
-  annotationsLoading,
-  annotationSort,
-  onAnnotationSortChange,
-  onExportAnnotations,
-  onSelectAnnotation,
-  onDeleteAnnotation,
-  onEditAnnotationNote,
-  onChangeAnnotationColor,
-  onRelocateAnnotation,
-  onGenerateAnnotationCard,
-  onCompileAnnotationsDigest,
-  onClearAnnotations,
-  annotationsPanel,
-  onOpenLibraryHub,
-}: {
-  tab: SidePanelTab;
-  onTabChange: (tab: SidePanelTab) => void;
-  tocItems: TocItem[];
-  activeId: string | null;
-  onSelectHeading: (id: string) => void;
-  tocHeat?: TocHeatResult | null;
-  onSelectDocumentTop?: () => void;
-  tocEstimateLine?: string | null;
-  annotations: Annotation[];
-  brokenIds: Set<string>;
-  approximateIds: Set<string>;
-  geometricFallbackIds: Set<string>;
-  annotationsLoading: boolean;
-  annotationSort: AnnotationListSort;
-  onAnnotationSortChange: (sort: AnnotationListSort) => void;
-  onExportAnnotations: () => void;
-  onSelectAnnotation: (annotation: Annotation) => void;
-  onDeleteAnnotation: (annotation: Annotation) => void;
-  onEditAnnotationNote: (annotation: Annotation) => void;
-  onChangeAnnotationColor: (annotation: Annotation, color: AnnotationColor) => void;
-  onRelocateAnnotation: (annotation: Annotation) => void;
-  onGenerateAnnotationCard?: (annotation: Annotation) => void;
-  /** 全书回顾编纂(plan-book-digest):标注 tab 工具条入口。 */
-  onCompileAnnotationsDigest?: () => void;
-  onClearAnnotations: () => void;
-  /** Chapter/page-band outline for Markdown/PDF/EPUB; honesty fallback stays AnnotationList. */
-  annotationsPanel?: React.ReactNode;
-  /** 二级入口：全屏全库摘录（命令面板亦可）。 */
-  onOpenLibraryHub?: () => void;
-}) {
-  return (
-    <div className="toc-inner">
-      <div className="side-panel-tabs" role="tablist" aria-label="目录与标注">
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "toc"}
-          className={tab === "toc" ? "active" : ""}
-          onClick={() => onTabChange("toc")}
-        >
-          目录
-        </button>
-        <button
-          type="button"
-          role="tab"
-          aria-selected={tab === "annotations"}
-          className={tab === "annotations" ? "active" : ""}
-          onClick={() => onTabChange("annotations")}
-        >
-          标注
-          {annotations.length > 0 ? <span className="side-panel-count">{annotations.length}</span> : null}
-        </button>
-      </div>
-      {tab === "toc" ? (
-        <TocNavigation
-          items={tocItems}
-          activeId={activeId}
-          onSelect={onSelectHeading}
-          heat={tocHeat}
-          onSelectTop={onSelectDocumentTop}
-          estimateLine={tocEstimateLine}
-        />
-      ) : (
-        <>
-          {onOpenLibraryHub ? (
-            <button type="button" className="annotation-hub-link side-panel-hub-link" onClick={onOpenLibraryHub}>
-              打开全库摘录
-            </button>
-          ) : null}
-          {annotationsPanel ?? (
-            <AnnotationList
-              annotations={annotations}
-              brokenIds={brokenIds}
-              approximateIds={approximateIds}
-              geometricFallbackIds={geometricFallbackIds}
-              loading={annotationsLoading}
-              sort={annotationSort}
-              onSortChange={onAnnotationSortChange}
-              onExport={onExportAnnotations}
-              onSelect={onSelectAnnotation}
-              onDelete={onDeleteAnnotation}
-              onEditNote={onEditAnnotationNote}
-              onChangeColor={onChangeAnnotationColor}
-              onRelocate={onRelocateAnnotation}
-              onGenerateCard={onGenerateAnnotationCard}
-              onCompileDigest={onCompileAnnotationsDigest}
-              onClearAll={onClearAnnotations}
-            />
-          )}
-        </>
-      )}
-    </div>
-  );
-}
+export { MotionNotice, ReadingSettingsPanel, TocNavigation };
 
 function App() {
   const snapshot = useReaderStore((state) => state.snapshot);
@@ -2116,14 +765,16 @@ function App() {
     const onWheel = (event: WheelEvent) => {
       if (!(event.ctrlKey || event.metaKey)) return;
       if (!currentPath || !currentContent) return;
+      const pdfHandle = pdfReaderHandleRef.current;
+      if (currentContent.kind === "pdf" && pdfHandle?.getMode() === "original") {
+        if (!Number.isFinite(event.deltaY) || event.deltaY === 0) return;
+        event.preventDefault();
+        pdfHandle.zoomByWheel(event.deltaY, event.deltaMode, event.clientX, event.clientY);
+        return;
+      }
       const direction = wheelZoomDirection(event.deltaY);
       if (direction === 0) return;
       event.preventDefault();
-      const pdfHandle = pdfReaderHandleRef.current;
-      if (currentContent.kind === "pdf" && pdfHandle?.getMode() === "original") {
-        pdfHandle.adjustScale(direction);
-        return;
-      }
       const currentSize = useReaderStore.getState().readingSettings.fontSize;
       const nextSize = adjustFontSize(currentSize, direction);
       if (nextSize !== currentSize) {
@@ -2141,7 +792,14 @@ function App() {
   // 阅读时长追踪:仅桌面端;窗口聚焦可见且近期有交互才计时。
   useEffect(() => {
     if (IS_WEB_RUNTIME) return;
-    const tracker = createReadingTracker({ persist: recordReadingSession });
+    const tracker = createReadingTracker({
+      persist: recordReadingSession,
+      bind: startReadingSession,
+      onPersistError: (persisted, error) => {
+        // 队列会按退避重试;这里只留下可诊断的痕迹,不打断阅读。
+        console.warn("reade: reading session save deferred", persisted.id, error);
+      },
+    });
     trackerRef.current = tracker;
     const syncWindowActive = () => {
       tracker.setWindowActive(!document.hidden && document.hasFocus());
@@ -2170,6 +828,35 @@ function App() {
       window.removeEventListener("pagehide", onPageHide);
       tracker.dispose();
       trackerRef.current = null;
+    };
+  }, []);
+
+  // 关窗协调（D05）：Rust 拦截首次关窗 → 这里有界等待统计队列清空（≤2.5s）
+  // → 放行关闭。Rust 侧另有 6s 强制关闭兜底，前端挂起不会永久阻止关窗。
+  useEffect(() => {
+    if (IS_WEB_RUNTIME) return;
+    let disposed = false;
+    let stop: (() => void) | null = null;
+    void onWindowCloseRequested(() => {
+      const tracker = trackerRef.current;
+      const boundedFlush = tracker
+        ? Promise.race([
+            tracker.flushPending(),
+            new Promise<void>((resolve) => {
+              setTimeout(resolve, 2_500);
+            }),
+          ])
+        : Promise.resolve();
+      void boundedFlush.then(() => {
+        if (!disposed) void approveWindowClose();
+      });
+    }).then((unlisten) => {
+      if (disposed) unlisten();
+      else stop = unlisten;
+    });
+    return () => {
+      disposed = true;
+      stop?.();
     };
   }, []);
 
@@ -3521,14 +2208,18 @@ function App() {
             (result) => result.relativePath === currentPath && result.locator,
           )
         : [];
-      const findPoints =
+      const findRanges =
         findOpen && findQuery.trim() && findMatches.length > 0 && findFormat
+          ? rangesForFindMatches(article, findFormat, findMatches)
+          : [];
+      const findPoints =
+        findRanges.length > 0
           ? collectFindScrollPoints(
               reader,
-              findMatches.map((match) => ({
+              findMatches.map((match, index) => ({
                 targetId: match.id,
                 label: match.quote ?? findQuery,
-                range: rangeForFindMatch(article, findFormat, match),
+                range: findRanges[index],
               })),
             )
           : [];
@@ -5403,100 +4094,7 @@ function App() {
     return () => window.clearTimeout(timer);
   }, [runSearch, searchQuery, snapshot]);
 
-  useEffect(() => {
-    const onKeyDown = (event: KeyboardEvent) => {
-      // Alt+←/→:阅读回退栈(plan-nav-history)。必须 preventDefault,
-      // 否则 WebView2/浏览器把 Alt+← 当整页 history back。
-      if (event.altKey && !event.ctrlKey && !event.metaKey && !event.shiftKey) {
-        if (event.key === "ArrowLeft") {
-          event.preventDefault();
-          handleNavBack();
-          return;
-        }
-        if (event.key === "ArrowRight") {
-          event.preventDefault();
-          handleNavForward();
-          return;
-        }
-        return;
-      }
-      if (!(event.ctrlKey || event.metaKey)) {
-        if (event.key === "Escape") {
-          if (findOpen) {
-            closeFind();
-            return;
-          }
-          if (autoPace.barOpen) {
-            autoPace.stop();
-            return;
-          }
-          if (annotationTool !== "view") {
-            setAnnotationTool("view");
-          }
-          setSettingsOpen(false);
-          setStylePickerOpen(false);
-          setAnnotationPanelOpen(false);
-          setCollectionsPopoverOpen(false);
-          setLibrarySwitcherOpen(false);
-          setCommandPaletteOpen(false);
-          setFolderDocsOpen(false);
-          setCompactTocOpen(false);
-          setMobileLibraryOpen(false);
-          setPendingSelection(null);
-          setNoteDraft(null);
-          setMarkEditor(null);
-          setQuoteCardSource(null);
-          setBookDigestOpen(false);
-          dismissReadNext();
-          closeRelatedPassages();
-          clearRelocatePreview();
-        }
-        return;
-      }
-      if (event.key.toLowerCase() === "z" && !event.shiftKey) {
-        const target = event.target;
-        if (
-          target instanceof HTMLElement &&
-          (target.tagName === "INPUT" ||
-            target.tagName === "TEXTAREA" ||
-            target.isContentEditable)
-        ) {
-          return;
-        }
-        if (!canUndo) return;
-        event.preventDefault();
-        void handleUndoAnnotation();
-        return;
-      }
-      if (event.key.toLowerCase() === "o" && !event.shiftKey && !event.altKey) {
-        if (IS_WEB_RUNTIME) return;
-        event.preventDefault();
-        void chooseAndOpenLibrary();
-      } else if (event.key.toLowerCase() === "o" && event.shiftKey && !event.altKey) {
-        event.preventDefault();
-        openFolderDocsList();
-      } else if (event.key.toLowerCase() === "k") {
-        event.preventDefault();
-        searchRef.current?.focus();
-      } else if (event.key.toLowerCase() === "p" && !event.shiftKey && !event.altKey) {
-        // WebView2/浏览器把 Ctrl+P 默认给系统打印;开与关都要拦掉。
-        event.preventDefault();
-        setCommandPaletteOpen((open) => !open);
-      } else if (event.key.toLowerCase() === "b") {
-        if (!currentPath || !currentContent) return;
-        event.preventDefault();
-        void handleCreateBookmark();
-      } else if (event.key.toLowerCase() === "f" && !event.shiftKey && !event.altKey) {
-        if (IS_WEB_RUNTIME) return;
-        const target = event.target;
-        if (target instanceof HTMLElement && target.closest(".secondary-pane")) return;
-        event.preventDefault();
-        openFind();
-      }
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [
+  useReaderHotkeys({
     canUndo,
     chooseAndOpenLibrary,
     clearRelocatePreview,
@@ -5512,11 +4110,26 @@ function App() {
     closeRelatedPassages,
     openFind,
     openFolderDocsList,
-    autoPace.barOpen,
-    autoPace.stop,
+    autoPaceBarOpen: autoPace.barOpen,
+    autoPaceStop: autoPace.stop,
     annotationTool,
     setAnnotationTool,
-  ]);
+    searchRef,
+    setSettingsOpen,
+    setStylePickerOpen,
+    setAnnotationPanelOpen,
+    setCollectionsPopoverOpen,
+    setLibrarySwitcherOpen,
+    setCommandPaletteOpen,
+    setFolderDocsOpen,
+    setCompactTocOpen,
+    setMobileLibraryOpen,
+    setPendingSelection,
+    setNoteDraft,
+    setMarkEditor,
+    setQuoteCardSource,
+    setBookDigestOpen,
+  });
 
   // Markdown 本地资产管线(主栏):去重、批量写入与失败原因都收在 hook 里。
   const {
@@ -7048,6 +5661,8 @@ function App() {
         )}
 
         {error && <MotionNotice key={`error-${error}`} id={error} message={error} kind="error" motionLevel={motionLevel} onClose={clearError} />}
+
+        <LocalDataHealthNotice onNotice={showNotice} />
 
         {notice && !error && <MotionNotice
           key={notice.id}
