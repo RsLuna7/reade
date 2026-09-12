@@ -166,6 +166,20 @@ export function BookshelfView({
   const [coverUrls, setCoverUrls] = useState<Record<string, string>>({});
   const requestedRef = useRef(new Set<string>());
   const aliveRef = useRef(true);
+  /**
+   * Library identity for in-flight cover work. Derived during render (not in
+   * an effect): a card's IntersectionObserver effect fires the first read
+   * before the parent's effects run, so an effect-declared token would mark
+   * legitimate first-mount reads as stale.
+   */
+  const libraryTokenRef = useRef({ rootPath, generation: 0 });
+  if (libraryTokenRef.current.rootPath !== rootPath) {
+    libraryTokenRef.current = { rootPath, generation: libraryTokenRef.current.generation + 1 };
+    // Child visibility effects run before this component's useEffect. Reset
+    // the dedupe set during render with the token so a same-named card in the
+    // next library can immediately issue its own request.
+    requestedRef.current = new Set();
+  }
   useEffect(() => {
     aliveRef.current = true;
     return () => {
@@ -175,12 +189,11 @@ export function BookshelfView({
 
   // 换库时清空封面状态：相对路径只对当前库有意义。
   useEffect(() => {
-    requestedRef.current = new Set();
     setCoverUrls({});
   }, [rootPath]);
 
-  const applyThumbnail = (path: string, png: string) => {
-    if (!aliveRef.current) return;
+  const applyThumbnail = (path: string, png: string, generation: number) => {
+    if (!aliveRef.current || generation !== libraryTokenRef.current.generation) return;
     setCoverUrls((current) =>
       current[path] ? current : { ...current, [path]: `data:image/png;base64,${png}` },
     );
@@ -190,44 +203,48 @@ export function BookshelfView({
     if (APP_RUNTIME === "web") return;
     if (document.format !== "pdf" && document.format !== "epub") return;
     const path = document.relativePath;
+    const generation = libraryTokenRef.current.generation;
+    const isCurrent = () => aliveRef.current && generation === libraryTokenRef.current.generation;
     if (requestedRef.current.has(path)) return;
     requestedRef.current.add(path);
     void readDocumentThumbnail(path)
       .then((thumbnail) => {
         if (thumbnail) {
-          applyThumbnail(path, thumbnail.png);
+          applyThumbnail(path, thumbnail.png, generation);
           return;
         }
         if (document.format !== "pdf") return;
         // 未命中缓存的 PDF：串行渲染首页（懒加载 + 单并发）。
         enqueueCoverTask(async () => {
-          if (!aliveRef.current) return;
+          if (!isCurrent()) return;
           try {
             const { capturePdfCoverThumbnail } = await import("../lib/coverCapture");
-            const stored = await capturePdfCoverThumbnail(path, document.size);
-            if (!stored || !aliveRef.current) return;
+            if (!isCurrent()) return;
+            const stored = await capturePdfCoverThumbnail(path, document.size, isCurrent);
+            if (!stored || !isCurrent()) return;
             const refreshed = await readDocumentThumbnail(path);
-            if (refreshed) applyThumbnail(path, refreshed.png);
+            if (refreshed) applyThumbnail(path, refreshed.png, generation);
           } catch {
             // 渲染失败保持生成式封面；下次挂载会重试。
-            requestedRef.current.delete(path);
+            if (isCurrent()) requestedRef.current.delete(path);
           }
         });
       })
       .catch(() => {
-        requestedRef.current.delete(path);
+        if (isCurrent()) requestedRef.current.delete(path);
       });
   };
 
   // EPUB 打开时捕获封面后的即时刷新通知（coverCapture.ts）。
   useEffect(() => {
     const handler = (event: Event) => {
+      const generation = libraryTokenRef.current.generation;
       const path = (event as CustomEvent<string>).detail;
       if (typeof path !== "string" || !path) return;
       requestedRef.current.delete(path);
       void readDocumentThumbnail(path)
         .then((thumbnail) => {
-          if (thumbnail) applyThumbnail(path, thumbnail.png);
+          if (thumbnail) applyThumbnail(path, thumbnail.png, generation);
         })
         .catch(() => undefined);
     };

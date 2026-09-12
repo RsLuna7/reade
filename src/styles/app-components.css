@@ -2718,9 +2718,11 @@ button.folder-docs-crumb:focus-visible {
   right: 0;
   z-index: 10;
   width: 286px;
+  min-width: 0;
   /* 面板项目增多后总高可超视口(如竖排/聚焦分组齐备时>1300px);
      视口内截断 + 内部滚动,沿 collections-popover 先例。 */
   max-height: calc(100vh - 128px);
+  overflow-x: hidden;
   overflow-y: auto;
   padding: 17px;
   border: 1px solid var(--line-strong);
@@ -2874,9 +2876,69 @@ button.folder-docs-crumb:focus-visible {
 
 .setting-hint {
   margin: 6px 0 0;
+  min-width: 0;
   color: var(--muted);
   font-size: 11px;
   line-height: 1.55;
+  overflow-wrap: anywhere;
+}
+
+.local-data-setting {
+  min-width: 0;
+  width: 100%;
+}
+
+.local-data-status {
+  display: grid;
+  margin: 6px 0 0;
+  gap: 3px 10px;
+  grid-template-columns: auto minmax(0, 1fr);
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.local-data-status dt {
+  color: var(--ink-soft);
+}
+
+.local-data-status dd {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.local-data-status dd[data-ok="false"] {
+  color: var(--accent-ink);
+}
+
+.local-data-error {
+  margin: 8px 0 0;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  font-size: 11px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.local-data-error strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent-ink);
+  font-weight: 650;
+}
+
+.local-data-error-path {
+  display: block;
+  margin-top: 6px;
+  color: var(--muted);
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
 }
 
 .motion-setting {

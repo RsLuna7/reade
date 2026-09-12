@@ -11,6 +11,8 @@
  */
 
 import type { DocumentFormat } from "./backend";
+import { loadLibraryEnvelope, saveLibraryEnvelope, sanitizeEpochMs } from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
 
 export const VERTICAL_WRITING_STORAGE_KEY = "reade-vertical-writing";
 export const VERTICAL_WRITING_VERSION = 1;
@@ -51,61 +53,46 @@ export function verticalScrollRatio(scrollLeft: number, range: number): number {
   return Math.min(1, Math.max(0, Math.abs(scrollLeft) / range));
 }
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
+function sanitizeLibraryEntries(raw: unknown): LibraryEntries | null {
+  if (!raw || typeof raw !== "object") return null;
+  const sanitized: LibraryEntries = {};
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    const updatedAt = sanitizeEpochMs((entry as { updatedAt?: unknown } | null)?.updatedAt);
+    if (updatedAt === null) continue;
+    sanitized[path] = { updatedAt };
   }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+/** Two buckets for the same library union their documents; newest stamp wins. */
+function mergeLibraryEntries(
+  existing: LibraryEntries,
+  incoming: LibraryEntries,
+): LibraryEntries {
+  const merged: LibraryEntries = { ...existing };
+  for (const [path, entry] of Object.entries(incoming)) {
+    const current = merged[path];
+    if (!current || entry.updatedAt >= current.updatedAt) merged[path] = entry;
+  }
+  return merged;
 }
 
 function loadEnvelope(): VerticalEnvelope {
-  const empty: VerticalEnvelope = { version: VERTICAL_WRITING_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(VERTICAL_WRITING_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<VerticalEnvelope>;
-  if (envelope.version !== VERTICAL_WRITING_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryEntries> = {};
-  for (const [root, entries] of Object.entries(envelope.libraries)) {
-    if (!entries || typeof entries !== "object") continue;
-    const sanitized: LibraryEntries = {};
-    for (const [path, entry] of Object.entries(entries)) {
-      const updatedAt = (entry as { updatedAt?: unknown } | null)?.updatedAt;
-      if (typeof updatedAt !== "number" || !Number.isFinite(updatedAt) || updatedAt <= 0) {
-        continue;
-      }
-      sanitized[path] = { updatedAt };
-    }
-    if (Object.keys(sanitized).length > 0) libraries[root] = sanitized;
-  }
-  return { version: VERTICAL_WRITING_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryEntries>({
+    storageKey: VERTICAL_WRITING_STORAGE_KEY,
+    version: VERTICAL_WRITING_VERSION,
+    sanitizeLibrary: sanitizeLibraryEntries,
+    mergeLibrary: mergeLibraryEntries,
+  });
 }
 
 function saveEnvelope(envelope: VerticalEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(VERTICAL_WRITING_STORAGE_KEY, JSON.stringify(envelope));
-  } catch {
-    // Quota errors and private-mode restrictions lose only the preference.
-  }
+  saveLibraryEnvelope(VERTICAL_WRITING_STORAGE_KEY, envelope);
 }
 
 export function readVerticalPreference(libraryRoot: string, relativePath: string): boolean {
   if (!libraryRoot || !relativePath) return false;
-  return loadEnvelope().libraries[libraryRoot]?.[relativePath] !== undefined;
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)]?.[relativePath] !== undefined;
 }
 
 function evictOverLimit(library: LibraryEntries, limit: number): void {
@@ -125,20 +112,21 @@ export function writeVerticalPreference(
   now: number = Date.now(),
 ): void {
   if (!libraryRoot || !relativePath) return;
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot] ?? {};
+  const library = envelope.libraries[libraryKey] ?? {};
   if (enabled) {
     library[relativePath] = {
-      updatedAt: typeof now === "number" && Number.isFinite(now) && now > 0 ? now : Date.now(),
+      updatedAt: sanitizeEpochMs(now) ?? Date.now(),
     };
     evictOverLimit(library, VERTICAL_WRITING_LIBRARY_LIMIT);
-    envelope.libraries[libraryRoot] = library;
+    envelope.libraries[libraryKey] = library;
   } else {
     delete library[relativePath];
     if (Object.keys(library).length === 0) {
-      delete envelope.libraries[libraryRoot];
+      delete envelope.libraries[libraryKey];
     } else {
-      envelope.libraries[libraryRoot] = library;
+      envelope.libraries[libraryKey] = library;
     }
   }
   saveEnvelope(envelope);

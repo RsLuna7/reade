@@ -1,4 +1,6 @@
 import type { DocumentFormat, DocumentInfo, ReadingSession } from "./backend";
+import { loadLibraryEnvelope, saveLibraryEnvelope } from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
 import type { ReadingPosition } from "./readingPositions";
 import { aggregateByDocument, sessionsInLibrary } from "./readingStats";
 
@@ -169,55 +171,27 @@ interface BaselineEnvelope {
   libraries: Record<string, number>;
 }
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
 function loadBaselines(): BaselineEnvelope {
-  const empty: BaselineEnvelope = { version: HOME_BASELINE_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(HOME_BASELINE_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<BaselineEnvelope>;
-  if (envelope.version !== HOME_BASELINE_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-  const libraries: Record<string, number> = {};
-  for (const [root, value] of Object.entries(envelope.libraries)) {
-    if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-      libraries[root] = value;
-    }
-  }
-  return { version: HOME_BASELINE_VERSION, libraries };
+  return loadLibraryEnvelope<number>({
+    storageKey: HOME_BASELINE_STORAGE_KEY,
+    version: HOME_BASELINE_VERSION,
+    sanitizeLibrary: (raw) =>
+      typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : null,
+    // Two spellings of one library: keep the more recent visit.
+    mergeLibrary: (existing, incoming) => Math.max(existing, incoming),
+  });
 }
 
 /** Baseline of the last home visit for a library; null before the first visit. */
 export function readHomeBaseline(libraryRoot: string): number | null {
-  return loadBaselines().libraries[libraryRoot] ?? null;
+  return loadBaselines().libraries[normalizeLibraryKey(libraryRoot)] ?? null;
 }
 
 export function writeHomeBaseline(libraryRoot: string, nowMs: number = Date.now()): void {
   if (!libraryRoot || typeof nowMs !== "number" || !Number.isFinite(nowMs) || nowMs <= 0) {
     return;
   }
-  const store = storage();
-  if (!store) return;
   const envelope = loadBaselines();
-  envelope.libraries[libraryRoot] = nowMs;
-  try {
-    store.setItem(HOME_BASELINE_STORAGE_KEY, JSON.stringify(envelope));
-  } catch {
-    // Losing the baseline only re-shows "new" items on the next visit.
-  }
+  envelope.libraries[normalizeLibraryKey(libraryRoot)] = nowMs;
+  saveLibraryEnvelope(HOME_BASELINE_STORAGE_KEY, envelope);
 }

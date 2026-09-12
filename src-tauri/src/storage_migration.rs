@@ -229,16 +229,20 @@ pub(crate) fn prepare_durable_user_database(
                     return Ok(durable);
                 }
                 return Err(format!(
-                    "User annotation data is present in both {durable:?} and {legacy_resident:?}, \
+                    "User annotation data is present in both {} and {}, \
                      and the old copy changed after it was migrated. Reade refuses to pick a \
-                     winner automatically; keep one file and rename the other aside, then restart."
+                     winner automatically; keep one file and rename the other aside, then restart.",
+                    durable.display(),
+                    legacy_resident.display(),
                 ));
             }
             Some(_) | None => {
                 return Err(format!(
-                    "User annotation data is present in both {durable:?} and {legacy_resident:?} \
+                    "User annotation data is present in both {} and {} \
                      without a trusted migration record. Reade refuses to pick a winner \
-                     automatically; keep one file and rename the other aside, then restart."
+                     automatically; keep one file and rename the other aside, then restart.",
+                    durable.display(),
+                    legacy_resident.display(),
                 ));
             }
         }

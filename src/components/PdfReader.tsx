@@ -529,6 +529,10 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
     if (!host) return;
     const root = findReadingRoot(host);
     const observer = new IntersectionObserver(([entry]) => {
+      // Bitmap preview hides the stack with visibility:hidden, which reports as
+      // not intersecting. Dropping canvases here unmounts the snapshot source
+      // and, after overlay cleanup, leaves blank page boxes that look stuck.
+      if (host.closest("[data-bitmap-preview]")) return;
       setRenderNearby(Boolean(entry?.isIntersecting));
     }, { root, rootMargin: renderMargin });
     observer.observe(host);
@@ -946,6 +950,7 @@ export function PdfReader({
   const commitTimerRef = useRef<number | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
   const bitmapPreviewRef = useRef<PdfZoomPreview | null>(null);
+  const previewBaseScaleRef = useRef(1);
   const [zoomCommitRevision, setZoomCommitRevision] = useState(0);
   const pagesRef = useRef<HTMLDivElement | null>(null);
   const zoomPercentRef = useRef<HTMLButtonElement | null>(null);
@@ -1178,6 +1183,7 @@ export function PdfReader({
     zoomFrameRef.current = null;
     bitmapPreviewRef.current?.dispose();
     bitmapPreviewRef.current = null;
+    previewBaseScaleRef.current = scaleRef.current;
     if (pagesRef.current) applyPdfZoomPreview(pagesRef.current, 1, 0);
     layoutScaleRef.current = scaleRef.current;
     zoomAnchorXRef.current = null;
@@ -1406,38 +1412,72 @@ export function PdfReader({
       window.clearTimeout(commitTimerRef.current);
       commitTimerRef.current = null;
     }
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    previewBaseScaleRef.current = clamped;
     layoutScaleRef.current = clamped;
     setLayoutScale(clamped);
     setScale(clamped);
     setZoomCommitRevision((revision) => revision + 1);
   }, []);
 
+  const restoreZoomAnchor = useCallback(() => {
+    const reader = rootRef.current;
+    const position = pendingPositionRef.current;
+    if (!reader || !position) return;
+    restorePositionInstantly(
+      reader,
+      toolbarRef.current,
+      position,
+      zoomAnchorXRef.current ?? undefined,
+      zoomReferenceYRef.current ?? undefined,
+    );
+  }, []);
+
+  const applyLiveZoomLayout = useCallback((nextScale: number) => {
+    const pages = pagesRef.current;
+    if (!pages) return;
+    const pageWidthPx = pdfZoomLivePageWidth(nativePageWidthRef.current ?? 820, nextScale);
+    applyPdfZoomPreview(pages, pdfZoomPreviewFactor(nextScale, scaleRef.current), pageWidthPx);
+    restoreZoomAnchor();
+  }, [restoreZoomAnchor]);
+
+  const recaptureZoomPreview = useCallback((nextScale: number): boolean => {
+    const pages = pagesRef.current;
+    const reader = rootRef.current;
+    if (!pages || !reader) return false;
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    applyLiveZoomLayout(nextScale);
+    const scroller = findReadingRoot(reader);
+    if (!scroller) return false;
+    bitmapPreviewRef.current = createPdfZoomPreview(
+      pages,
+      scroller,
+      toolbarRef.current,
+      zoomReferenceYRef.current ?? undefined,
+    );
+    if (!bitmapPreviewRef.current) return false;
+    previewBaseScaleRef.current = nextScale;
+    return bitmapPreviewRef.current.paint(1);
+  }, [applyLiveZoomLayout]);
+
   const paintLiveZoom = useCallback(() => {
     zoomFrameRef.current = null;
     const pages = pagesRef.current;
-    const reader = rootRef.current;
     if (!pages) return;
     const nextScale = layoutScaleRef.current;
-    const factor = pdfZoomPreviewFactor(nextScale, scaleRef.current);
     const percent = zoomPercentRef.current;
     if (percent) percent.textContent = `${Math.round(nextScale * 100)}%`;
+    const factor = pdfZoomPreviewFactor(nextScale, previewBaseScaleRef.current);
     if (bitmapPreviewRef.current?.paint(factor)) return;
-    // Coverage exhausted: return to live layout for the rest of this gesture.
+    // Shrinking exhausts the first snapshot quickly. Recapture at the current
+    // layout once instead of relayouting every page on every remaining frame.
+    if (bitmapPreviewRef.current && recaptureZoomPreview(nextScale)) return;
     bitmapPreviewRef.current?.dispose();
     bitmapPreviewRef.current = null;
-    const pageWidthPx = pdfZoomLivePageWidth(nativePageWidthRef.current ?? 820, nextScale);
-    applyPdfZoomPreview(pages, factor, pageWidthPx);
-    const position = pendingPositionRef.current;
-    if (reader && position) {
-      restorePositionInstantly(
-        reader,
-        toolbarRef.current,
-        position,
-        zoomAnchorXRef.current ?? undefined,
-        zoomReferenceYRef.current ?? undefined,
-      );
-    }
-  }, []);
+    applyLiveZoomLayout(nextScale);
+  }, [applyLiveZoomLayout, recaptureZoomPreview]);
 
   const scheduleScaleCommit = useCallback(() => {
     if (commitTimerRef.current != null) window.clearTimeout(commitTimerRef.current);
@@ -1462,6 +1502,9 @@ export function PdfReader({
       reader,
       pendingPositionRef.current.page,
     );
+    bitmapPreviewRef.current?.dispose();
+    bitmapPreviewRef.current = null;
+    previewBaseScaleRef.current = scaleRef.current;
     const pages = pagesRef.current;
     const scroller = findReadingRoot(reader);
     if (pages && scroller) {

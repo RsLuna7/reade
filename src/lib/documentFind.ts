@@ -31,6 +31,36 @@ function normalizeNeedle(query: string): string {
   return query.trim();
 }
 
+/** Lowercasing can expand a character (İ → i + combining dot). */
+function originalOffsetMapper(original: string, normalized: string) {
+  if (original.length === normalized.length) return (offset: number) => offset;
+  const changes: Array<{ start: number; end: number; source: number; sourceEnd: number }> = [];
+  let source = 0;
+  let target = 0;
+  for (const character of original) {
+    const length = character.toLowerCase().length;
+    if (length !== character.length) {
+      changes.push({ start: target, end: target + length, source, sourceEnd: source + character.length });
+    }
+    source += character.length;
+    target += length;
+  }
+  return (offset: number, endBoundary = false): number => {
+    let low = 0;
+    let high = changes.length;
+    while (low < high) {
+      const middle = (low + high) >>> 1;
+      if (changes[middle].start <= offset) low = middle + 1;
+      else high = middle;
+    }
+    const change = changes[low - 1];
+    if (!change) return offset;
+    if (offset === change.start) return change.source;
+    if (offset < change.end) return endBoundary ? change.sourceEnd : change.source;
+    return offset - (change.end - change.sourceEnd);
+  };
+}
+
 /**
  * Case-insensitive substring search (browser find default). Returns UTF-16
  * offsets compatible with buildTextIndex / rangeFromTextIndex.
@@ -47,20 +77,22 @@ export function findAllMatches(
   const caseSensitive = options?.caseSensitive ?? false;
   const searchHaystack = caseSensitive ? haystack : haystack.toLowerCase();
   const searchNeedle = caseSensitive ? needle : needle.toLowerCase();
+  const originalOffset = originalOffsetMapper(haystack, searchHaystack);
 
   const matches: DocumentFindMatch[] = [];
   let searchFrom = 0;
   while (searchFrom <= searchHaystack.length && matches.length < maxMatches) {
     const index = searchHaystack.indexOf(searchNeedle, searchFrom);
     if (index < 0) break;
-    const end = index + needle.length;
-    matches.push({ id: `${index}:${end}`, start: index, end });
+    const start = originalOffset(index);
+    const end = originalOffset(index + searchNeedle.length, true);
+    matches.push({ id: `${start}:${end}`, start, end });
     searchFrom = index + 1;
   }
 
   let truncated = false;
   if (matches.length >= maxMatches) {
-    const next = searchHaystack.indexOf(searchNeedle, matches[maxMatches - 1].start + 1);
+    const next = searchHaystack.indexOf(searchNeedle, searchFrom);
     truncated = next >= 0;
   }
 

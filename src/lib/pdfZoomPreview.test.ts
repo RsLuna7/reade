@@ -76,4 +76,18 @@ describe("bounded PDF bitmap preview", () => {
     expect(300 + (0 - 300) * 0.9 + dy).toBeCloseTo(0);
     preview.dispose();
   });
+
+  it("replaces a previous snapshot for the same page stack without leaving a stuck overlay", () => {
+    const {scroller,pages} = fixture();
+    const first = createPdfZoomPreview(pages,scroller,null,300)!;
+    const second = createPdfZoomPreview(pages,scroller,null,300)!;
+    expect(document.querySelectorAll(".pdf-zoom-bitmap-overlay")).toHaveLength(1);
+    first.dispose();
+    expect(document.querySelectorAll(".pdf-zoom-bitmap-overlay")).toHaveLength(1);
+    expect(pages.dataset.bitmapPreview).toBe("true");
+    expect(second.paint(1.1)).toBe(true);
+    second.dispose();
+    expect(document.querySelectorAll(".pdf-zoom-bitmap-overlay")).toHaveLength(0);
+    expect(pages.dataset.bitmapPreview).toBeUndefined();
+  });
 });

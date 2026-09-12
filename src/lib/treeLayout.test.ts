@@ -218,6 +218,23 @@ describe("sanitizeFolderLayout and storage", () => {
     );
     expect(readTreeLayout("D:/Lib")).toEqual({});
   });
+
+  it("keeps layout written under every spelling of one library", () => {
+    // Regression: colliding spellings used to overwrite one another on load.
+    localStorage.setItem(
+      TREE_LAYOUT_STORAGE_KEY,
+      JSON.stringify({
+        version: TREE_LAYOUT_VERSION,
+        libraries: {
+          "D:\\Lib": { [TREE_LAYOUT_ROOT]: { pinned: ["a.md"], order: null } },
+          "d:/lib": { [TREE_LAYOUT_ROOT]: { pinned: ["b.md"], order: ["c.md"] } },
+        },
+      }),
+    );
+    const layout = readTreeLayout("D:\\Lib");
+    expect(layout[TREE_LAYOUT_ROOT]?.pinned).toEqual(["a.md", "b.md"]);
+    expect(layout[TREE_LAYOUT_ROOT]?.order).toEqual(["c.md"]);
+  });
 });
 
 describe("buildLaidOutDocumentTree", () => {

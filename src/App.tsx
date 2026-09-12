@@ -142,7 +142,7 @@ import {
   collectSearchScrollPoints,
   type ScrollMapMark,
 } from "./lib/scrollMap";
-import { rangeForFindMatch } from "./lib/documentFindAdapters";
+import { rangesForFindMatches } from "./lib/documentFindAdapters";
 // 双链落地时的去重(plan-backlinks §3.4):resolveLibraryPath 的唯一实现在
 // documentLinks.ts(与 Rust links.rs 契约对齐);markdown 展示/图片收集的唯一
 // 实现在 splitView.ts(主栏与副栏共用),此处仅保留原调用名。
@@ -2208,14 +2208,18 @@ function App() {
             (result) => result.relativePath === currentPath && result.locator,
           )
         : [];
-      const findPoints =
+      const findRanges =
         findOpen && findQuery.trim() && findMatches.length > 0 && findFormat
+          ? rangesForFindMatches(article, findFormat, findMatches)
+          : [];
+      const findPoints =
+        findRanges.length > 0
           ? collectFindScrollPoints(
               reader,
-              findMatches.map((match) => ({
+              findMatches.map((match, index) => ({
                 targetId: match.id,
                 label: match.quote ?? findQuery,
-                range: rangeForFindMatch(article, findFormat, match),
+                range: findRanges[index],
               })),
             )
           : [];

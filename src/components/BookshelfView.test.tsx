@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentExtent, DocumentInfo } from "../lib/backend";
 import { readDocumentThumbnail } from "../lib/backend";
@@ -50,9 +50,9 @@ function documentInfo(relativePath: string, overrides: Partial<DocumentInfo> = {
   };
 }
 
-function setLibrary(documents: DocumentInfo[]) {
+function setLibrary(documents: DocumentInfo[], rootPath = "D:/library") {
   useReaderStore.setState({
-    snapshot: { rootPath: "D:/library", rootKey: "D:/library", documents },
+    snapshot: { rootPath, rootKey: rootPath, documents },
     documents,
     currentPath: null,
     loading: false,
@@ -188,6 +188,37 @@ describe("BookshelfView (plan-bookshelf-covers §3.3)", () => {
       expect(image).not.toBeNull();
       expect(image!.src).toBe("data:image/png;base64,QUJD");
     });
+  });
+
+  it("drops a stale same-path thumbnail and starts a new request after a library switch", async () => {
+    let releaseOld!: (value: { png: string; width: number; height: number } | null) => void;
+    const oldThumbnail = new Promise<{ png: string; width: number; height: number } | null>((resolve) => {
+      releaseOld = resolve;
+    });
+    vi.mocked(readDocumentThumbnail)
+      .mockImplementationOnce(() => oldThumbnail)
+      .mockResolvedValueOnce({ png: "TkVX", width: 240, height: 320 });
+
+    setLibrary([documentInfo("book.pdf", { title: "旧书", format: "pdf" })], "D:/library-a");
+    const view = render(<BookshelfView />);
+    await waitFor(() => expect(readDocumentThumbnail).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      setLibrary([documentInfo("book.pdf", { title: "新书", format: "pdf" })], "D:/library-b");
+    });
+    await waitFor(() => expect(readDocumentThumbnail).toHaveBeenCalledTimes(2));
+    await waitFor(() => {
+      const image = view.container.querySelector<HTMLImageElement>(".bookshelf__cover-image");
+      expect(image?.src).toBe("data:image/png;base64,TkVX");
+    });
+
+    await act(async () => {
+      releaseOld({ png: "T0xE", width: 240, height: 320 });
+      await Promise.resolve();
+    });
+    expect(view.container.querySelector<HTMLImageElement>(".bookshelf__cover-image")?.src).toBe(
+      "data:image/png;base64,TkVX",
+    );
   });
 
   it("keeps the generated fallback for epubs without a cached cover", async () => {

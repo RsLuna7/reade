@@ -20,6 +20,7 @@ import { APP_RUNTIME, createLocalBackup, exportDiagnosticReport, localDataStatus
 import { collectLocalBackupPreferences } from "../lib/localBackup";
 import { downloadTextFile } from "../lib/fileTransfer";
 import { formatFileSize } from "../lib/displayFormat";
+import { describeLocalOpenError } from "../lib/localDataStatusDisplay";
 import { useDialogFocus } from "../lib/useDialogFocus";
 
 
@@ -106,6 +107,11 @@ export function ReadingSettingsPanel({
       update({ [key]: Number(event.target.value) });
     };
   const resolvedFontSelection = resolveReaderFontSelection(settings);
+  const openErrorView = dataStatus?.userOpenError
+    ? describeLocalOpenError("user", dataStatus.userOpenError)
+    : dataStatus?.statsOpenError
+      ? describeLocalOpenError("stats", dataStatus.statsOpenError)
+      : null;
 
   return (
     <div
@@ -607,34 +613,52 @@ export function ReadingSettingsPanel({
         {clearingCache ? "正在清理缓存…" : "清理文档索引缓存"}
       </button>}
       {!isWeb && (
-        <fieldset className="settings-group">
-          <legend>本地数据与诊断</legend>
+        <fieldset className="setting-row motion-setting local-data-setting">
+          <legend className="setting-label">本地数据与诊断</legend>
           {dataStatus ? (
-            <p className="setting-hint">
-              版本 {dataStatus.appVersion} · 用户库{dataStatus.userDbOk ? "正常" : "异常"}
-              {dataStatus.userSchemaVersion != null ? ` v${dataStatus.userSchemaVersion}` : ""}
-              · 统计库{dataStatus.statsDbOk ? "正常" : "异常"} · 缓存 {formatFileSize(dataStatus.cacheBytes)}
-              · 失败索引 {dataStatus.failedIndexCount}
-              {dataStatus.lastBackupAtMs
-                ? ` · 最近备份 ${new Date(dataStatus.lastBackupAtMs).toLocaleString("zh-CN")}`
-                : " · 尚无备份"}
-              {dataStatus.restorePending ? " · 下次启动将应用已暂存的恢复" : ""}
-            </p>
+            <dl className="local-data-status">
+              <dt>版本</dt>
+              <dd>{dataStatus.appVersion}</dd>
+              <dt>用户库</dt>
+              <dd data-ok={dataStatus.userDbOk ? "true" : "false"}>
+                {dataStatus.userDbOk ? "正常" : "异常"}
+                {dataStatus.userSchemaVersion != null ? ` v${dataStatus.userSchemaVersion}` : ""}
+              </dd>
+              <dt>统计库</dt>
+              <dd data-ok={dataStatus.statsDbOk ? "true" : "false"}>
+                {dataStatus.statsDbOk ? "正常" : "异常"}
+              </dd>
+              <dt>缓存</dt>
+              <dd>{formatFileSize(dataStatus.cacheBytes)}</dd>
+              <dt>失败索引</dt>
+              <dd>{dataStatus.failedIndexCount}</dd>
+              <dt>备份</dt>
+              <dd>
+                {dataStatus.lastBackupAtMs
+                  ? new Date(dataStatus.lastBackupAtMs).toLocaleString("zh-CN")
+                  : "尚无备份"}
+                {dataStatus.restorePending ? " · 下次启动将应用已暂存的恢复" : ""}
+              </dd>
+            </dl>
           ) : (
             <p className="setting-hint">正在读取本机数据状态…</p>
           )}
-          {(dataStatus?.userOpenError || dataStatus?.statsOpenError) && (
-            <p className="setting-hint" role="alert">
-              {dataStatus.userOpenError
-                ? `标注库打开失败：${dataStatus.userOpenError}`
-                : `统计库打开失败：${dataStatus.statsOpenError}`}
-              请从下方备份恢复；恢复会在下次启动时应用。
+          {openErrorView && (
+            <p className="local-data-error" role="alert">
+              <strong>{openErrorView.title}</strong>
+              {openErrorView.detail}
+              {" "}请从下方备份恢复；恢复会在下次启动时应用。
+              {openErrorView.paths.map((path) => (
+                <span className="local-data-error-path" key={path}>{path}</span>
+              ))}
             </p>
           )}
           <p className="setting-hint">
             备份包含标注库、阅读统计和本机偏好，不打包原书文件，也不备份可再生成的索引缓存。
           </p>
-          <p className="setting-hint">{dataStatus?.userDbPath}</p>
+          {dataStatus?.userDbOk && dataStatus.userDbPath ? (
+            <p className="setting-hint">{dataStatus.userDbPath}</p>
+          ) : null}
           <button
             className="settings-reset"
             type="button"

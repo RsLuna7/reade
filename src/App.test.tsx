@@ -13,6 +13,7 @@ import {
   listCollections,
   listDocumentExtents,
   listDocumentLinks,
+  localDataStatus,
   listReadingSessions,
   listReviewQueue,
   openLibrary,
@@ -351,6 +352,43 @@ beforeEach(() => {
 afterEach(() => {
   cleanup();
   Reflect.deleteProperty(HTMLElement.prototype, "animate");
+});
+
+describe("local data diagnostics in reading settings", () => {
+  it("wraps a dual-location conflict instead of dumping the English path wall", async () => {
+    const roaming = "C:\\Users\\viper\\AppData\\Roaming\\com.local.reade\\reade-user.sqlite3";
+    const local = "C:\\Users\\viper\\AppData\\Local\\com.local.reade\\reade-user.sqlite3";
+    vi.mocked(localDataStatus).mockResolvedValueOnce({
+      appVersion: "0.2.0",
+      userDbPath: roaming,
+      statsDbPath: "C:\\Users\\viper\\AppData\\Roaming\\com.local.reade\\reade-stats.sqlite3",
+      cacheDbPath: "C:\\Users\\viper\\AppData\\Local\\com.local.reade\\reade-cache.sqlite3",
+      userDbOk: false,
+      statsDbOk: true,
+      userSchemaVersion: null,
+      cacheBytes: 615_514_112,
+      failedIndexCount: 0,
+      lastBackupAtMs: null,
+      lastBackupPath: null,
+      pendingBoundSessions: 0,
+      restorePending: false,
+      userOpenError:
+        `User annotation data is present in both ${roaming} and ${local}, and the old copy changed after it was migrated. Reade refuses to pick a winner automatically; keep one file and rename the other aside, then restart.`,
+      statsOpenError: null,
+    });
+
+    render(<ReadingSettingsPanel open onClose={() => undefined} onNotice={() => undefined} />);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveClass("local-data-error");
+    expect(alert).toHaveTextContent("标注库打开失败");
+    expect(alert).toHaveTextContent("不会自动选哪一份");
+    expect(alert).not.toHaveTextContent("WindowsPath");
+    expect(alert).toHaveTextContent(roaming);
+    expect(alert).toHaveTextContent(local);
+    expect(screen.getByText("异常")).toBeInTheDocument();
+    expect(screen.queryByText(roaming, { selector: ".setting-hint" })).not.toBeInTheDocument();
+  });
 });
 
 describe("reading wheel speed setting", () => {

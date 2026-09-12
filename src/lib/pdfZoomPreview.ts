@@ -26,6 +26,9 @@ export interface PdfZoomPreview {
   dispose: () => void;
 }
 
+/** One live overlay per page stack. A second capture must not leave the previous bitmap stuck. */
+const activePreviewOverlays = new WeakMap<HTMLElement, { overlay: HTMLElement; token: object }>();
+
 export function createPdfZoomPreview(
   pages: HTMLElement, scroller: HTMLElement, toolbar: HTMLElement | null, referenceY?: number,
 ): PdfZoomPreview | null {
@@ -107,6 +110,9 @@ export function createPdfZoomPreview(
     top: `${capture.top - viewport.top}px`, width: `${captureWidth}px`, height: `${captureHeight}px`,
     transformOrigin: `${origin.x - capture.left}px ${origin.y - capture.top}px`, willChange: "transform" });
   overlay.append(bitmap);
+  const token = {};
+  activePreviewOverlays.get(pages)?.overlay.remove();
+  activePreviewOverlays.set(pages, { overlay, token });
   document.body.append(overlay);
   pages.dataset.bitmapPreview = "true";
   pages.dataset.zoomPreview = "true";
@@ -131,10 +137,14 @@ export function createPdfZoomPreview(
     dispose() {
       if (disposed) return;
       disposed = true;
+      const current = activePreviewOverlays.get(pages);
+      if (current?.token === token) {
+        activePreviewOverlays.delete(pages);
+        delete pages.dataset.bitmapPreview;
+        delete pages.dataset.zoomPreview;
+      }
       overlay.remove();
       bitmap.width = bitmap.height = 0;
-      delete pages.dataset.bitmapPreview;
-      delete pages.dataset.zoomPreview;
     },
   };
 }

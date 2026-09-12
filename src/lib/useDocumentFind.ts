@@ -3,7 +3,7 @@ import type { PdfPageContent } from "./backend";
 import { readPdfReadingMode } from "./backend";
 import {
   attachPdfReadingPageNumbers,
-  rangeForFindMatch,
+  rangesForFindMatches,
   resolveDocumentFindFormat,
   scrollToFindMatch,
   searchDomSurface,
@@ -60,6 +60,7 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
   const searchGeneration = useRef(0);
   const pdfPagesCache = useRef<{ path: string; pages: PdfPageContent[] } | null>(null);
   const scrollRetryTimer = useRef<number | null>(null);
+  const focusFrame = useRef<number | null>(null);
 
   const format = resolveDocumentFindFormat(contentKind, pdfMode);
 
@@ -67,7 +68,7 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
     clearFindHighlights();
   }, []);
 
-  const reset = useCallback(() => {
+  const cancelPendingWork = useCallback(() => {
     searchGeneration.current += 1;
     if (debounceTimer.current !== null) {
       window.clearTimeout(debounceTimer.current);
@@ -77,16 +78,29 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
       window.clearTimeout(scrollRetryTimer.current);
       scrollRetryTimer.current = null;
     }
+    if (focusFrame.current !== null) {
+      window.cancelAnimationFrame(focusFrame.current);
+      focusFrame.current = null;
+    }
+  }, []);
+
+  const reset = useCallback(() => {
+    cancelPendingWork();
     setOpen(false);
     setQueryState("");
     setMatches([]);
     setActiveIndex(-1);
     setStatus("idle");
     clearHighlights();
-  }, [clearHighlights]);
+  }, [cancelPendingWork, clearHighlights]);
 
   const paintAndScroll = useCallback(
     (nextMatches: DocumentFindMatch[], index: number, nextFormat: DocumentFindFormat | null) => {
+      if (scrollRetryTimer.current !== null) {
+        window.clearTimeout(scrollRetryTimer.current);
+        scrollRetryTimer.current = null;
+      }
+      const generation = searchGeneration.current;
       const article = articleRef.current;
       const reader = readerRef.current;
       const match = index >= 0 ? nextMatches[index] ?? null : null;
@@ -97,11 +111,13 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
       }
 
       const attempt = (round: number) => {
+        if (generation !== searchGeneration.current) return;
         scrollRetryTimer.current = null;
         const ranges: Range[] = [];
         let activeRangeIndex = -1;
-        for (let matchIndex = 0; matchIndex < nextMatches.length; matchIndex += 1) {
-          const range = rangeForFindMatch(article, nextFormat, nextMatches[matchIndex] ?? null);
+        const matchedRanges = rangesForFindMatches(article, nextFormat, nextMatches);
+        for (let matchIndex = 0; matchIndex < matchedRanges.length; matchIndex += 1) {
+          const range = matchedRanges[matchIndex];
           if (!range) continue;
           if (matchIndex === index) activeRangeIndex = ranges.length;
           ranges.push(range);
@@ -129,6 +145,8 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
 
   const runSearch = useCallback(
     async (rawQuery: string, nextFormat: DocumentFindFormat | null) => {
+      cancelPendingWork();
+      const generation = searchGeneration.current;
       const trimmed = rawQuery.trim();
       if (!trimmed || !nextFormat || !enabled || !currentPath) {
         setMatches([]);
@@ -138,7 +156,9 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
         return;
       }
 
-      const generation = ++searchGeneration.current;
+      setMatches([]);
+      setActiveIndex(-1);
+      clearHighlights();
       setStatus("searching");
 
       const article = articleRef.current;
@@ -194,19 +214,28 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
       setStatus(truncated ? "truncated" : "ready");
       paintAndScroll(resultMatches, 0, nextFormat);
     },
-    [articleRef, clearHighlights, currentPath, enabled, paintAndScroll],
+    [articleRef, cancelPendingWork, clearHighlights, currentPath, enabled, paintAndScroll],
   );
 
   const setQuery = useCallback(
     (value: string) => {
+      // Invalidate immediately: an old PDF read can settle during the debounce.
+      cancelPendingWork();
       setQueryState(value);
-      if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current);
+      setMatches([]);
+      setActiveIndex(-1);
+      clearHighlights();
+      if (!value.trim() || !format || !enabled) {
+        void runSearch(value, format);
+        return;
+      }
+      setStatus("searching");
       debounceTimer.current = window.setTimeout(() => {
         debounceTimer.current = null;
         void runSearch(value, format);
       }, DOCUMENT_FIND_DEBOUNCE_MS);
     },
-    [format, runSearch],
+    [cancelPendingWork, clearHighlights, enabled, format, runSearch],
   );
 
   const openFind = useCallback(
@@ -215,12 +244,13 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
       const initial = (seed ?? selectionSeed()).trim();
       setOpen(true);
       setQueryState(initial);
-      window.requestAnimationFrame(() => {
+      void runSearch(initial, format);
+      focusFrame.current = window.requestAnimationFrame(() => {
+        focusFrame.current = null;
         const input = inputRef.current;
         input?.focus();
         input?.select();
       });
-      void runSearch(initial, format);
     },
     [enabled, format, runSearch],
   );
@@ -257,8 +287,9 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
     if (previousFormat.current === format) return;
     previousFormat.current = format;
     pdfPagesCache.current = null;
-    if (open && query.trim()) void runSearch(query, format);
-  }, [format, open, query, runSearch]);
+    cancelPendingWork();
+    if (open) void runSearch(query, format);
+  }, [cancelPendingWork, format, open, query, runSearch]);
 
   useEffect(() => {
     if (!enabled && open) reset();
@@ -266,11 +297,10 @@ export function useDocumentFind(options: UseDocumentFindOptions) {
 
   useEffect(
     () => () => {
-      if (debounceTimer.current !== null) window.clearTimeout(debounceTimer.current);
-      if (scrollRetryTimer.current !== null) window.clearTimeout(scrollRetryTimer.current);
+      cancelPendingWork();
       clearFindHighlights();
     },
-    [],
+    [cancelPendingWork],
   );
 
   return {

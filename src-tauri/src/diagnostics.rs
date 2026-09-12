@@ -318,8 +318,12 @@ pub fn local_data_status(
         user_db_path: paths.user_db.to_string_lossy().into_owned(),
         stats_db_path: paths.stats_db.to_string_lossy().into_owned(),
         cache_db_path: paths.cache_db.to_string_lossy().into_owned(),
-        user_db_ok: user_open_error.is_none() && user.integrity_ok().unwrap_or(false),
-        stats_db_ok: stats_open_error.is_none() && stats.integrity_ok().unwrap_or(false),
+        // This status card opens with the settings panel. Use SQLite's fast
+        // one-error probe here so a large database does not block its live
+        // connection mutex for a full integrity scan. Backup and restore
+        // validation above deliberately retain `integrity_check`.
+        user_db_ok: user_open_error.is_none() && user.quick_check_ok().unwrap_or(false),
+        stats_db_ok: stats_open_error.is_none() && stats.quick_check_ok().unwrap_or(false),
         user_schema_version: user.schema_version().ok(),
         cache_bytes: file_bytes(&paths.cache_db),
         failed_index_count: library.failed_index_count(),
@@ -367,7 +371,14 @@ pub fn export_diagnostic_report(
     stats: State<'_, StatsState>,
     health: State<'_, DataOpenHealth>,
 ) -> CommandResult<String> {
-    let status = local_data_status(app, library, user, stats, health)?;
+    // Export is an explicit diagnostic action, so it pays for SQLite's
+    // complete integrity check. The settings card calls local_data_status
+    // and intentionally uses quick_check instead.
+    let user_db_ok = user.integrity_ok().unwrap_or(false);
+    let stats_db_ok = stats.integrity_ok().unwrap_or(false);
+    let mut status = local_data_status(app, library, user, stats, health)?;
+    status.user_db_ok = user_db_ok;
+    status.stats_db_ok = stats_db_ok;
     let redacted = serde_json::json!({
         "appVersion": status.app_version,
         "userDbOk": status.user_db_ok,

@@ -31,6 +31,16 @@ pub(crate) fn integrity_ok(connection: &Connection) -> CommandResult<bool> {
     Ok(result.eq_ignore_ascii_case("ok"))
 }
 
+/// Fast status-card probe. Callers that validate a backup or restore must
+/// keep using `integrity_ok`: this only reduces mutex and UI blocking for
+/// the on-demand health summary.
+pub(crate) fn quick_check_ok(connection: &Connection) -> CommandResult<bool> {
+    let result: String = connection
+        .query_row("PRAGMA quick_check(1)", [], |row| row.get(0))
+        .map_err(|error| format!("Cannot run quick database check: {error}"))?;
+    Ok(result.eq_ignore_ascii_case("ok"))
+}
+
 pub(crate) fn user_version(connection: &Connection) -> CommandResult<i64> {
     connection
         .query_row("PRAGMA user_version", [], |row| row.get(0))
@@ -39,7 +49,7 @@ pub(crate) fn user_version(connection: &Connection) -> CommandResult<i64> {
 
 #[cfg(test)]
 mod tests {
-    use super::{integrity_ok, vacuum_into};
+    use super::{integrity_ok, quick_check_ok, vacuum_into};
     use rusqlite::Connection;
     use tempfile::tempdir;
 
@@ -59,5 +69,6 @@ mod tests {
             .expect("count");
         assert_eq!(count, 1);
         assert!(integrity_ok(&dest).expect("integrity"));
+        assert!(quick_check_ok(&dest).expect("quick check"));
     }
 }

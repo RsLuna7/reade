@@ -73,6 +73,12 @@ const RELATED_MAX_LIMIT: u32 = 50;
 const RELATED_CJK_DELIMITERS: &str =
     "，。；：！？、「」『』（）《》…—·\u{201c}\u{201d}\u{2018}\u{2019}";
 const WATCH_DEBOUNCE: Duration = Duration::from_millis(300);
+/// Minimum spacing between `library-index-progress` events. A 10,000-file
+/// library would otherwise emit 10,000 IPC events, each waking the webview
+/// and writing to the reader store; the readout only shows a counter, so
+/// coalescing to ~10 fps keeps every visible tick. The loop always emits
+/// one final event so the frontend's done flag cannot get stuck.
+const INDEX_PROGRESS_MIN_INTERVAL: Duration = Duration::from_millis(100);
 const CONVERTER_REVISION: &str =
     "reade-multiformat-v2:anydoc-0.1.8:pdf-inspector-0.1.8:epub-toc-level";
 
@@ -1942,7 +1948,15 @@ fn index_documents_background(
         partial: 0,
         failed: 0,
     };
+    let mut last_progress_emit = Instant::now();
     let _ = app.emit("library-index-progress", &progress);
+    let mut emit_progress = |progress: &IndexProgress| {
+        if last_progress_emit.elapsed() < INDEX_PROGRESS_MIN_INTERVAL {
+            return;
+        }
+        last_progress_emit = Instant::now();
+        let _ = app.emit("library-index-progress", progress);
+    };
     for document in documents {
         let state = app.state::<AppState>();
         let (root, still_current) = {
@@ -1961,7 +1975,7 @@ fn index_documents_background(
             IndexStatus::Ready | IndexStatus::Partial | IndexStatus::Unsupported
         ) {
             record_progress(&mut progress, document.index_status);
-            let _ = app.emit("library-index-progress", &progress);
+            emit_progress(&progress);
             continue;
         }
 
@@ -1988,7 +2002,7 @@ fn index_documents_background(
         ) = live_status
         {
             record_progress(&mut progress, status);
-            let _ = app.emit("library-index-progress", &progress);
+            emit_progress(&progress);
             continue;
         }
 
@@ -2014,7 +2028,7 @@ fn index_documents_background(
                     return Ok(());
                 }
                 record_progress(&mut progress, indexed.status);
-                let _ = app.emit("library-index-progress", &progress);
+                emit_progress(&progress);
                 continue;
             }
         };
@@ -2034,8 +2048,11 @@ fn index_documents_background(
             return Ok(());
         }
         record_progress(&mut progress, indexed.status);
-        let _ = app.emit("library-index-progress", &progress);
+        emit_progress(&progress);
     }
+    // Unconditional final event: the throttle above may have swallowed the
+    // last tick, and the frontend flips its done state on completed >= total.
+    let _ = app.emit("library-index-progress", &progress);
     Ok(())
 }
 
@@ -2810,10 +2827,20 @@ fn enforce_cache_soft_limit_with_limits(
     soft_limit: u64,
     low_water: u64,
 ) -> CommandResult<()> {
+    // Cheap gate first: used bytes (page_count - freelist) * page_size is
+    // three O(1) pragmas, while the snapshot aggregate below scans every
+    // snapshot blob. Used bytes cover the whole database, snapshots
+    // included, so used bytes <= soft_limit implies the snapshot-adjusted
+    // total cannot exceed it either — the common under-budget call (once
+    // per indexed document) then never pays for the aggregate.
+    let used_bytes = cache_active_bytes(connection)?;
+    if used_bytes <= soft_limit {
+        return Ok(());
+    }
     // Snapshot bytes live under their own 256 MiB budget (IR-D5) and must
     // not push conversion-cache documents out of the 1 GiB budget.
     let snapshot_bytes = snapshot_table_bytes(connection)?;
-    let mut total = cache_active_bytes(connection)?.saturating_sub(snapshot_bytes);
+    let mut total = used_bytes.saturating_sub(snapshot_bytes);
     if total <= soft_limit {
         return Ok(());
     }
@@ -3122,6 +3149,26 @@ impl WikiIndex {
     }
 }
 
+/// BL-D1 lookup keys that can possibly resolve to `path`. `by_name` maps
+/// each document under its own file-name stem and `by_path` under its own
+/// extension-less path, so a stem resolving uniquely to `path` must equal
+/// one of these two keys. The backlink query walks this bounded list
+/// instead of loading and re-resolving every wiki row of the library.
+fn wiki_backlink_stems(index: &WikiIndex, path: &str) -> Vec<String> {
+    let mut stems = Vec::with_capacity(2);
+    let file_stem = wiki_file_stem(path);
+    if index.resolve(&file_stem).0 == Some(path) {
+        stems.push(file_stem);
+    }
+    let path_stem = wiki_path_stem(path);
+    if path_stem != stems.first().map(String::as_str).unwrap_or_default()
+        && index.resolve(&path_stem).0 == Some(path)
+    {
+        stems.push(path_stem);
+    }
+    stems
+}
+
 fn document_links_for(
     connection: &Connection,
     root: &str,
@@ -3164,30 +3211,31 @@ fn document_links_for(
                 .map_err(|error| format!("Cannot decode backlinks: {error}"))?,
         );
     }
-    {
+    // BL-D1: only stems that resolve uniquely to this document can build a
+    // backlink edge, and only two candidate keys (file-name stem, full
+    // path stem) are ever derived from one path. Resolving those two keys
+    // in memory and looking up exactly their rows replaces an unindexed
+    // full scan of every wiki link in the library.
+    for stem in wiki_backlink_stems(&wiki_index, &normalized) {
         let mut statement = connection
             .prepare(
-                "SELECT source_path, ordinal, link_text, wiki_stem FROM document_links
-                 WHERE library_root = ?1 AND link_kind = 'wiki' AND wiki_stem IS NOT NULL",
+                "SELECT source_path, ordinal, link_text FROM document_links
+                 WHERE library_root = ?1 AND link_kind = 'wiki' AND wiki_stem = ?2",
             )
             .map_err(|error| format!("Cannot prepare the wiki backlink lookup: {error}"))?;
         let rows = statement
-            .query_map(params![root], |row| {
+            .query_map(params![root, stem], |row| {
                 Ok((
                     row.get::<_, String>(0)?,
                     row.get::<_, u32>(1)?,
                     row.get::<_, String>(2)?,
-                    row.get::<_, String>(3)?,
                 ))
             })
             .map_err(|error| format!("Cannot list wiki backlinks: {error}"))?;
-        for row in rows {
-            let (source_path, ordinal, link_text, stem) =
-                row.map_err(|error| format!("Cannot decode wiki backlinks: {error}"))?;
-            if wiki_index.resolve(&stem).0 == Some(normalized.as_str()) {
-                mentions.push((source_path, ordinal, link_text));
-            }
-        }
+        mentions.extend(
+            rows.collect::<rusqlite::Result<Vec<_>>>()
+                .map_err(|error| format!("Cannot decode wiki backlinks: {error}"))?,
+        );
     }
     mentions.sort_by(|a, b| a.0.cmp(&b.0).then_with(|| a.1.cmp(&b.1)));
     let mut backlinks: Vec<BacklinkEntry> = Vec::new();
@@ -5841,6 +5889,65 @@ mod tests {
         assert!(document_links_for(&current.cache, &root_key, &documents, "../out.md").is_err());
         assert!(document_links_for(&current.cache, &root_key, &documents, "C:/abs.md").is_err());
         assert!(document_links_for(&current.cache, &root_key, &documents, " ").is_err());
+    }
+
+    #[test]
+    fn wiki_backlinks_match_both_file_name_and_full_path_stems() {
+        let state = AppState::in_memory().expect("state");
+        let mut current = state.inner.lock().expect("lock");
+        let root = PathBuf::from("library");
+        let root_key = normalize_root(&root);
+
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("by-name.md", "按文件名"),
+            vec![wiki_link("target", "只给文件名")],
+        );
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("by-path.md", "按完整路径"),
+            vec![wiki_link("notes/target", "给了完整路径")],
+        );
+        store_links_fixture(
+            &mut current.cache,
+            &root,
+            &markdown_info("ambiguous.md", "歧义引用"),
+            vec![wiki_link("dup", "歧义")],
+        );
+
+        let documents = vec![
+            markdown_info("notes/target.md", "目标"),
+            markdown_info("by-name.md", "按文件名"),
+            markdown_info("by-path.md", "按完整路径"),
+            markdown_info("ambiguous.md", "歧义引用"),
+            markdown_info("x/Dup.md", "副本一"),
+            markdown_info("y/DUP.md", "副本二"),
+        ];
+
+        // A unique file-name stem and a unique full-path stem both build
+        // an edge; the ambiguous stem builds none.
+        let links = document_links_for(&current.cache, &root_key, &documents, "notes/target.md")
+            .expect("target links");
+        let sources: Vec<&str> = links
+            .backlinks
+            .iter()
+            .map(|entry| entry.source_path.as_str())
+            .collect();
+        assert_eq!(sources, vec!["by-name.md", "by-path.md"]);
+
+        // Dropping one duplicate from the scan snapshot resolves the
+        // ambiguity in the next query, with no re-indexing involved.
+        let disambiguated: Vec<DocumentInfo> = documents
+            .iter()
+            .filter(|document| document.relative_path != "y/DUP.md")
+            .cloned()
+            .collect();
+        let links = document_links_for(&current.cache, &root_key, &disambiguated, "x/Dup.md")
+            .expect("dup links");
+        assert_eq!(links.backlinks.len(), 1);
+        assert_eq!(links.backlinks[0].source_path, "ambiguous.md");
     }
 
     /// Pins the serde camelCase wire shape the TS `DocumentLinks` type in

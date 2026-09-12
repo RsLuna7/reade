@@ -47,9 +47,11 @@ function canvasToStoredPng(canvas: HTMLCanvasElement): string | null {
 export async function capturePdfCoverThumbnail(
   relativePath: string,
   size: number,
+  isCurrent: () => boolean = () => true,
 ): Promise<boolean> {
-  if (APP_RUNTIME === "web") return false;
+  if (APP_RUNTIME === "web" || !isCurrent()) return false;
   const pdfjs = await import("pdfjs-dist");
+  if (!isCurrent()) return false;
   if (!pdfjs.GlobalWorkerOptions.workerSrc) {
     pdfjs.GlobalWorkerOptions.workerSrc = new URL(
       "pdfjs-dist/build/pdf.worker.mjs",
@@ -105,6 +107,9 @@ export async function capturePdfCoverThumbnail(
     await page.render({ canvas, canvasContext: context, viewport }).promise;
     const png = canvasToStoredPng(canvas);
     if (!png) return false;
+    // The shelf can switch libraries while pdf.js is rendering. Never let a
+    // stale task write a same-named document's thumbnail into the new cache.
+    if (!isCurrent()) return false;
     await storeDocumentThumbnail(relativePath, png, canvas.width, canvas.height);
     return true;
   } finally {

@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 
 import "../test/setup";
-import { act, renderHook } from "@testing-library/react";
-import { describe, expect, it, vi } from "vitest";
+import { act, cleanup, renderHook } from "@testing-library/react";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useMarkdownImageAssets } from "./useMarkdownImageAssets";
 
 const { readAssetMock } = vi.hoisted(() => ({ readAssetMock: vi.fn() }));
@@ -111,5 +111,88 @@ describe("useMarkdownImageAssets", () => {
 
     expect(result.current.svgAssets).toEqual({});
     expect(result.current.imageErrors["./broken.svg"]).toBe("SVG 内容未通过安全检查");
+  });
+});
+
+describe("image request generations and concurrency", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    readAssetMock.mockReset();
+  });
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+  });
+
+  it("drops a failed read from the previous document", async () => {
+    let reject!: (cause: unknown) => void;
+    readAssetMock.mockReturnValueOnce(new Promise((_resolve, fail) => { reject = fail; }));
+    const { result } = renderHook(() => useMarkdownImageAssets());
+    act(() => result.current.load("old.md", "./cover.png"));
+    act(() => result.current.reset());
+    await act(async () => reject(new Error("old image failed")));
+    expect(result.current.imageErrors).toEqual({});
+    expect(result.current.assetUrls).toEqual({});
+  });
+
+  it("does not schedule state writes after unmount or start queued reads", async () => {
+    const releases: Array<() => void> = [];
+    readAssetMock.mockImplementation(() => new Promise((resolve) => { releases.push(() => resolve(PNG)); }));
+    const { result, unmount } = renderHook(() => useMarkdownImageAssets());
+    act(() => {
+      for (let i = 0; i < 8; i += 1) result.current.load("old.md", `./${i}.png`);
+    });
+    expect(readAssetMock).toHaveBeenCalledTimes(4);
+    unmount();
+    await act(async () => releases.forEach((release) => release()));
+    expect(readAssetMock).toHaveBeenCalledTimes(4);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("limits IPC reads to four, deduplicates queued images, and drains after failures", async () => {
+    const releases: Array<(fail?: boolean) => void> = [];
+    let active = 0;
+    let maxActive = 0;
+    readAssetMock.mockImplementation(() => new Promise((resolve, reject) => {
+      active += 1;
+      maxActive = Math.max(maxActive, active);
+      releases.push((fail) => {
+        active -= 1;
+        if (fail) reject(new Error("unavailable"));
+        else resolve(PNG);
+      });
+    }));
+    const { result } = renderHook(() => useMarkdownImageAssets());
+    act(() => {
+      for (let i = 0; i < 10; i += 1) result.current.load("doc.md", `./${i}.png`);
+      result.current.load("doc.md", "./9.png");
+    });
+    expect(readAssetMock).toHaveBeenCalledTimes(4);
+    for (let i = 0; i < 10; i += 1) {
+      await act(async () => releases[i](i === 0));
+    }
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(readAssetMock).toHaveBeenCalledTimes(10);
+    expect(maxActive).toBe(4);
+    expect(Object.keys(result.current.assetUrls)).toHaveLength(9);
+    expect(result.current.imageErrors["./0.png"]).toBeTruthy();
+  });
+
+  it("discards an old queue but lets the new document use slots as old reads finish", async () => {
+    const releases: Array<() => void> = [];
+    readAssetMock.mockImplementation(() => new Promise((resolve) => { releases.push(() => resolve(PNG)); }));
+    const { result } = renderHook(() => useMarkdownImageAssets());
+    act(() => {
+      for (let i = 0; i < 8; i += 1) result.current.load("old/doc.md", `./${i}.png`);
+      result.current.reset();
+      result.current.load("new/doc.md", "./cover.png");
+    });
+    expect(readAssetMock).toHaveBeenCalledTimes(4);
+    await act(async () => releases[0]());
+    expect(readAssetMock).toHaveBeenLastCalledWith("new/cover.png");
+    await act(async () => releases.slice(1).forEach((release) => release()));
+    await act(async () => vi.advanceTimersByTimeAsync(50));
+    expect(readAssetMock).toHaveBeenCalledTimes(5);
+    expect(result.current.assetUrls).toEqual({ "./cover.png": "data:image/png;base64,AAAA" });
   });
 });

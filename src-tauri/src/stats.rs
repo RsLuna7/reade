@@ -149,6 +149,19 @@ impl StatsState {
         crate::sqlite_io::integrity_ok(&connection)
     }
 
+    /// Health signal for the settings status card, mirroring
+    /// `UserState::quick_check_ok`.
+    pub(crate) fn quick_check_ok(&self) -> CommandResult<bool> {
+        if self.unavailable.is_some() {
+            return Ok(false);
+        }
+        let connection = self
+            .connection
+            .lock()
+            .map_err(|_| "Reading stats lock was poisoned".to_owned())?;
+        crate::sqlite_io::quick_check_ok(&connection)
+    }
+
     pub(crate) fn bound_session_count(&self) -> u32 {
         self.bindings
             .lock()

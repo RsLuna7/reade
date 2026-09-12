@@ -1,4 +1,5 @@
 import type { DocumentFormat, ReadingSession } from "./backend";
+import { canonicalizeLibraryPath, normalizeLibraryKey } from "./libraryKey";
 
 /**
  * Pure aggregation helpers for reading statistics.
@@ -110,28 +111,14 @@ export interface DocumentDetail {
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Strip the Windows extended-length / device prefix that
- * `std::fs::canonicalize` stamps onto stored `library_root` values
- * (`\\?\C:\foo` → `//?/C:/foo` after slash conversion). The folder picker
- * and `snapshot.rootPath` never carry that prefix, so a naive string
- * compare would treat every Windows session as a foreign library.
+ * Slash-normalize a library root so Windows `\\`, trailing slashes, and the
+ * verbatim prefix still match. Delegates to the shared `libraryKey` rule so
+ * stats and the persisted envelopes agree on what "same library" means;
+ * the returned spelling keeps forward slashes (stats display it as a label).
  */
-function stripWindowsVerbatimPrefix(path: string): string {
-  const head = path.slice(0, 8).toLowerCase();
-  if (head === "//?/unc/" || head === "//./unc/") {
-    return `//${path.slice(8)}`;
-  }
-  const short = path.slice(0, 4);
-  if (short === "//?/" || short === "//./") {
-    return path.slice(4);
-  }
-  return path;
-}
-
-/** Slash-normalize a library root so Windows `\\`, trailing slashes, and the verbatim prefix still match. */
 export function normalizeLibraryRoot(root: string | undefined | null): string {
   if (!root) return "";
-  return stripWindowsVerbatimPrefix(root.replace(/\\/g, "/").replace(/\/+$/, ""));
+  return canonicalizeLibraryPath(root).replace(/\\/g, "/");
 }
 
 export function sameLibraryRoot(
@@ -139,7 +126,7 @@ export function sameLibraryRoot(
   b: string | undefined | null,
 ): boolean {
   // Windows paths are case-insensitive; canonicalize may also rewrite casing.
-  return normalizeLibraryRoot(a).toLowerCase() === normalizeLibraryRoot(b).toLowerCase();
+  return normalizeLibraryKey(a ?? "") === normalizeLibraryKey(b ?? "");
 }
 
 /** Last path segment of a library root, used as a source-folder label. */

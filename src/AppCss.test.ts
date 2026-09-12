@@ -138,6 +138,15 @@ describe("application CSS isolation", () => {
     );
   });
 
+  it("lets local-data diagnostics wrap long paths inside the settings popover", () => {
+    expect(css).toMatch(/\.settings-popover\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.settings-popover\s*\{[^}]*overflow-x:\s*hidden/s);
+    expect(css).toMatch(/\.local-data-setting\s*\{[^}]*min-width:\s*0/s);
+    expect(css).toMatch(/\.local-data-error\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(css).toMatch(/\.local-data-error-path\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+    expect(css).toMatch(/\.setting-hint\s*\{[^}]*overflow-wrap:\s*anywhere/s);
+  });
+
   it("lets every sidebar footer control share the full width", () => {
     expect(css).toMatch(
       /\.theme-controls\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)/s,

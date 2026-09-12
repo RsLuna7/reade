@@ -4,7 +4,7 @@ export const FONT_SIZE_MIN = 13;
 export const FONT_SIZE_MAX = 26;
 export const FONT_SIZE_STEP = 1;
 
-export const PDF_SCALE_MIN = 0.5;
+export const PDF_SCALE_MIN = 1;
 export const PDF_SCALE_MAX = 3;
 export const PDF_SCALE_STEP = 0.1;
 /** One mouse-wheel notch (pixel deltaY=120, or 3 LINE units) equals one toolbar step. */

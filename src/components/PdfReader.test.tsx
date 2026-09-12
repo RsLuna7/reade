@@ -41,6 +41,26 @@ vi.mock("../lib/backend", () => ({
   readPdfReadingMode: vi.fn(),
 }));
 
+const zoomPreviewMocks = vi.hoisted(() => ({
+  createPdfZoomPreview: vi.fn(),
+  actual: null as null | ((
+    pages: HTMLElement,
+    scroller: HTMLElement,
+    toolbar: HTMLElement | null,
+    referenceY?: number,
+  ) => import("../lib/pdfZoomPreview").PdfZoomPreview | null),
+}));
+
+vi.mock("../lib/pdfZoomPreview", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../lib/pdfZoomPreview")>();
+  zoomPreviewMocks.actual = actual.createPdfZoomPreview;
+  zoomPreviewMocks.createPdfZoomPreview.mockImplementation(actual.createPdfZoomPreview);
+  return {
+    ...actual,
+    createPdfZoomPreview: zoomPreviewMocks.createPdfZoomPreview,
+  };
+});
+
 import { readPdfReadingMode } from "../lib/backend";
 import { PDF_SCALE_COMMIT_DELAY_MS } from "../lib/readerWheelZoom";
 import {
@@ -838,8 +858,12 @@ describe("PDF wheel zoom preview", () => {
     onActiveChange: vi.fn(),
   };
 
-  async function renderReady(readerRef: { current: PdfReaderHandle | null }) {
-    const view = render(<PdfReader {...common} readerRef={readerRef} />);
+  async function renderReady(
+    readerRef: { current: PdfReaderHandle | null },
+    wrapInScroller = false,
+  ) {
+    const reader = <PdfReader {...common} readerRef={readerRef} />;
+    const view = render(wrapInScroller ? <div className="reading-scroll">{reader}</div> : reader);
     const task = pdfMocks.tasks[pdfMocks.tasks.length - 1];
     await act(async () => {
       task.resolve(fakePdf());
@@ -853,6 +877,10 @@ describe("PDF wheel zoom preview", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+    zoomPreviewMocks.createPdfZoomPreview.mockReset();
+    if (zoomPreviewMocks.actual) {
+      zoomPreviewMocks.createPdfZoomPreview.mockImplementation(zoomPreviewMocks.actual);
+    }
     cleanup();
   });
 
@@ -950,6 +978,41 @@ describe("PDF wheel zoom preview", () => {
       view.unmount();
       context.mockRestore();
     }
+  });
+
+  it("recaptures the bounded snapshot when shrinking past coverage", async () => {
+    const dispose = vi.fn();
+    const paint = vi.fn((factor: number) => factor >= 0.95);
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef, true);
+    zoomPreviewMocks.createPdfZoomPreview.mockReturnValue({ paint, dispose });
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-400, 0));
+    act(() => vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS));
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    dispose.mockClear();
+    act(() => readerRef.current!.zoomByWheel(400, 0));
+    act(() => vi.advanceTimersByTime(16));
+    expect(zoomPreviewMocks.createPdfZoomPreview).toHaveBeenCalledTimes(2);
+    expect(dispose).toHaveBeenCalled();
+    act(() => view.unmount());
+  });
+
+  it("disposes the zoom snapshot on commit so a shrink cannot leave a stuck overlay", async () => {
+    const dispose = vi.fn();
+    const paint = vi.fn(() => true);
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef, true);
+    zoomPreviewMocks.createPdfZoomPreview.mockReturnValue({ paint, dispose });
+    zoomPreviewMocks.createPdfZoomPreview.mockClear();
+    vi.useFakeTimers();
+    act(() => readerRef.current!.zoomByWheel(-120, 0));
+    act(() => vi.advanceTimersByTime(16));
+    expect(zoomPreviewMocks.createPdfZoomPreview).toHaveBeenCalledTimes(1);
+    act(() => vi.advanceTimersByTime(PDF_SCALE_COMMIT_DELAY_MS));
+    expect(dispose).toHaveBeenCalled();
+    act(() => view.unmount());
   });
 });
 

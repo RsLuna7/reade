@@ -10,6 +10,8 @@
  */
 
 import { displayPageNumber } from "./pdfPageOffset";
+import { loadLibraryEnvelope, saveLibraryEnvelope, sanitizeEpochMs } from "./localEnvelope";
+import { normalizeLibraryKey } from "./libraryKey";
 
 export const PDF_PAGE_PINS_STORAGE_KEY = "reade-pdf-page-pins";
 export const PDF_PAGE_PINS_VERSION = 1;
@@ -52,19 +54,6 @@ function notifyPinListeners(): void {
   for (const listener of listeners) listener();
 }
 
-function storage(): Storage | null {
-  try {
-    return typeof localStorage === "undefined" ? null : localStorage;
-  } catch {
-    return null;
-  }
-}
-
-function sanitizeUpdatedAt(value: unknown): number | null {
-  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return null;
-  return value < 10_000_000_000 ? value * 1000 : value;
-}
-
 function isPage(value: unknown): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= 1;
 }
@@ -104,11 +93,31 @@ export function sanitizePdfPagePinSlots(value: unknown): PdfPagePinSlots | null 
 export function sanitizePdfPagePinsEntry(value: unknown): PdfPagePinsEntry | null {
   if (!value || typeof value !== "object") return null;
   const entry = value as Record<string, unknown>;
-  const updatedAt = sanitizeUpdatedAt(entry.updatedAt);
+  const updatedAt = sanitizeEpochMs(entry.updatedAt);
   if (updatedAt === null) return null;
   const slots = sanitizePdfPagePinSlots(entry.slots);
   if (!slots || pinsAreEmpty(slots)) return null;
   return { slots, updatedAt };
+}
+
+function sanitizeLibraryPins(raw: unknown): LibraryPins | null {
+  if (!raw || typeof raw !== "object") return null;
+  const sanitized: LibraryPins = {};
+  for (const [path, entry] of Object.entries(raw as Record<string, unknown>)) {
+    const pins = sanitizePdfPagePinsEntry(entry);
+    if (pins) sanitized[path] = pins;
+  }
+  return Object.keys(sanitized).length > 0 ? sanitized : null;
+}
+
+/** Two buckets for the same library union their documents; newest pin set wins. */
+function mergeLibraryPins(existing: LibraryPins, incoming: LibraryPins): LibraryPins {
+  const merged: LibraryPins = { ...existing };
+  for (const [path, entry] of Object.entries(incoming)) {
+    const current = merged[path];
+    if (!current || entry.updatedAt >= current.updatedAt) merged[path] = entry;
+  }
+  return merged;
 }
 
 export function togglePinSlot(
@@ -152,45 +161,17 @@ export function pinChipTitle(index: number, page: number | null, offset: number)
 }
 
 function loadEnvelope(): PinsEnvelope {
-  const empty: PinsEnvelope = { version: PDF_PAGE_PINS_VERSION, libraries: {} };
-  const store = storage();
-  if (!store) return empty;
-
-  let parsed: unknown;
-  try {
-    const raw = store.getItem(PDF_PAGE_PINS_STORAGE_KEY);
-    if (!raw) return empty;
-    parsed = JSON.parse(raw);
-  } catch {
-    return empty;
-  }
-  if (!parsed || typeof parsed !== "object") return empty;
-  const envelope = parsed as Partial<PinsEnvelope>;
-  if (envelope.version !== PDF_PAGE_PINS_VERSION) return empty;
-  if (!envelope.libraries || typeof envelope.libraries !== "object") return empty;
-
-  const libraries: Record<string, LibraryPins> = {};
-  for (const [root, entries] of Object.entries(envelope.libraries)) {
-    if (!entries || typeof entries !== "object") continue;
-    const sanitized: LibraryPins = {};
-    for (const [path, entry] of Object.entries(entries)) {
-      const pins = sanitizePdfPagePinsEntry(entry);
-      if (pins) sanitized[path] = pins;
-    }
-    if (Object.keys(sanitized).length > 0) libraries[root] = sanitized;
-  }
-  return { version: PDF_PAGE_PINS_VERSION, libraries };
+  return loadLibraryEnvelope<LibraryPins>({
+    storageKey: PDF_PAGE_PINS_STORAGE_KEY,
+    version: PDF_PAGE_PINS_VERSION,
+    sanitizeLibrary: sanitizeLibraryPins,
+    mergeLibrary: mergeLibraryPins,
+  });
 }
 
 function saveEnvelope(envelope: PinsEnvelope): void {
-  const store = storage();
-  if (!store) return;
-  try {
-    store.setItem(PDF_PAGE_PINS_STORAGE_KEY, JSON.stringify(envelope));
-    notifyPinListeners();
-  } catch {
-    // Quota / private-mode: lose only the pin hint.
-  }
+  saveLibraryEnvelope(PDF_PAGE_PINS_STORAGE_KEY, envelope);
+  notifyPinListeners();
 }
 
 function evictOverLimit(library: LibraryPins, limit: number): void {
@@ -203,11 +184,14 @@ function evictOverLimit(library: LibraryPins, limit: number): void {
 }
 
 export function readPdfPagePins(libraryRoot: string, relativePath: string): PdfPagePinSlots {
-  return loadEnvelope().libraries[libraryRoot]?.[relativePath]?.slots ?? emptyPdfPagePins();
+  return (
+    loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)]?.[relativePath]?.slots ??
+    emptyPdfPagePins()
+  );
 }
 
 export function listLibraryPdfPagePins(libraryRoot: string): Record<string, PdfPagePinsEntry> {
-  return loadEnvelope().libraries[libraryRoot] ?? {};
+  return loadEnvelope().libraries[normalizeLibraryKey(libraryRoot)] ?? {};
 }
 
 export function writePdfPagePins(
@@ -225,23 +209,25 @@ export function writePdfPagePins(
     return null;
   }
 
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot] ?? {};
+  const library = envelope.libraries[libraryKey] ?? {};
   const entry: PdfPagePinsEntry = { slots: sanitized, updatedAt: now };
   library[relativePath] = entry;
   evictOverLimit(library, PDF_PAGE_PINS_LIBRARY_LIMIT);
-  envelope.libraries[libraryRoot] = library;
+  envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
   return entry;
 }
 
 export function deletePdfPagePins(libraryRoot: string, relativePath: string): void {
   if (!libraryRoot || !relativePath) return;
+  const libraryKey = normalizeLibraryKey(libraryRoot);
   const envelope = loadEnvelope();
-  const library = envelope.libraries[libraryRoot];
+  const library = envelope.libraries[libraryKey];
   if (!library || !(relativePath in library)) return;
   delete library[relativePath];
-  if (Object.keys(library).length === 0) delete envelope.libraries[libraryRoot];
-  else envelope.libraries[libraryRoot] = library;
+  if (Object.keys(library).length === 0) delete envelope.libraries[libraryKey];
+  else envelope.libraries[libraryKey] = library;
   saveEnvelope(envelope);
 }

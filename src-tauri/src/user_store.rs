@@ -522,6 +522,17 @@ impl UserState {
         crate::sqlite_io::integrity_ok(&connection)
     }
 
+    /// Health signal for the settings status card. Deliberately cheaper
+    /// than `integrity_ok` so the check does not hold this connection's
+    /// mutex for a full database scan on every panel open.
+    pub(crate) fn quick_check_ok(&self) -> CommandResult<bool> {
+        if self.unavailable.is_some() {
+            return Ok(false);
+        }
+        let connection = self.lock()?;
+        crate::sqlite_io::quick_check_ok(&connection)
+    }
+
     pub(crate) fn schema_version(&self) -> CommandResult<i64> {
         let connection = self.lock()?;
         crate::sqlite_io::user_version(&connection)
@@ -9873,6 +9884,10 @@ mod tests {
         assert!(
             error.contains("changed after it was migrated"),
             "unexpected error: {error}"
+        );
+        assert!(
+            !error.contains("WindowsPath("),
+            "conflict paths must use Display, not Debug: {error}"
         );
     }
 

@@ -45,7 +45,7 @@ describe("adjustFontSize", () => {
 describe("adjustPdfScale", () => {
   it("steps by 0.1 and clamps to the toolbar range", () => {
     expect(adjustPdfScale(1, 1)).toBe(1.1);
-    expect(adjustPdfScale(1, -1)).toBe(0.9);
+    expect(adjustPdfScale(1, -1)).toBe(PDF_SCALE_MIN);
     expect(adjustPdfScale(PDF_SCALE_MIN, -1)).toBe(PDF_SCALE_MIN);
     expect(adjustPdfScale(PDF_SCALE_MAX, 1)).toBe(PDF_SCALE_MAX);
   });
@@ -68,7 +68,7 @@ describe("wheelZoomDeltaPixels", () => {
 describe("adjustPdfScaleByDelta", () => {
   it("maps one 120px notch to a 1.1× step without snapping smaller moves", () => {
     expect(adjustPdfScaleByDelta(1, -120)).toBeCloseTo(1.1);
-    expect(adjustPdfScaleByDelta(1, 120)).toBeCloseTo(1 / 1.1);
+    expect(adjustPdfScaleByDelta(1, 120)).toBe(PDF_SCALE_MIN);
     expect(adjustPdfScaleByDelta(1, -12)).toBeCloseTo(1.1 ** 0.1);
   });
 
