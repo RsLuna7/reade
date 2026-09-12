@@ -3,7 +3,7 @@
 > **部分被取代**：摘录与感悟的产品语言以 [`plan-annotation-system-redesign.md`](./plan-annotation-system-redesign.md) 为准。本文的编纂流程仍有效，但「笔记」在界面与导出中改称「感悟」，且不按颜色推断语义。
 
 - 日期：2026-08-13（基线查证日；同日复核基线并定稿）
-- 状态：**定稿（实施中）**
+- 状态：**已实施**
 - 定位：把当前文档的全部标注按章节结构穿插编纂为一页只读"读书报告"：章节标题 + 该章摘录（blockquote）+ 笔记，读完一本书后一眼回看全部收获；整页可导出 Markdown。
 - 关联：标注→章节归属完全复用目录热力的 locator 归因逻辑（`tocHeat.ts` 的 buildTocHeat 输入契约）；导出复用 `annotationExport.ts` 通道；入口在标注 tab 与全库标注中枢。
 

@@ -1,7 +1,7 @@
 # 方案定稿：阅读时间预估
 
 - 日期：2026-08-13（基线查证日；同日复核基线并定稿）
-- 状态：**定稿（批次 2 实施）**
+- 状态：**已实施**
 - 定位：在文档树条目、主页卡片、目录条目显示"约 N 分钟"。速度先用默认值冷启动，随个人阅读数据（`reade-stats.sqlite3` 的 activeSeconds ÷ 已读字符量）自动校准。
 - 关联：字符数数据与库覆盖率地图（`docs/plan-coverage-treemap.md`）共享同一 `list_document_extents` 新契约；个人速度校准依赖阅读统计会话（`record_reading_session` 既有链路）与 `readingPositions` 高水位。
 
