@@ -5,9 +5,9 @@ import { cancelMotion, runMotion, type ReaderMotionLevel } from "../lib/motion";
 import { READ_NEXT_REASON_LABEL, type ReadNextReason } from "../lib/readNext";
 
 /**
- * 读完接着读的轻卡片（plan-read-next §3.2）：fixed 右下、与朗读条同
- * 区位（朗读中由 App 不渲染本组件）；主按钮打开、次按钮关闭（本文档
- * 会话内不再出现）。
+ * 读完接着读的轻卡片（plan-read-next §3.2）：fixed 右下、与自动推进
+ * 胶囊同区位（推进条打开时由 App 不渲染本组件）；主按钮打开、次按钮
+ * 关闭（本文档会话内不再出现）。
  */
 export function ReadNextCard({
   title,

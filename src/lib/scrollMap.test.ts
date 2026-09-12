@@ -8,7 +8,6 @@ import {
   collectSearchScrollPoints,
   SCROLL_MAP_MAX_MARKS,
   truncateScrollMapLabel,
-  ttsRatioFromRect,
   type ScrollMapPoint,
 } from "./scrollMap";
 
@@ -284,6 +283,7 @@ describe("collectSearchScrollPoints", () => {
   });
 });
 
+
 describe("collectFindScrollPoints", () => {
   it("measures resolved ranges into search ticks", () => {
     const { scroller, article } = fixture();
@@ -310,16 +310,3 @@ describe("collectFindScrollPoints", () => {
   });
 });
 
-describe("ttsRatioFromRect", () => {
-  it("maps the sentence rect into a clamped ratio and rejects missing input", () => {
-    const { scroller } = fixture();
-    scroller.scrollTop = 100;
-    expect(ttsRatioFromRect(scroller, { top: 400 })).toBeCloseTo(0.5);
-    expect(ttsRatioFromRect(scroller, { top: -500 })).toBe(0);
-    expect(ttsRatioFromRect(scroller, null)).toBeNull();
-
-    const empty = document.createElement("div");
-    Object.defineProperty(empty, "scrollHeight", { configurable: true, value: 0 });
-    expect(ttsRatioFromRect(empty, { top: 10 })).toBeNull();
-  });
-});

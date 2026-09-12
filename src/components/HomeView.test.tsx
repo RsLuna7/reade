@@ -181,6 +181,22 @@ describe("HomeView (desktop)", () => {
     expect(within(today).getByText("10 分钟")).toBeInTheDocument();
   });
 
+  it("lists sessions stamped with a Windows canonicalize prefix", async () => {
+    setHomeState([doc("guide.md", { title: "入门指南" })]);
+    vi.mocked(listReadingSessions).mockResolvedValue([
+      session("guide.md", Date.now() - HOUR_MS, {
+        libraryRoot: "//?/D:/books",
+      }),
+    ]);
+
+    render(<HomeView />);
+
+    expect(await screen.findByText("入门指南")).toBeInTheDocument();
+    expect(
+      screen.queryByText("还没有阅读记录，从左侧选择一篇文档开始。"),
+    ).not.toBeInTheDocument();
+  });
+
   it("appends the remaining-time estimate when the callback provides one", async () => {
     const documents = [doc("guide.md", { title: "入门指南" })];
     setHomeState(documents);

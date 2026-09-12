@@ -114,8 +114,8 @@ const CJK_CHAR = /[\u2E80-\u9FFF\uF900-\uFAFF\uFE30-\uFE4F\uFF00-\uFFEF]/;
 const LATIN_WORD = /^[A-Za-z0-9]+(?:['\u2019-][A-Za-z0-9]+)*$/;
 
 // Module-local structural view of the ES2022 Segmenter (the repo's TS lib is
-// ES2020); mirrors ttsSegments.ts and must not leak into the global type
-// surface. Delete when the TS lib target moves to ES2022+.
+// ES2020) and must not leak into the global type surface. Delete when the TS
+// lib target moves to ES2022+.
 interface WordSegmentPart {
   segment: string;
 }

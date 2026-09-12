@@ -146,6 +146,32 @@ describe("buildContinueReading (desktop)", () => {
     expect(items[0].title).toBe("a");
     expect(items[0].lastReadAt).toBe(NOW - 2 * HOUR_MS);
   });
+
+  it("keeps Windows verbatim-prefixed sessions in the current library", () => {
+    const items = buildContinueReading(
+      [session("a.md", NOW - HOUR_MS, { libraryRoot: "//?/D:/books", title: "机械设计" })],
+      [doc("a.md", { title: "机械设计" })],
+      {},
+      NOW,
+      5,
+      "D:\\books",
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].relativePath).toBe("a.md");
+  });
+
+  it("keeps Windows device-namespace sessions in the current library", () => {
+    const items = buildContinueReading(
+      [session("a.md", NOW - HOUR_MS, { libraryRoot: "\\\\.\\D:\\books" })],
+      [doc("a.md")],
+      {},
+      NOW,
+      5,
+      "D:/books",
+    );
+    expect(items).toHaveLength(1);
+    expect(items[0].relativePath).toBe("a.md");
+  });
 });
 
 describe("buildWebContinueReading (web fallback)", () => {
