@@ -3985,7 +3985,6 @@ fn fallback_title(path: &Path) -> String {
         .to_owned()
 }
 
-
 fn modified_millis(metadata: &fs::Metadata) -> u64 {
     metadata
         .modified()
