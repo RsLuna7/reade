@@ -9853,7 +9853,7 @@ mod tests {
         );
     }
 
-    /// 迁移后旧库又被（旧版本程序）写入 → 拒绝启动，不自动择优。
+    /// 迁移后旧库又被（旧版本程序）写入用户数据 → 拒绝启动，不自动择优。
     #[test]
     fn refuses_to_start_when_the_old_database_changed_after_migration() {
         let cache_dir = tempdir().expect("cache dir");
@@ -9870,10 +9870,11 @@ mod tests {
         .expect("migrate");
         drop(state);
 
-        // 旧库获得新写入（模拟回退到旧版本继续使用）。
+        // 旧库获得新的用户写入（模拟回退到旧版本继续做标注）。
         {
             let connection = Connection::open(&legacy_path).expect("reopen old");
-            insert_document_row(&connection, ROOT, "notes/b.md", "hash-2");
+            let draft = sample_excerpt_draft("ex-after-migration", "notes/a.md");
+            persist_excerpt(&connection, draft, 2_000);
         }
 
         let error = UserState::new(
@@ -9889,6 +9890,47 @@ mod tests {
             !error.contains("WindowsPath("),
             "conflict paths must use Display, not Debug: {error}"
         );
+    }
+
+    /// 迁移后旧库只多了文档指纹（库扫描写入）→ 仍使用新库，不拒绝启动。
+    #[test]
+    fn document_fingerprint_churn_on_the_old_file_does_not_block_launch() {
+        let cache_dir = tempdir().expect("cache dir");
+        let data_dir = tempdir().expect("data dir");
+        let legacy_path = cache_dir.path().join(USER_DB_FILE);
+        {
+            let connection = open_user_database(&legacy_path, None).expect("legacy");
+            insert_document_row(&connection, ROOT, "notes/a.md", "hash-1");
+            persist_excerpt(
+                &connection,
+                sample_excerpt_draft("ex-keep", "notes/a.md"),
+                1_000,
+            );
+        }
+        let first = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("migrate");
+        drop(first);
+
+        {
+            let connection = Connection::open(&legacy_path).expect("reopen old");
+            insert_document_row(&connection, ROOT, "notes/b.md", "hash-2");
+        }
+
+        let second = UserState::new(
+            data_dir.path().to_path_buf(),
+            cache_dir.path().to_path_buf(),
+        )
+        .expect("fingerprint-only drift must still open");
+        {
+            let connection = locked(&second);
+            let excerpt = read_excerpt_row(&connection, ROOT, "ex-keep")
+                .expect("read")
+                .expect("durable excerpt still present");
+            assert_eq!(excerpt.id, "ex-keep");
+        }
     }
 
     /// 两库都在但没有可信迁移记录（手工拷贝）→ 拒绝，保护两份数据。

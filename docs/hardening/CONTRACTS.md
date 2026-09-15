@@ -37,7 +37,7 @@ D02 引入的稳定错误文案（字符串，后续统一适配为 code）：
 - **用户库**：`app_data_dir/reade-user.sqlite3`（持久，清缓存不可触碰）。首次启动由 `storage_migration::prepare_durable_user_database` 从 `app_cache_dir/reade-user.sqlite3` 一次性迁移：
   - 快照用 `VACUUM INTO`（一致性、含 WAL 已提交数据），目标目录临时文件 → `PRAGMA integrity_check` + 按表行数/updated_at 摘要比对 → 常规迁移链初始化 → 写迁移记录 `reade-user-location.json` → 同目录 rename 发布。
   - 摘要是**数据级**（每业务表 COUNT + MAX(updated_at)，缺失表记 missing），绝不用 mtime 判新旧。
-  - 旧文件**永不删除/修改**。后续启动：旧文件存在且摘要与记录一致 → 直接用新库；摘要不一致（旧版本又写入）→ 拒绝启动并提示人工择一，绝不静默择优；两库都在但无记录 → 同样拒绝。
+  - 旧文件**永不删除/修改**。后续启动：旧文件存在且用户数据摘要与记录一致 → 直接用新库（`documents` 指纹表被库扫描写入，不参与冲突判定）；用户数据摘要不一致（旧版本又写入标注/摘录/合集等）→ 拒绝启动并提示人工择一，绝不静默择优；两库都在但无记录 → 同样拒绝。
   - 互斥：`reade-user-migrate.lock`（create_new + 内容时间戳，>10s 视为崩溃残留可打破）；失败幂等：残留 `.migrating` 临时文件下次启动清掉重做。
 - **转换缓存**：`app_cache_dir/reade-cache.sqlite3`（schema 不匹配整库重建；清缓存只删行 + VACUUM，不删文件，不触碰用户库/统计库/迁移记录/备份）。
 - **统计库**：`app_data_dir/reade-stats.sqlite3`（WAL, synchronous=NORMAL）。

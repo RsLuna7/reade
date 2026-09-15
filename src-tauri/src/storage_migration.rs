@@ -12,9 +12,11 @@
 //! 4. the old file is never deleted or modified by the migration.
 //!
 //! Later launches use the record to detect post-migration writes to the
-//! abandoned file; such conflicts are refused instead of silently picking a
-//! winner. Digests are data-based (row counts + max updated_at), never
-//! mtime-based.
+//! abandoned file. User-authored tables that diverge refuse to open instead
+//! of silently picking a winner. Library-scan fingerprint rows in `documents`
+//! are ignored for that check: a leftover cache copy that only gained new
+//! hashes must not take the durable database offline. Digests are data-based
+//! (row counts + max updated_at), never mtime-based.
 
 use std::{
     fs,
@@ -40,6 +42,21 @@ const LOCK_STALE_AFTER: Duration = Duration::from_secs(10);
 const DIGEST_TABLES: &[&str] = &[
     "annotations",
     "documents",
+    "annotation_reviews",
+    "collections",
+    "collection_items",
+    "excerpts",
+    "reading_places",
+    "reflections",
+    "review_enrollments",
+    "annotation_v6_migration",
+];
+
+/// User-authored tables. `documents` is a library-scan fingerprint index
+/// (content hashes / last-seen), not annotation data; post-migration churn
+/// there is not a fork of the user's notes.
+const USER_AUTHORED_DIGEST_TABLES: &[&str] = &[
+    "annotations",
     "annotation_reviews",
     "collections",
     "collection_items",
@@ -120,6 +137,23 @@ fn table_has_updated_at(connection: &Connection, table: &str) -> CommandResult<b
         }
     }
     Ok(false)
+}
+
+fn digest_for_tables(full: &str, tables: &[&str]) -> String {
+    let mut out = String::new();
+    for table in tables {
+        let prefix = format!("{table}:");
+        let Some(part) = full.split(';').find(|part| part.starts_with(&prefix)) else {
+            continue;
+        };
+        out.push_str(part);
+        out.push(';');
+    }
+    out
+}
+
+fn user_authored_digest(full: &str) -> String {
+    digest_for_tables(full, USER_AUTHORED_DIGEST_TABLES)
 }
 
 fn now_millis() -> u64 {
@@ -225,7 +259,10 @@ pub(crate) fn prepare_durable_user_database(
         match read_migration_record(durable_directory) {
             Some(record) if record.verified => {
                 let current_digest = user_database_digest(&legacy_resident)?;
-                if current_digest == record.source_digest {
+                if current_digest == record.source_digest
+                    || user_authored_digest(&current_digest)
+                        == user_authored_digest(&record.source_digest)
+                {
                     return Ok(durable);
                 }
                 return Err(format!(
@@ -371,5 +408,22 @@ mod tests {
     #[test]
     fn sql_string_quoting_is_safe() {
         assert_eq!(quote_sql_string("it's"), "'it''s'");
+    }
+
+    #[test]
+    fn user_authored_digest_ignores_document_fingerprint_churn() {
+        let before = "annotations:0:0;documents:6605;annotation_reviews:0:0;collections:1:1;\
+                      collection_items:0;excerpts:77:1;reading_places:0:0;reflections:0:0;\
+                      review_enrollments:0:0;annotation_v6_migration:10;";
+        let fingerprints_only = before.replace("documents:6605", "documents:6636");
+        assert_eq!(
+            user_authored_digest(before),
+            user_authored_digest(&fingerprints_only)
+        );
+        let excerpts_changed = before.replace("excerpts:77:1", "excerpts:78:2");
+        assert_ne!(
+            user_authored_digest(before),
+            user_authored_digest(&excerpts_changed)
+        );
     }
 }
