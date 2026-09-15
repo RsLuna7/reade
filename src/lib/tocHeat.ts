@@ -89,6 +89,18 @@ function buildPdfIntervals(items: TocItem[]): PdfIntervals {
   return { pages, ids: pages.map((page) => firstIdByPage.get(page) as string) };
 }
 
+/**
+ * Current PDF page → covering Outline TOC id (`[page_i, page_{i+1})`).
+ * Null when the outline is empty or the page precedes every entry.
+ */
+export function resolvePdfTocId(items: TocItem[], page: number): string | null {
+  if (!Number.isFinite(page)) return null;
+  const { pages, ids } = buildPdfIntervals(items);
+  if (pages.length === 0) return null;
+  const index = floorIndex(pages, page);
+  return index === -1 ? null : ids[index];
+}
+
 /** Greatest index with pages[index] <= page, or -1 when page precedes them all. */
 function floorIndex(pages: number[], page: number): number {
   let low = 0;

@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
   findTocScrollParent,
   measureTocIndicator,
+  resolveTocActiveId,
   scrollTocLinkIntoView,
   tocScrollBehaviorFromMotion,
 } from "./tocActiveIndicator";
@@ -82,5 +83,18 @@ describe("tocActiveIndicator", () => {
     document.body.append(panel);
     expect(findTocScrollParent(wrap)).toBe(panel);
     panel.remove();
+  });
+
+  it("floors PDF page ids onto the covering outline entry", () => {
+    const items = [
+      { id: "pdf-page-1", title: "前言", level: 1 },
+      { id: "pdf-page-41", title: "第八章", level: 2 },
+      { id: "pdf-page-50", title: "第九章", level: 2 },
+    ];
+    expect(resolveTocActiveId(items, "pdf-page-41")).toBe("pdf-page-41");
+    expect(resolveTocActiveId(items, "pdf-page-42")).toBe("pdf-page-41");
+    expect(resolveTocActiveId(items, "pdf-page-49")).toBe("pdf-page-41");
+    expect(resolveTocActiveId(items, null)).toBeNull();
+    expect(resolveTocActiveId(items, "alpha")).toBe("alpha");
   });
 });

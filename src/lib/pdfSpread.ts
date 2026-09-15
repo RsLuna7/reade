@@ -31,6 +31,16 @@ export function spreadRowPages(page: number, pageCount: number): number[] {
   return start + 1 <= pageCount ? [start, start + 1] : [start];
 }
 
+/**
+ * 目录跟随用的页：双页行取最右页。
+ * 当前页判定在对开两页等距时取左页（页码框），右页上的 Outline
+ * 标题因此需要对这一页做 floor，指示条才不会从本章消失。
+ */
+export function spreadTocFollowPage(page: number, pageCount: number): number {
+  const row = spreadRowPages(page, pageCount);
+  return row[row.length - 1] ?? spreadPairStart(page);
+}
+
 /** 下一对的对首页（PS-D4：±2，封面边界 ±1）；钳在 [1, pageCount]。 */
 export function nextSpreadPage(current: number, pageCount: number): number {
   const start = spreadPairStart(current);

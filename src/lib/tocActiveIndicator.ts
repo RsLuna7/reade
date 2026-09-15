@@ -1,9 +1,28 @@
 /** TOC 活动光标：测量与侧栏跟随（对齐 Claude docs 滑动指示器，色值走 --accent）。 */
 
+import type { TocItem } from "./markdown";
+import { resolvePdfTocId } from "./tocHeat";
+
 export type TocIndicatorBox = {
   top: number;
   height: number;
 };
+
+const PDF_TOC_ID = /^pdf-page-(\d+)$/;
+
+/**
+ * 侧栏高亮 id：Markdown/EPUB 直配；PDF 按 Outline 页区间 floor，
+ * 这样当前页不必恰好等于某个目录目标页，指示条才不会在章内或双页对上消失。
+ */
+export function resolveTocActiveId(
+  items: TocItem[],
+  activeId: string | null,
+): string | null {
+  if (!activeId) return null;
+  const match = PDF_TOC_ID.exec(activeId);
+  if (!match) return activeId;
+  return resolvePdfTocId(items, Number.parseInt(match[1], 10));
+}
 
 /** 相对 wrap 的 top/height；无有效几何时返回 null（如 jsdom 零尺寸）。 */
 export function measureTocIndicator(

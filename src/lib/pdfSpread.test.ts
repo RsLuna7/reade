@@ -10,6 +10,7 @@ import {
   spreadFitScale,
   spreadPairStart,
   spreadRowPages,
+  spreadTocFollowPage,
 } from "./pdfSpread";
 
 describe("spread pairing (PS-D2: 封面独立, (2k,2k+1) 配对)", () => {
@@ -32,6 +33,15 @@ describe("spread pairing (PS-D2: 封面独立, (2k,2k+1) 配对)", () => {
     expect(spreadRowPages(4, 5)).toEqual([4, 5]);
     // 6 页文档:末对是 (6) 落单。
     expect(spreadRowPages(6, 6)).toEqual([6]);
+  });
+
+  it("follows the right-hand page of a spread for TOC highlighting", () => {
+    expect(spreadTocFollowPage(1, 10)).toBe(1);
+    expect(spreadTocFollowPage(2, 10)).toBe(3);
+    expect(spreadTocFollowPage(3, 10)).toBe(3);
+    expect(spreadTocFollowPage(40, 200)).toBe(41);
+    expect(spreadTocFollowPage(41, 200)).toBe(41);
+    expect(spreadTocFollowPage(6, 6)).toBe(6);
   });
 });
 

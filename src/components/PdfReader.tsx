@@ -47,6 +47,7 @@ import {
   previousSpreadPage,
   singleFitScale,
   spreadFitScale,
+  spreadTocFollowPage,
 } from "../lib/pdfSpread";
 import {
   deletePdfPageOffset,
@@ -990,17 +991,22 @@ export function PdfReader({
   const reading = boundReading?.sourceKey === sourceKey ? boundReading.document : null;
   const error = boundError?.sourceKey === sourceKey ? boundError.message : null;
   const readingLoading = readingLoadingKey === sourceKey;
+  const spreadActive = spreadIntent && spreadCapable && mode === "original";
 
   const setActivePage = useCallback((page: number) => {
     if (currentPageRef.current !== page) {
       currentPageRef.current = page;
       setCurrentPage(page);
     }
-    if (reportedPageRef.current !== page) {
-      reportedPageRef.current = page;
-      onActiveChange(`pdf-page-${page}`);
+    // 双页时页码框仍用左页；目录跟随取该行最右页，右页大纲标题才不会丢高亮。
+    const followPage = spreadActive
+      ? spreadTocFollowPage(page, session?.pdf.numPages ?? page)
+      : page;
+    if (reportedPageRef.current !== followPage) {
+      reportedPageRef.current = followPage;
+      onActiveChange(`pdf-page-${followPage}`);
     }
-  }, [onActiveChange]);
+  }, [onActiveChange, session?.pdf.numPages, spreadActive]);
 
   useEffect(() => {
     const generation = ++generationRef.current;
@@ -1079,8 +1085,6 @@ export function PdfReader({
       window.removeEventListener("resize", measure);
     };
   }, []);
-
-  const spreadActive = spreadIntent && spreadCapable && mode === "original";
 
   // 阅读模式没有页位图可裁;Esc 只在模式激活时消费(不 preventDefault,
   // App 全局 Esc 链的收尾行为保持不变)。

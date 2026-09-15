@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest";
 import { buildEpubToc, epubChapterTocId } from "../components/EpubReader";
 import type { Annotation, AnnotationLocator, BookmarkTarget, EpubDocument } from "./backend";
 import type { TocItem } from "./markdown";
-import { buildTocHeat } from "./tocHeat";
+import { buildTocHeat, resolvePdfTocId } from "./tocHeat";
 
 function makeAnnotation(
   id: string,
@@ -198,6 +198,22 @@ describe("buildTocHeat pdf", () => {
       format: "pdf",
     });
     expect(result.byId.get("pdf-page-5")?.count).toBe(1);
+  });
+});
+
+describe("resolvePdfTocId", () => {
+  it("floors the current page onto the covering outline entry", () => {
+    const items = pdfOutline([1, 41, 50]);
+    expect(resolvePdfTocId(items, 41)).toBe("pdf-page-41");
+    expect(resolvePdfTocId(items, 42)).toBe("pdf-page-41");
+    expect(resolvePdfTocId(items, 49)).toBe("pdf-page-41");
+    expect(resolvePdfTocId(items, 50)).toBe("pdf-page-50");
+  });
+
+  it("returns null before the first outline page or without an outline", () => {
+    expect(resolvePdfTocId(pdfOutline([3, 9]), 1)).toBeNull();
+    expect(resolvePdfTocId([], 4)).toBeNull();
+    expect(resolvePdfTocId(pdfOutline([1]), Number.NaN)).toBeNull();
   });
 });
 

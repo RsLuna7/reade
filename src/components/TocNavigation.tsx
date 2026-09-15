@@ -12,6 +12,7 @@ import type { TocHeatResult } from "../lib/tocHeat";
 import {
   findTocScrollParent,
   measureTocIndicator,
+  resolveTocActiveId,
   scrollTocLinkIntoView,
   tocScrollBehaviorFromMotion,
   type TocIndicatorBox,
@@ -38,6 +39,7 @@ export function TocNavigation({
   const wrapRef = useRef<HTMLDivElement>(null);
   const linkRefs = useRef(new Map<string, HTMLAnchorElement>());
   const [indicator, setIndicator] = useState<TocIndicatorBox | null>(null);
+  const resolvedActiveId = resolveTocActiveId(items, activeId);
 
   const setLinkRef = useCallback(
     (id: string) => (node: HTMLAnchorElement | null) => {
@@ -49,18 +51,18 @@ export function TocNavigation({
 
   const measureActive = useCallback(() => {
     const wrap = wrapRef.current;
-    if (!wrap || !activeId) {
+    if (!wrap || !resolvedActiveId) {
       setIndicator(null);
       return null as HTMLAnchorElement | null;
     }
-    const link = linkRefs.current.get(activeId);
+    const link = linkRefs.current.get(resolvedActiveId);
     if (!link) {
       setIndicator(null);
       return null;
     }
     setIndicator(measureTocIndicator(wrap, link));
     return link;
-  }, [activeId]);
+  }, [resolvedActiveId]);
 
   useLayoutEffect(() => {
     measureActive();
@@ -68,8 +70,8 @@ export function TocNavigation({
 
   useLayoutEffect(() => {
     const wrap = wrapRef.current;
-    if (!wrap || !activeId) return;
-    const link = linkRefs.current.get(activeId);
+    if (!wrap || !resolvedActiveId) return;
+    const link = linkRefs.current.get(resolvedActiveId);
     if (!link) return;
     const scrollParent = findTocScrollParent(wrap);
     if (!scrollParent) return;
@@ -78,7 +80,7 @@ export function TocNavigation({
       link,
       tocScrollBehaviorFromMotion(document.documentElement.dataset.motion),
     );
-  }, [activeId]);
+  }, [resolvedActiveId]);
 
   useEffect(() => {
     const wrap = wrapRef.current;
@@ -115,12 +117,12 @@ export function TocNavigation({
                 <li key={`${item.id}:${index}`}>
                   <a
                     ref={setLinkRef(item.id)}
-                    className={`toc-link${activeId === item.id ? " active" : ""}${
+                    className={`toc-link${resolvedActiveId === item.id ? " active" : ""}${
                       heatEntry ? " has-heat" : ""
                     }`}
                     style={{ "--toc-depth": item.level } as CSSProperties}
                     href={`#${item.id}`}
-                    aria-current={activeId === item.id ? "location" : undefined}
+                    aria-current={resolvedActiveId === item.id ? "location" : undefined}
                     title={heatLabel ? `${item.title}（${heatLabel}）` : item.title}
                     aria-label={heatLabel ? `${item.title}，${heatLabel}` : undefined}
                     onClick={(event) => {

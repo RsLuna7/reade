@@ -378,9 +378,13 @@ describe("PDF spread mode (plan-pdf-spread)", () => {
   }
 
   /** 每个测试用独立文件名:双页意图是按 relativePath 的会话级记忆。 */
-  async function renderWideSpreadReader(relativePath: string, numPages = 5) {
+  async function renderWideSpreadReader(
+    relativePath: string,
+    numPages = 5,
+    props: Partial<typeof common> = {},
+  ) {
     setWindowWidth(1600);
-    const view = render(<PdfReader {...common} relativePath={relativePath} />);
+    const view = render(<PdfReader {...common} {...props} relativePath={relativePath} />);
     await act(async () => {
       pdfMocks.tasks[0].resolve(fakePdf(numPages));
       await Promise.resolve();
@@ -428,6 +432,16 @@ describe("PDF spread mode (plan-pdf-spread)", () => {
     expect(pageInput).toHaveValue("2");
     fireEvent.click(view.getByRole("button", { name: "上一页" }));
     expect(pageInput).toHaveValue("1");
+    act(() => view.unmount());
+  });
+
+  it("reports the right-hand page of a spread for TOC follow", async () => {
+    const onActiveChange = vi.fn();
+    const view = await renderWideSpreadReader("spread-toc-follow.pdf", 10, { onActiveChange });
+    fireEvent.click(await view.findByRole("button", { name: "双页" }));
+    fireEvent.click(view.getByRole("button", { name: "下一页" }));
+    expect(view.getByRole("textbox", { name: "当前页" })).toHaveValue("2");
+    expect(onActiveChange).toHaveBeenCalledWith("pdf-page-3");
     act(() => view.unmount());
   });
 

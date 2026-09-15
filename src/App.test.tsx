@@ -1719,6 +1719,44 @@ describe("TOC heat wiring (T1)", () => {
     expect(container.querySelector(".toc-active-indicator")).toBeNull();
   });
 
+  it("keeps the sliding cursor on the covering PDF outline entry", () => {
+    const pdfItems = [
+      { id: "pdf-page-35", title: "第七章", level: 2 },
+      { id: "pdf-page-41", title: "第八章", level: 2 },
+      { id: "pdf-page-50", title: "第九章", level: 2 },
+    ];
+    const rect = (top: number, height: number): DOMRect => ({
+      x: 0,
+      y: top,
+      width: 200,
+      height,
+      top,
+      left: 0,
+      bottom: top + height,
+      right: 200,
+      toJSON() {
+        return {};
+      },
+    });
+    const rectSpy = vi
+      .spyOn(HTMLElement.prototype, "getBoundingClientRect")
+      .mockImplementation(function (this: HTMLElement) {
+        if (this.classList.contains("toc-list-wrap")) return rect(100, 300);
+        if (this.classList.contains("toc-link") && this.classList.contains("active")) {
+          return rect(140, 28);
+        }
+        return rect(0, 0);
+      });
+
+    const { container } = render(
+      <TocNavigation items={pdfItems} activeId="pdf-page-42" onSelect={() => undefined} />,
+    );
+    expect(container.querySelector('.toc-link[href="#pdf-page-41"]')).toHaveClass("active");
+    expect(container.querySelector('.toc-link[href="#pdf-page-35"]')).not.toHaveClass("active");
+    expect(container.querySelector(".toc-active-indicator")).not.toBeNull();
+    rectSpy.mockRestore();
+  });
+
   it("renders the estimate line only when provided (TE §3.3)", () => {
     const { container, rerender } = render(
       <TocNavigation items={tocItems} activeId={null} onSelect={() => undefined} />,
