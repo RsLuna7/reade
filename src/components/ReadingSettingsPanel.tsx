@@ -5,7 +5,13 @@ import { ANNOTATION_COLOR_NAME_MAX_CHARS } from "../lib/annotations";
 import { READER_CJK_FONTS, READER_FONT_PAIRS, READER_LATIN_FONTS, ReaderFontId, ReaderFontPairId, resolveReaderFontSelection } from "../lib/readerFonts";
 import { WHEEL_SPEED_MAX, WHEEL_SPEED_MIN, WHEEL_SPEED_STEP } from "../lib/readerWheelSpeed";
 import { setNextThemeTransitionOrigin } from "../lib/themeTransition";
-import { SERIES_FONT_PRESET, THEME_META, THEME_SERIES, ThemeSeriesId } from "../lib/themes";
+import {
+  SERIES_FONT_PRESET,
+  THEME_META,
+  THEME_SERIES,
+  type ThemeMode,
+  type ThemeSeriesId,
+} from "../lib/themes";
 import { VERTICAL_DISABLED_FEATURES } from "../lib/verticalWriting";
 import { CONTENT_WIDTH_MAX, CONTENT_WIDTH_MIN, ReaderFontFamily, useReaderStore } from "../store/useReaderStore";
 import { RotateCcw, X } from "lucide-react";
@@ -751,11 +757,18 @@ export function ReadingSettingsPanel({
   );
 }
 
+export const THEME_STYLE_PICKER_ID = "theme-style-picker";
+
+const THEME_MODE_OPTIONS: ReadonlyArray<{ id: ThemeMode; label: string }> = [
+  { id: "light", label: "浅色" },
+  { id: "dark", label: "深色" },
+];
+
 /**
- * 「界面风格」popover: one swatch tile per theme series (5.5). Selecting a tile
- * applies the series immediately, keeping the current light/dark mode; the
- * series' typography preset lands with it (D4) and a hint line explains the
- * serif preset. Reuses the settings-popover / reade-motion-panel pattern.
+ * 「界面风格」popover: light/dark segmented control plus one swatch tile per
+ * series. Selecting a control applies immediately; the series' typography
+ * preset lands with a series switch (D4) and a hint line explains the serif
+ * preset. Reuses the settings-popover / reade-motion-panel pattern.
  */
 export function ThemeStylePicker({
   open,
@@ -765,15 +778,67 @@ export function ThemeStylePicker({
   onClose: () => void;
 }) {
   const theme = useReaderStore((state) => state.theme);
+  const setTheme = useReaderStore((state) => state.setTheme);
   const setThemeSeries = useReaderStore((state) => state.setThemeSeries);
   const [hint, setHint] = useState<string | null>(null);
-  const groupRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
+  const modeGroupRef = useRef<HTMLDivElement>(null);
+  const seriesGroupRef = useRef<HTMLDivElement>(null);
+  const restoreFocusRef = useRef(true);
   const activeSeries = THEME_META[theme].series;
   const mode = THEME_META[theme].mode;
 
   useEffect(() => {
     if (!open) setHint(null);
   }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    restoreFocusRef.current = true;
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const selected = dialogRef.current?.querySelector<HTMLElement>(
+      ".theme-mode-control [role='radio'][aria-checked='true']",
+    );
+    selected?.focus();
+    return () => {
+      if (restoreFocusRef.current) opener?.focus();
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
+    const onPointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (dialogRef.current?.contains(target)) return;
+      if (target instanceof Element) {
+        const trigger = document.querySelector(`[aria-controls="${THEME_STYLE_PICKER_ID}"]`);
+        if (trigger?.contains(target)) return;
+      }
+      restoreFocusRef.current = false;
+      onClose();
+    };
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [open, onClose]);
+
+  const closeFromControl = () => {
+    restoreFocusRef.current = true;
+    onClose();
+  };
+
+  const pickMode = (nextMode: ThemeMode, anchor?: HTMLElement | null) => {
+    if (nextMode === mode) return;
+    // 墨水扩散以分段按钮中心为圆心;等值早退不会留下陈旧 origin。
+    if (anchor) {
+      const rect = anchor.getBoundingClientRect();
+      setNextThemeTransitionOrigin({
+        x: rect.left + rect.width / 2,
+        y: rect.top + rect.height / 2,
+      });
+    }
+    setTheme(`${activeSeries}-${nextMode}`);
+  };
 
   const pickSeries = (series: ThemeSeriesId, anchor?: HTMLElement | null) => {
     if (series === activeSeries) return;
@@ -795,15 +860,41 @@ export function ThemeStylePicker({
     );
   };
 
+  const onModeKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    const { key } = event;
+    if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft"].includes(key)) {
+      return;
+    }
+    event.preventDefault();
+    const focused = modeGroupRef.current?.querySelector<HTMLButtonElement>(
+      ".theme-mode-option:focus",
+    );
+    const focusedIndex = THEME_MODE_OPTIONS.findIndex(
+      (option) => option.id === focused?.dataset.mode,
+    );
+    const currentIndex =
+      focusedIndex >= 0
+        ? focusedIndex
+        : THEME_MODE_OPTIONS.findIndex((option) => option.id === mode);
+    const delta = key === "ArrowDown" || key === "ArrowRight" ? 1 : -1;
+    const nextIndex = (currentIndex + delta + THEME_MODE_OPTIONS.length) % THEME_MODE_OPTIONS.length;
+    const nextMode = THEME_MODE_OPTIONS[nextIndex].id;
+    const option = modeGroupRef.current?.querySelector<HTMLButtonElement>(
+      `.theme-mode-option[data-mode="${nextMode}"]`,
+    );
+    option?.focus();
+    pickMode(nextMode, option);
+  };
+
   // Radio-group keyboard pattern: arrows cycle (with wrap) and select as they
   // move — the instant-preview behavior of the tiles — Home/End jump.
-  const onGroupKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+  const onSeriesKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
     const { key } = event;
     if (!["ArrowDown", "ArrowRight", "ArrowUp", "ArrowLeft", "Home", "End"].includes(key)) {
       return;
     }
     event.preventDefault();
-    const focused = groupRef.current?.querySelector<HTMLButtonElement>(
+    const focused = seriesGroupRef.current?.querySelector<HTMLButtonElement>(
       ".theme-style-tile:focus",
     );
     const focusedIndex = THEME_SERIES.findIndex(
@@ -821,59 +912,110 @@ export function ThemeStylePicker({
       nextIndex = (currentIndex + delta + THEME_SERIES.length) % THEME_SERIES.length;
     }
     const nextSeries = THEME_SERIES[nextIndex].id;
-    const tile = groupRef.current?.querySelector<HTMLButtonElement>(
+    const tile = seriesGroupRef.current?.querySelector<HTMLButtonElement>(
       `.theme-style-tile[data-series="${nextSeries}"]`,
     );
     tile?.focus();
     pickSeries(nextSeries, tile);
   };
 
+  const onDialogKeyDown = (event: ReactKeyboardEvent<HTMLDivElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    closeFromControl();
+  };
+
   return (
     <div
+      ref={dialogRef}
+      id={THEME_STYLE_PICKER_ID}
       className="settings-popover reade-motion-panel theme-style-popover"
       role="dialog"
       aria-label="界面风格"
       aria-hidden={!open}
       data-open={open}
       inert={!open}
+      onKeyDown={onDialogKeyDown}
     >
       <div className="settings-heading">
         <span>界面风格</span>
-        <button className="icon-button" type="button" onClick={onClose} aria-label="关闭界面风格">
+        <button
+          className="icon-button"
+          type="button"
+          onClick={closeFromControl}
+          aria-label="关闭界面风格"
+        >
           <X size={15} aria-hidden="true" />
         </button>
       </div>
-      <div
-        ref={groupRef}
-        className="theme-style-options"
-        role="radiogroup"
-        aria-label="界面风格系列"
-        onKeyDown={onGroupKeyDown}
-      >
-        {THEME_SERIES.map((series) => {
-          const meta = THEME_META[`${series.id}-${mode}`];
-          const active = series.id === activeSeries;
-          return (
-            <button
-              key={series.id}
-              type="button"
-              role="radio"
-              aria-checked={active}
-              data-series={series.id}
-              tabIndex={active ? 0 : -1}
-              className={`theme-style-tile${active ? " active" : ""}`}
-              aria-label={`${series.label}系列${active ? "（当前使用）" : ""}`}
-              onClick={(event) => pickSeries(series.id, event.currentTarget)}
-            >
-              <span className="theme-style-swatch" aria-hidden="true">
-                <i style={{ background: meta.swatch.paper }} />
-                <i style={{ background: meta.swatch.chrome }} />
-                <i style={{ background: meta.swatch.accent }} />
-              </span>
-              <span className="theme-style-name">{series.label}</span>
-            </button>
-          );
-        })}
+      <div className="theme-style-section">
+        <div className="theme-style-section-label" id="theme-style-mode-heading">
+          明暗模式
+        </div>
+        <div
+          ref={modeGroupRef}
+          className="theme-mode-control"
+          role="radiogroup"
+          aria-labelledby="theme-style-mode-heading"
+          onKeyDown={onModeKeyDown}
+        >
+          {THEME_MODE_OPTIONS.map((option) => {
+            const active = option.id === mode;
+            return (
+              <button
+                key={option.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-mode={option.id}
+                tabIndex={active ? 0 : -1}
+                className={`theme-mode-option${active ? " active" : ""}`}
+                aria-label={`${option.label}${active ? "（当前使用）" : ""}`}
+                onClick={(event) => pickMode(option.id, event.currentTarget)}
+              >
+                {option.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div className="theme-style-section">
+        <div className="theme-style-section-label" id="theme-style-series-heading">
+          风格系列
+        </div>
+        <div
+          ref={seriesGroupRef}
+          className="theme-style-options"
+          role="radiogroup"
+          aria-labelledby="theme-style-series-heading"
+          onKeyDown={onSeriesKeyDown}
+        >
+          {THEME_SERIES.map((series) => {
+            const meta = THEME_META[`${series.id}-${mode}`];
+            const active = series.id === activeSeries;
+            return (
+              <button
+                key={series.id}
+                type="button"
+                role="radio"
+                aria-checked={active}
+                data-series={series.id}
+                tabIndex={active ? 0 : -1}
+                className={`theme-style-tile${active ? " active" : ""}`}
+                aria-label={`${series.label}系列${active ? "（当前使用）" : ""}`}
+                onClick={(event) => pickSeries(series.id, event.currentTarget)}
+              >
+                <span className="theme-style-swatch" aria-hidden="true">
+                  <i style={{ background: meta.swatch.paper }} />
+                  <i style={{ background: meta.swatch.chrome }} />
+                  <i style={{ background: meta.swatch.accent }} />
+                </span>
+                <span className="theme-style-name">{series.label}</span>
+              </button>
+            );
+          })}
+        </div>
       </div>
       {hint && (
         <p className="theme-style-hint" role="status">

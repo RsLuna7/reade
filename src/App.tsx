@@ -27,12 +27,11 @@ import {
   House,
   Library,
   ListTree,
-  Moon,
+  Palette,
   RefreshCw,
   Search,
   Settings2,
 
-  Sun,
   Type,
   X,
 } from "lucide-react";
@@ -50,7 +49,11 @@ import { BrandCompanion } from "./components/BrandCompanion";
 import { DocumentTree } from "./components/DocumentTree";
 import { MotionNotice } from "./components/MotionNotice";
 import { LocalDataHealthNotice } from "./components/LocalDataHealthNotice";
-import { ReadingSettingsPanel, ThemeStylePicker } from "./components/ReadingSettingsPanel";
+import {
+  ReadingSettingsPanel,
+  THEME_STYLE_PICKER_ID,
+  ThemeStylePicker,
+} from "./components/ReadingSettingsPanel";
 import { SidePanel, type SidePanelTab } from "./components/SidePanel";
 import { TocNavigation } from "./components/TocNavigation";
 import { Welcome } from "./components/WelcomeView";
@@ -61,7 +64,6 @@ import { buildLibraryStatusDetail } from "./lib/libraryStatus";
 import {
   applyThemeMutation,
   consumeThemeTransitionOrigin,
-  setNextThemeTransitionOrigin,
 } from "./lib/themeTransition";
 import {
   APP_RUNTIME,
@@ -3413,7 +3415,7 @@ function App() {
       applyTheme();
       return;
     }
-    // 真正的主题变更才消费扩散 origin;来自日/月按钮或风格色卡时
+    // 真正的主题变更才消费扩散 origin;来自风格浮层分段按钮或色卡时
     // full 档做圆形揭示,其余入口(命令面板等)保持交叉淡入。
     applyThemeMutation(applyTheme, motionLevel, consumeThemeTransitionOrigin());
   }, [theme, motionLevel]);
@@ -4116,6 +4118,7 @@ function App() {
     setAnnotationTool,
     searchRef,
     setSettingsOpen,
+    stylePickerOpen,
     setStylePickerOpen,
     setAnnotationPanelOpen,
     setCollectionsPopoverOpen,
@@ -4743,15 +4746,16 @@ function App() {
           ) : null}
           <div className="theme-controls">
             <button
-              className="theme-series-label"
+              className="icon-button"
               type="button"
               aria-haspopup="dialog"
               aria-expanded={stylePickerOpen}
-              aria-label={`界面风格：${getThemeSeriesLabel(theme)}，点击选择界面风格`}
-              title={`界面风格：${THEME_META[theme].label}`}
+              aria-controls={THEME_STYLE_PICKER_ID}
+              aria-label={`界面风格：${getThemeSeriesLabel(theme)}，${themeMode === "light" ? "浅色" : "深色"}`}
+              title={`界面风格：${getThemeSeriesLabel(theme)}，${themeMode === "light" ? "浅色" : "深色"}`}
               onClick={() => setStylePickerOpen((open) => !open)}
             >
-              {getThemeSeriesLabel(theme)}
+              <Palette size={16} aria-hidden="true" />
             </button>
             <button
               className={`icon-button${homeOpen ? " is-armed" : ""}`}
@@ -4783,26 +4787,6 @@ function App() {
                 <BarChart3 size={16} aria-hidden="true" />
               </button>
             )}
-            <button
-              className="icon-button"
-              type="button"
-              aria-label={themeMode === "light" ? "切换到深色主题" : "切换到浅色主题"}
-              title={themeMode === "light" ? "深色主题" : "浅色主题"}
-              onClick={(event) => {
-                // 墨水扩散从日/月按钮圆心晕开(plan-theme-ink-transition)。
-                const rect = event.currentTarget.getBoundingClientRect();
-                setNextThemeTransitionOrigin({
-                  x: rect.left + rect.width / 2,
-                  y: rect.top + rect.height / 2,
-                });
-                toggleTheme();
-              }}
-            >
-              <span className="theme-state-icon" aria-hidden="true">
-                <Moon className={themeMode === "light" ? "active" : undefined} size={16} />
-                <Sun className={themeMode === "dark" ? "active" : undefined} size={16} />
-              </span>
-            </button>
           </div>
           <ThemeStylePicker open={stylePickerOpen} onClose={() => setStylePickerOpen(false)} />
         </footer>

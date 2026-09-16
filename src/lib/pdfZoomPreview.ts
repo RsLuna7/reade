@@ -27,7 +27,7 @@ export interface PdfZoomPreview {
 }
 
 /** One live overlay per page stack. A second capture must not leave the previous bitmap stuck. */
-const activePreviewOverlays = new WeakMap<HTMLElement, { overlay: HTMLElement; token: object }>();
+const activePreviewOverlays = new WeakMap<HTMLElement, PdfZoomPreview>();
 
 export function createPdfZoomPreview(
   pages: HTMLElement, scroller: HTMLElement, toolbar: HTMLElement | null, referenceY?: number,
@@ -110,14 +110,34 @@ export function createPdfZoomPreview(
     top: `${capture.top - viewport.top}px`, width: `${captureWidth}px`, height: `${captureHeight}px`,
     transformOrigin: `${origin.x - capture.left}px ${origin.y - capture.top}px`, willChange: "transform" });
   overlay.append(bitmap);
-  const token = {};
-  activePreviewOverlays.get(pages)?.overlay.remove();
-  activePreviewOverlays.set(pages, { overlay, token });
+  activePreviewOverlays.get(pages)?.dispose();
   document.body.append(overlay);
   pages.dataset.bitmapPreview = "true";
   pages.dataset.zoomPreview = "true";
   let disposed = false;
-  return {
+  // This body-level bitmap is outside React's tree. Own its invalidation here
+  // as well as in the reader: an interrupted gesture must not freeze the view.
+  const dispose = () => preview.dispose();
+  const onScroll = (event: Event) => {
+    const target = event.target;
+    if (target === document || (target instanceof Node && target.contains(scroller))) dispose();
+  };
+  const detachObserver = new MutationObserver(() => {
+    if (!pages.isConnected || !scroller.contains(pages)) dispose();
+  });
+  // Observe ancestor removal without observing every text-layer mutation.
+  for (let node: HTMLElement | null = pages.parentElement; node; node = node.parentElement) {
+    detachObserver.observe(node, { childList: true });
+  }
+  const initialSize = `${scroller.clientWidth}:${scroller.clientHeight}`;
+  const resizeObserver = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(() => {
+    if (`${scroller.clientWidth}:${scroller.clientHeight}` !== initialSize) dispose();
+  });
+  resizeObserver?.observe(scroller);
+  window.addEventListener("scroll", onScroll, true);
+  window.addEventListener("resize", dispose);
+  window.addEventListener("blur", dispose);
+  const preview: PdfZoomPreview = {
     paint(factor) {
       if (disposed || !Number.isFinite(factor) || factor <= 0) return false;
       // Match scroll clamping at the first/last page rather than snapping on commit.
@@ -137,8 +157,12 @@ export function createPdfZoomPreview(
     dispose() {
       if (disposed) return;
       disposed = true;
-      const current = activePreviewOverlays.get(pages);
-      if (current?.token === token) {
+      detachObserver.disconnect();
+      resizeObserver?.disconnect();
+      window.removeEventListener("scroll", onScroll, true);
+      window.removeEventListener("resize", dispose);
+      window.removeEventListener("blur", dispose);
+      if (activePreviewOverlays.get(pages) === preview) {
         activePreviewOverlays.delete(pages);
         delete pages.dataset.bitmapPreview;
         delete pages.dataset.zoomPreview;
@@ -147,4 +171,6 @@ export function createPdfZoomPreview(
       bitmap.width = bitmap.height = 0;
     },
   };
+  activePreviewOverlays.set(pages, preview);
+  return preview;
 }

@@ -157,6 +157,13 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(
       /\.theme-controls\s*\{[^}]*grid-template-columns:\s*repeat\(auto-fit,\s*minmax\(0,\s*1fr\)\)/s,
     );
+    expect(css).not.toContain(".theme-series-label");
+    expect(css).toMatch(
+      /\.settings-popover\.theme-style-popover\s*\{[^}]*max-height:\s*calc\(100vh - 88px\)/s,
+    );
+    expect(css).toMatch(
+      /\.settings-popover\.theme-style-popover\s*\{[^}]*overflow-y:\s*auto/s,
+    );
   });
 
   it("hides library and TOC scrollbars while keeping overflow scrolling", () => {

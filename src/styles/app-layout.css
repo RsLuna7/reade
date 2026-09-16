@@ -804,36 +804,6 @@
   gap: 5px;
 }
 
-.theme-state-icon {
-  position: relative;
-  display: block;
-  width: 16px;
-  height: 16px;
-}
-
-.theme-state-icon svg {
-  position: absolute;
-  inset: 0;
-  opacity: 0;
-  transform: scale(0.9);
-  transition:
-    opacity var(--motion-fast) var(--motion-ease),
-    transform var(--motion-fast) var(--motion-ease);
-}
-
-.theme-state-icon svg.active {
-  opacity: 1;
-  transform: scale(1);
-}
-
-:root[data-motion="full"] .theme-state-icon svg:not(.active) {
-  transform: rotate(-12deg) scale(0.9);
-}
-
-:root[data-motion="full"] .theme-state-icon svg.active {
-  transform: rotate(0) scale(1);
-}
-
 :root[data-motion="full"] .reade-motion-backdrop {
   background:
     radial-gradient(circle at 78% 24%, rgba(175, 76, 56, 0.08), transparent 38%),

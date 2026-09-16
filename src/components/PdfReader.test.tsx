@@ -1028,6 +1028,21 @@ describe("PDF wheel zoom preview", () => {
     expect(dispose).toHaveBeenCalled();
     act(() => view.unmount());
   });
+
+  it("commits the zoom when an ancestor pane scrolls before the debounce", async () => {
+    const readerRef = { current: null as PdfReaderHandle | null };
+    const view = await renderReady(readerRef, true);
+    const dispose = vi.fn();
+    zoomPreviewMocks.createPdfZoomPreview.mockReturnValue({ paint: () => true, dispose });
+    vi.useFakeTimers();
+    act(() => readerRef.current!.adjustScale(1));
+    act(() => vi.advanceTimersByTime(16));
+    fireEvent.scroll(view.container);
+    expect(dispose).toHaveBeenCalled();
+    expect(view.container.querySelector<HTMLElement>(".pdf-pages")!
+      .style.getPropertyValue("--pdf-page-width")).toBe("902px");
+    act(() => view.unmount());
+  });
 });
 
 describe("PDF range transport errors (D06)", () => {

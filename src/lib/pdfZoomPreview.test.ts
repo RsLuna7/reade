@@ -90,4 +90,23 @@ describe("bounded PDF bitmap preview", () => {
     expect(document.querySelectorAll(".pdf-zoom-bitmap-overlay")).toHaveLength(0);
     expect(pages.dataset.bitmapPreview).toBeUndefined();
   });
+
+  it.each(["scroll", "resize", "blur"])("releases the fixed snapshot on %s without waiting for its owner", (event) => {
+    const { scroller, pages } = fixture();
+    const preview = createPdfZoomPreview(pages, scroller, null)!;
+    (event === "scroll" ? scroller : window).dispatchEvent(new Event(event));
+    expect(document.querySelector(".pdf-zoom-bitmap-overlay")).toBeNull();
+    expect(pages.dataset.bitmapPreview).toBeUndefined();
+    expect(preview.paint(1.1)).toBe(false);
+  });
+
+  it("releases the snapshot when its reader is removed", async () => {
+    const { scroller, pages } = fixture();
+    const preview = createPdfZoomPreview(pages, scroller, null)!;
+    scroller.remove();
+    await Promise.resolve();
+    expect(document.querySelector(".pdf-zoom-bitmap-overlay")).toBeNull();
+    expect(pages.dataset.bitmapPreview).toBeUndefined();
+    expect(preview.paint(1)).toBe(false);
+  });
 });

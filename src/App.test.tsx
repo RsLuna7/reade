@@ -473,14 +473,32 @@ describe("motion integration", () => {
   });
 });
 
+function openThemeStylePicker() {
+  fireEvent.click(screen.getByRole("button", { name: /^界面风格：/ }));
+}
+
 describe("theme style picker (M1)", () => {
+  it("keeps three footer entries and names the style trigger with series and mode", () => {
+    const view = render(<App />);
+    const footer = view.container.querySelector(".theme-controls");
+    expect(footer).not.toBeNull();
+    const entries = within(footer as HTMLElement).getAllByRole("button");
+    expect(entries.map((entry) => entry.getAttribute("aria-label"))).toEqual([
+      "界面风格：纸感，浅色",
+      "打开主页",
+      "打开阅读统计",
+    ]);
+    expect(screen.queryByRole("button", { name: "切换到深色主题" })).not.toBeInTheDocument();
+  });
+
   it("switches the series from the sidebar popover and persists the choice", async () => {
     render(<App />);
 
     // While closed the popover is aria-hidden + inert: no reachable tiles.
     expect(screen.queryByRole("radio", { name: /墨韵系列/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /^浅色/ })).not.toBeInTheDocument();
 
-    fireEvent.click(screen.getByRole("button", { name: /界面风格/ }));
+    openThemeStylePicker();
     const inkTile = await screen.findByRole("radio", { name: /墨韵系列/ });
     fireEvent.click(inkTile);
 
@@ -491,6 +509,7 @@ describe("theme style picker (M1)", () => {
       screen.getByText("已切换为书刊衬线，可在阅读设置中调整"),
     ).toBeInTheDocument();
     expect(inkTile).toHaveAttribute("aria-checked", "true");
+    expect(screen.getByRole("dialog", { name: "界面风格" })).toBeInTheDocument();
 
     await waitFor(() => {
       expect(document.documentElement.dataset.theme).toBe("ink-light");
@@ -500,36 +519,80 @@ describe("theme style picker (M1)", () => {
     ) as { state: Record<string, unknown> };
     expect(stored.state).toMatchObject({ theme: "ink-light" });
 
-    // Mode toggling stays orthogonal: the sun/moon button keeps the series.
-    fireEvent.click(screen.getByRole("button", { name: "切换到深色主题" }));
+    // Mode toggling stays orthogonal: the segmented control keeps the series.
+    fireEvent.click(screen.getByRole("radio", { name: /^深色/ }));
     expect(useReaderStore.getState().theme).toBe("ink-dark");
+    expect(screen.getByRole("button", { name: "界面风格：墨韵，深色" })).toBeInTheDocument();
+    const persisted = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(persisted.state).toMatchObject({ theme: "ink-dark" });
   });
 
-  it("cycles and selects series with arrow keys inside the radiogroup (M2)", async () => {
+  it("cycles mode and series keyboards independently, keeping Home/End on series", async () => {
     render(<App />);
-    fireEvent.click(screen.getByRole("button", { name: /界面风格/ }));
-    const group = await screen.findByRole("radiogroup", { name: "界面风格系列" });
+    openThemeStylePicker();
+    const modeGroup = await screen.findByRole("radiogroup", { name: "明暗模式" });
+    const seriesGroup = screen.getByRole("radiogroup", { name: "风格系列" });
+
+    screen.getByRole("radio", { name: /^浅色/ }).focus();
+    fireEvent.keyDown(modeGroup, { key: "ArrowRight" });
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    fireEvent.keyDown(modeGroup, { key: "Home" });
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
 
     screen.getByRole("radio", { name: /纸感系列/ }).focus();
-    fireEvent.keyDown(group, { key: "ArrowDown" });
-    expect(useReaderStore.getState().theme).toBe("ink-light");
-    fireEvent.keyDown(group, { key: "ArrowDown" });
-    expect(useReaderStore.getState().theme).toBe("mist-light");
-    fireEvent.keyDown(group, { key: "ArrowDown" });
-    expect(useReaderStore.getState().theme).toBe("celadon-light");
+    fireEvent.keyDown(seriesGroup, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("ink-dark");
+    fireEvent.keyDown(seriesGroup, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("mist-dark");
+    fireEvent.keyDown(seriesGroup, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("celadon-dark");
     // Cycling wraps from the last tile back to the first.
-    fireEvent.keyDown(group, { key: "ArrowDown" });
-    expect(useReaderStore.getState().theme).toBe("paper-light");
-    fireEvent.keyDown(group, { key: "ArrowUp" });
-    expect(useReaderStore.getState().theme).toBe("celadon-light");
-    fireEvent.keyDown(group, { key: "Home" });
-    expect(useReaderStore.getState().theme).toBe("paper-light");
-    fireEvent.keyDown(group, { key: "End" });
-    expect(useReaderStore.getState().theme).toBe("celadon-light");
+    fireEvent.keyDown(seriesGroup, { key: "ArrowDown" });
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    fireEvent.keyDown(seriesGroup, { key: "ArrowUp" });
+    expect(useReaderStore.getState().theme).toBe("celadon-dark");
+    fireEvent.keyDown(seriesGroup, { key: "Home" });
+    expect(useReaderStore.getState().theme).toBe("paper-dark");
+    fireEvent.keyDown(seriesGroup, { key: "End" });
+    expect(useReaderStore.getState().theme).toBe("celadon-dark");
 
     // Roving tabindex follows the selection.
     expect(screen.getByRole("radio", { name: /青瓷系列/ })).toHaveAttribute("tabindex", "0");
     expect(screen.getByRole("radio", { name: /纸感系列/ })).toHaveAttribute("tabindex", "-1");
+    expect(screen.getByRole("radio", { name: /^深色/ })).toHaveAttribute("tabindex", "0");
+    expect(screen.getByRole("radio", { name: /^浅色/ })).toHaveAttribute("tabindex", "-1");
+  });
+
+  it("restores the style trigger on Esc or close, but not on outside pointerdown", async () => {
+    const view = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "打开文档库" }));
+    expect(view.container.querySelector(".library-sidebar")).toHaveAttribute("data-open", "true");
+
+    const trigger = screen.getByRole("button", { name: /^界面风格：/ });
+    trigger.focus();
+    openThemeStylePicker();
+    await screen.findByRole("radio", { name: /^浅色/ });
+    expect(screen.getByRole("radio", { name: /^浅色/ })).toHaveFocus();
+
+    fireEvent.keyDown(window, { key: "Escape" });
+    expect(screen.queryByRole("radio", { name: /^浅色/ })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+    expect(view.container.querySelector(".library-sidebar")).toHaveAttribute("data-open", "true");
+
+    openThemeStylePicker();
+    await screen.findByRole("radio", { name: /^浅色/ });
+    fireEvent.click(screen.getByRole("button", { name: "关闭界面风格" }));
+    expect(screen.queryByRole("radio", { name: /^浅色/ })).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+
+    openThemeStylePicker();
+    await screen.findByRole("radio", { name: /^浅色/ });
+    const home = screen.getByRole("button", { name: "打开主页" });
+    fireEvent.pointerDown(home);
+    expect(screen.queryByRole("radio", { name: /^浅色/ })).not.toBeInTheDocument();
+    expect(trigger).not.toHaveFocus();
   });
 });
 
@@ -560,15 +623,20 @@ describe("theme switch crossfade (M3/D5)", () => {
     });
     expect(startViewTransition).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole("button", { name: "切换到深色主题" }));
+    openThemeStylePicker();
+    fireEvent.click(await screen.findByRole("radio", { name: /^深色/ }));
     await waitFor(() => {
       expect(document.documentElement.dataset.theme).toBe("paper-dark");
     });
     expect(startViewTransition).toHaveBeenCalledTimes(1);
 
+    fireEvent.click(screen.getByRole("radio", { name: /^深色/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /纸感系列/ }));
+    expect(startViewTransition).toHaveBeenCalledTimes(1);
+
     // subtle (and off) keep the instant switch even with the API present.
     useReaderStore.setState({ motionLevel: "subtle" });
-    fireEvent.click(screen.getByRole("button", { name: "切换到浅色主题" }));
+    fireEvent.click(screen.getByRole("radio", { name: /^浅色/ }));
     await waitFor(() => {
       expect(document.documentElement.dataset.theme).toBe("paper-light");
     });
@@ -581,7 +649,8 @@ describe("theme switch crossfade (M3/D5)", () => {
 
     render(<App />);
 
-    fireEvent.click(screen.getByRole("button", { name: "切换到深色主题" }));
+    openThemeStylePicker();
+    fireEvent.click(await screen.findByRole("radio", { name: /^深色/ }));
     await waitFor(() => {
       expect(document.documentElement.dataset.theme).toBe("paper-dark");
     });

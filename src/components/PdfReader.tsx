@@ -1567,8 +1567,13 @@ export function PdfReader({
     window.addEventListener("blur", finish);
     window.addEventListener("resize", finish);
     const scroller = findReadingRoot(rootRef.current);
-    const finishOnScroll = () => { if (bitmapPreviewRef.current) finish(); };
-    scroller?.addEventListener("scroll", finishOnScroll, { passive: true });
+    const finishOnScroll = (event: Event) => {
+      const target = event.target;
+      if (bitmapPreviewRef.current && scroller &&
+          (target === document || (target instanceof Node && target.contains(scroller)))) finish();
+    };
+    // An outer pane can scroll too; a fixed snapshot becomes stale in either case.
+    window.addEventListener("scroll", finishOnScroll, { passive: true, capture: true });
     let previousSize = scroller ? `${scroller.clientWidth}:${scroller.clientHeight}` : "";
     const observer = new ResizeObserver(() => {
       if (!scroller) return;
@@ -1580,7 +1585,7 @@ export function PdfReader({
     return () => {
       window.removeEventListener("blur", finish);
       window.removeEventListener("resize", finish);
-      scroller?.removeEventListener("scroll", finishOnScroll);
+      window.removeEventListener("scroll", finishOnScroll, true);
       observer.disconnect();
     };
   }, [commitPdfScale]);

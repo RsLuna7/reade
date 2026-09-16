@@ -27,6 +27,7 @@ export function useReaderHotkeys({
   setAnnotationTool,
   searchRef,
   setSettingsOpen,
+  stylePickerOpen,
   setStylePickerOpen,
   setAnnotationPanelOpen,
   setCollectionsPopoverOpen,
@@ -62,6 +63,7 @@ export function useReaderHotkeys({
   setAnnotationTool: (tool: AnnotationToolPreference) => void;
   searchRef: RefObject<HTMLInputElement | null>;
   setSettingsOpen: (open: boolean) => void;
+  stylePickerOpen: boolean;
   setStylePickerOpen: (open: boolean) => void;
   setAnnotationPanelOpen: (open: boolean) => void;
   setCollectionsPopoverOpen: (open: boolean) => void;
@@ -101,6 +103,10 @@ export function useReaderHotkeys({
           }
           if (autoPaceBarOpen) {
             autoPaceStop();
+            return;
+          }
+          if (stylePickerOpen) {
+            setStylePickerOpen(false);
             return;
           }
           if (annotationTool !== "view") {
@@ -191,6 +197,7 @@ export function useReaderHotkeys({
     setAnnotationTool,
     searchRef,
     setSettingsOpen,
+    stylePickerOpen,
     setStylePickerOpen,
     setAnnotationPanelOpen,
     setCollectionsPopoverOpen,

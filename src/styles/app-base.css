@@ -616,56 +616,70 @@ a:focus-visible {
   gap: 2px;
 }
 
-.theme-controls > .theme-series-label,
 .theme-controls > .icon-button {
   width: 100%;
   min-width: 0;
 }
 
-/* Four equal cells fill the footer; the series label is one of them. */
-.theme-series-label {
-  display: inline-flex;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  gap: 4px;
-  overflow: hidden;
-  padding: 0 4px;
-  border: 1px solid transparent;
-  border-radius: 10px;
-  color: var(--muted);
-  background: transparent;
-  font-size: 10px;
-  font-weight: 650;
-  letter-spacing: 0.04em;
-  text-overflow: ellipsis;
-  text-transform: uppercase;
-  white-space: nowrap;
-  cursor: pointer;
-  transition:
-    border-color var(--motion-fast) var(--motion-ease),
-    color var(--motion-fast) var(--motion-ease),
-    background-color var(--motion-fast) var(--motion-ease);
-}
-
-.theme-series-label:hover,
-.theme-series-label[aria-expanded="true"] {
-  border-color: var(--line-strong);
-  color: var(--ink-soft);
-  background: var(--paper-raised);
-}
-
 /* 「界面风格」picker: reuses the settings-popover shell, opens upward from
    the sidebar footer and stays inside the sidebar bounds. The compound
    selector must outweigh .settings-popover's own top/right placement,
-   which is declared later in this file. */
+   which is declared later in this file. Short/narrow sidebars scroll
+   rather than clipping the mode row and series tiles. */
 .settings-popover.theme-style-popover {
   top: auto;
   right: 10px;
   bottom: calc(100% + 9px);
   left: 10px;
   width: auto;
+  max-height: calc(100vh - 88px);
+  overflow-x: hidden;
+  overflow-y: auto;
   padding: 14px;
+}
+
+.theme-style-section + .theme-style-section {
+  margin-top: 12px;
+}
+
+.theme-style-section-label {
+  margin-bottom: 8px;
+  color: var(--ink-soft);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.theme-mode-control {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0;
+  padding: 3px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: var(--chrome);
+}
+
+.theme-mode-option {
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 6px;
+  color: var(--muted);
+  background: transparent;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.theme-mode-option:hover {
+  color: var(--ink-soft);
+}
+
+.theme-mode-option.active,
+.theme-mode-option[aria-checked="true"] {
+  border-color: var(--line-strong);
+  color: var(--accent-ink);
+  background: var(--paper-raised);
 }
 
 .theme-style-options {
