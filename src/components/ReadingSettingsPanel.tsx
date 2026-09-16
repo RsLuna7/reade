@@ -456,7 +456,7 @@ export function ReadingSettingsPanel({
           ))}
         </div>
         <p className="setting-hint">
-          滚动到文档末尾时推荐下一篇：合集顺序优先，其次同文件夹，再次互链最多的文档。
+          滚动到文档末尾时推荐下一篇：书架顺序优先，其次同文件夹，再次互链最多的文档。
         </p>
       </fieldset>
 

@@ -34,7 +34,7 @@ import { writeReadingPosition } from "../lib/readingPositions";
 import {
   collectionProgressLabel,
   CollectionMembershipPopover,
-  CollectionsSection,
+  ShelvesManagerPanel,
 } from "./CollectionsSection";
 
 const ROOT = "D:\\library";
@@ -79,13 +79,15 @@ const documents = [
   documentInfo("papers/exam.pdf", { title: "真题卷", format: "pdf" }),
 ];
 
-function renderSection(overrides: Partial<Parameters<typeof CollectionsSection>[0]> = {}) {
+function renderSection(overrides: Partial<Parameters<typeof ShelvesManagerPanel>[0]> = {}) {
   return render(
-    <CollectionsSection
+    <ShelvesManagerPanel
       rootPath={ROOT}
       documents={documents}
       refreshToken={0}
       onNotice={vi.fn()}
+      onChanged={vi.fn()}
+      onClose={vi.fn()}
       onSelectDocument={vi.fn()}
       {...overrides}
     />,
@@ -144,20 +146,17 @@ describe("collectionProgressLabel", () => {
   });
 });
 
-describe("CollectionsSection", () => {
-  it("loads lazily on expand and creates a collection inline", async () => {
+describe("ShelvesManagerPanel", () => {
+  it("loads on open and creates a shelf inline", async () => {
     renderSection();
-    expect(listCollections).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole("button", { name: "合集" }));
-    await screen.findByText("还没有合集。点「+」新建一个跨文件夹的阅读清单。");
+    await screen.findByText("还没有书架。点「+」新建一个跨文件夹的阅读清单。");
 
     vi.mocked(listCollections).mockResolvedValue([summary({ name: "组会论文" })]);
-    fireEvent.click(screen.getByRole("button", { name: "新建合集" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "合集名称" }), {
+    fireEvent.click(screen.getByRole("button", { name: "新建书架" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "书架名称" }), {
       target: { value: "组会论文" },
     });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "合集名称" }), { key: "Enter" });
+    fireEvent.keyDown(screen.getByRole("textbox", { name: "书架名称" }), { key: "Enter" });
 
     await waitFor(() => {
       expect(createCollection).toHaveBeenCalledWith(expect.any(String), "组会论文");
@@ -165,7 +164,7 @@ describe("CollectionsSection", () => {
     expect(await screen.findByText("组会论文")).toBeInTheDocument();
   });
 
-  it("expands a collection with items, progress badges and greyed missing entries", async () => {
+  it("expands a shelf with items, progress badges and greyed missing entries", async () => {
     vi.mocked(listCollections).mockResolvedValue([summary()]);
     vi.mocked(listCollectionItems).mockResolvedValue([
       item(),
@@ -175,8 +174,6 @@ describe("CollectionsSection", () => {
     const onSelectDocument = vi.fn();
     renderSection({ onSelectDocument });
 
-    fireEvent.click(screen.getByRole("button", { name: "合集" }));
-    // 健康度徽标 presentCount/itemCount。
     expect(await screen.findByText("1/2")).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole("button", { name: /考研数学/ }));
@@ -189,13 +186,12 @@ describe("CollectionsSection", () => {
     fireEvent.click(openButton);
     expect(onSelectDocument).toHaveBeenCalledWith("math/notes.md");
 
-    // 失联条目:回退文件名、灰显、不可点。
     const missing = screen.getByTitle(/gone\/lost\.md（文档已移动或删除）/);
     expect(missing).toBeDisabled();
     expect(missing.closest(".collection-item")).toHaveClass("collection-item--missing");
   });
 
-  it("does not show PDF page numbers on collection items", async () => {
+  it("does not show PDF page numbers on shelf items", async () => {
     vi.mocked(listCollections).mockResolvedValue([summary({ itemCount: 1, presentCount: 1 })]);
     vi.mocked(listCollectionItems).mockResolvedValue([
       item({ relativePath: "papers/exam.pdf" }),
@@ -203,32 +199,9 @@ describe("CollectionsSection", () => {
     writeReadingPosition(ROOT, "papers/exam.pdf", { kind: "pdf", page: 306, offsetRatio: 0 });
     renderSection();
 
-    fireEvent.click(screen.getByRole("button", { name: "合集" }));
     fireEvent.click(await screen.findByRole("button", { name: /考研数学/ }));
     expect(await screen.findByTitle("papers/exam.pdf")).toBeInTheDocument();
     expect(screen.queryByText(/第 \d+ 页/)).not.toBeInTheDocument();
-  });
-
-  it("expands the section and the target collection on a reveal request (CP-D2)", async () => {
-    vi.mocked(listCollections).mockResolvedValue([summary()]);
-    vi.mocked(listCollectionItems).mockResolvedValue([item()]);
-    const view = renderSection();
-    expect(listCollections).not.toHaveBeenCalled();
-
-    // 命令面板执行"切换到合集":无需任何点击,分区与目标合集直接展开。
-    view.rerender(
-      <CollectionsSection
-        rootPath={ROOT}
-        documents={documents}
-        refreshToken={0}
-        reveal={{ id: "col-1", token: 1 }}
-        onNotice={vi.fn()}
-        onSelectDocument={vi.fn()}
-      />,
-    );
-
-    expect(await screen.findByTitle("math/notes.md")).toBeInTheDocument();
-    expect(listCollectionItems).toHaveBeenCalledWith("col-1");
   });
 
   it("reorders through the move buttons with a full-order commit (CO-D4)", async () => {
@@ -239,7 +212,6 @@ describe("CollectionsSection", () => {
     ]);
     renderSection();
 
-    fireEvent.click(screen.getByRole("button", { name: "合集" }));
     fireEvent.click(await screen.findByRole("button", { name: /考研数学/ }));
     await screen.findByTitle("math/notes.md");
 
@@ -250,7 +222,6 @@ describe("CollectionsSection", () => {
         "math/notes.md",
       ]);
     });
-    // 乐观更新后顺序立即翻转。
     const titles = Array.from(
       document.querySelectorAll(".collection-item-title"),
     ).map((node) => node.textContent);
@@ -262,12 +233,11 @@ describe("CollectionsSection", () => {
     const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
     try {
       renderSection();
-      fireEvent.click(screen.getByRole("button", { name: "合集" }));
       fireEvent.click(await screen.findByRole("button", { name: /考研数学/ }));
       fireEvent.click(await screen.findByRole("button", { name: "删除" }));
 
       expect(confirmSpy).toHaveBeenCalledWith(
-        "删除合集「考研数学」？清单内 2 篇文档本身不会被删除。",
+        "删除书架「考研数学」？清单内 2 篇文档本身不会被删除。",
       );
       expect(deleteCollection).not.toHaveBeenCalled();
 
@@ -301,7 +271,7 @@ describe("CollectionMembershipPopover", () => {
       />,
     );
 
-    const dialog = screen.getByRole("dialog", { name: "加入合集" });
+    const dialog = screen.getByRole("dialog", { name: "加入书架" });
     const inCollection = await within(dialog).findByRole("checkbox", { name: /考研数学/ });
     const notInCollection = within(dialog).getByRole("checkbox", { name: /组会论文/ });
     expect(inCollection).toBeChecked();
@@ -333,8 +303,8 @@ describe("CollectionMembershipPopover", () => {
       />,
     );
 
-    await screen.findByText("还没有合集，在下方直接新建并加入。");
-    fireEvent.change(screen.getByRole("textbox", { name: "新建合集并加入" }), {
+    await screen.findByText("还没有书架，在下方直接新建并加入。");
+    fireEvent.change(screen.getByRole("textbox", { name: "新建书架并加入" }), {
       target: { value: "本周精读" },
     });
     fireEvent.click(screen.getByRole("button", { name: "新建并加入" }));
@@ -345,6 +315,6 @@ describe("CollectionMembershipPopover", () => {
     const createdId = vi.mocked(createCollection).mock.calls[0][0];
     expect(addCollectionItem).toHaveBeenCalledWith(createdId, "papers/exam.pdf");
     expect(onChanged).toHaveBeenCalledTimes(1);
-    expect(onNotice).toHaveBeenCalledWith("已加入新合集「本周精读」");
+    expect(onNotice).toHaveBeenCalledWith("已加入新书架「本周精读」");
   });
 });

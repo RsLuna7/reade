@@ -139,6 +139,13 @@ export interface DocumentTreeProps {
   onNotice?: (message: string) => void;
   /** 打开「本夹文档」全名列表（收窄浏览时显示入口）。 */
   onOpenFolderDocs?: () => void;
+  /**
+   * 书库页：点击文件夹名称筛选右侧封面。未传时名称点击仍只展开/折叠。
+   * 箭头（chevron）始终只负责展开折叠。
+   */
+  onSelectDirectory?: (directoryPath: string) => void;
+  /** 当前书库文件夹范围，用于高亮对应行。 */
+  selectedDirectoryPath?: string | null;
 }
 
 export function DocumentTree({
@@ -147,6 +154,8 @@ export function DocumentTree({
   estimateForPath,
   onNotice,
   onOpenFolderDocs,
+  onSelectDirectory,
+  selectedDirectoryPath = null,
 }: DocumentTreeProps = {}) {
   const documents = useReaderStore((state) => state.documents);
   const currentPath = useReaderStore((state) => state.currentPath);
@@ -516,6 +525,9 @@ export function DocumentTree({
         const nodeKey = layoutNodeKey(node);
         const pinned = isPinnedInLayout(treeLayout, layoutParent, nodeKey);
         const markedRead = !isDirectory && isMarkedRead(readMarks, node.path);
+        const libraryScoped = Boolean(
+          isDirectory && selectedDirectoryPath && selectedDirectoryPath === node.path,
+        );
         const segment = pinned ? "pinned" : "unpinned";
         const dragging = drag?.nodeKey === nodeKey && drag.parentPath === layoutParent;
         const others = drag
@@ -560,6 +572,7 @@ export function DocumentTree({
               className={[
                 "document-tree__item",
                 isCurrent ? "document-tree__item--current" : "",
+                libraryScoped ? "document-tree__item--library-scope" : "",
                 dragging ? "document-tree__item--dragging" : "",
                 markedRead ? "document-tree__item--read" : "",
               ]
@@ -588,8 +601,10 @@ export function DocumentTree({
                   suppressClick.current = false;
                   return;
                 }
-                if (isDirectory) toggleDirectory(node.path);
-                else if (event.altKey && onOpenSecondary) onOpenSecondary(node.path);
+                if (isDirectory) {
+                  if (onSelectDirectory) onSelectDirectory(node.path);
+                  else toggleDirectory(node.path);
+                } else if (event.altKey && onOpenSecondary) onOpenSecondary(node.path);
                 else {
                   onBeforeSelect?.();
                   void selectDocument(node.path);
@@ -600,11 +615,16 @@ export function DocumentTree({
                 <span
                   className="document-tree__handle document-tree__chevron"
                   aria-hidden="true"
-                  title="拖动排序"
+                  title="展开或折叠"
                   onPointerDown={(event) => onHandlePointerDown(event, item)}
                   onPointerMove={onHandlePointerMove}
                   onPointerUp={onHandlePointerUp}
                   onPointerCancel={onHandlePointerUp}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    toggleDirectory(node.path);
+                  }}
                 >
                   {isExpanded ? "−" : "+"}
                 </span>

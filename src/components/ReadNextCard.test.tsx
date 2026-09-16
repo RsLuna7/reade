@@ -19,7 +19,7 @@ describe("ReadNextCard (plan-read-next §3.2)", () => {
         onDismiss={vi.fn()}
       />,
     );
-    expect(view.getByText("合集顺序")).toBeInTheDocument();
+    expect(view.getByText("书架顺序")).toBeInTheDocument();
     expect(view.getByText("第二章")).toBeInTheDocument();
     expect(view.getByText("PDF")).toBeInTheDocument();
     expect(view.getByText("约 4 分钟")).toBeInTheDocument();

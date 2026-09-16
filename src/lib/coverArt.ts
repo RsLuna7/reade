@@ -19,6 +19,8 @@ export const THUMBNAIL_MAX_DIMENSION = 640;
 export const THUMBNAIL_TARGET_WIDTH = 240;
 export const THUMBNAIL_TARGET_HEIGHT = 320;
 
+export type CoverTitleDensity = "phrase" | "block";
+
 export interface GeneratedCover {
   /** CSS 渐变起止色（color-mix over 主题 token，主题切换自动跟随）。 */
   from: string;
@@ -27,6 +29,10 @@ export interface GeneratedCover {
   angle: number;
   /** 封面大字：标题首个非空白字符（无则 "□"）。 */
   initial: string;
+  /** 画在封面上的标题（短题放大、长题换行，不只留一字）。 */
+  headline: string;
+  /** 短题用较大字号；长题用多行块排。 */
+  density: CoverTitleDensity;
   /** 命中的预设序号（测试锚定分布用）。 */
   paletteIndex: number;
 }
@@ -58,6 +64,11 @@ export function fnv1aHash(text: string): number {
   return hash >>> 0;
 }
 
+/** 短中文题放大；超过 8 个字/字母改多行块排，避免封面上只剩一个字。 */
+export function coverTitleDensity(title: string): CoverTitleDensity {
+  return Array.from(title.trim()).length > 8 ? "block" : "phrase";
+}
+
 /** 标题哈希 → 确定性生成式封面（Markdown 与一切回落场景）。 */
 export function generatedCover(title: string): GeneratedCover {
   const normalized = title.trim();
@@ -65,8 +76,17 @@ export function generatedCover(title: string): GeneratedCover {
   const paletteIndex = hash % COVER_PALETTES.length;
   const [from, to] = COVER_PALETTES[paletteIndex];
   const angle = COVER_ANGLES[(hash >>> 3) % COVER_ANGLES.length];
+  const headline = normalized || "无标题";
   const initial = normalized ? Array.from(normalized)[0].toUpperCase() : "□";
-  return { from, to, angle, initial, paletteIndex };
+  return {
+    from,
+    to,
+    angle,
+    initial,
+    headline,
+    density: coverTitleDensity(headline),
+    paletteIndex,
+  };
 }
 
 /**

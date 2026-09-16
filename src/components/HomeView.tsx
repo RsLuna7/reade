@@ -259,7 +259,6 @@ export function HomeView({
     <div className="home-view" aria-label="主页" ref={rootRef}>
       <header className="home-header">
         <div className="home-heading">
-          <h1>今日</h1>
           <span>{dateLabel}{rootPath ? ` · ${fileName(rootPath)}` : ""}</span>
         </div>
       </header>

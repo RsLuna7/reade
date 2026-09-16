@@ -3,6 +3,7 @@ import type { EpubAsset } from "./backend";
 import {
   COVER_PALETTES,
   fnv1aHash,
+  coverTitleDensity,
   generatedCover,
   pickEpubCoverAsset,
   pngBase64FromDataUrl,
@@ -24,6 +25,15 @@ describe("generatedCover (plan-bookshelf-covers §3.3)", () => {
     expect(generatedCover("设计模式").initial).toBe("设");
     expect(generatedCover("clean code").initial).toBe("C");
     expect(generatedCover("").initial).toBe("□");
+  });
+
+  it("puts several title characters on the generated cover, not only the initial", () => {
+    expect(generatedCover("设计模式").headline).toBe("设计模式");
+    expect(generatedCover("设计模式").density).toBe("phrase");
+    expect(generatedCover("  Prompt 范式：核心原则  ").headline).toBe("Prompt 范式：核心原则");
+    expect(coverTitleDensity("设计模式")).toBe("phrase");
+    expect(coverTitleDensity("使用 CLAUDE.MD 文件根据代码库需求定制")).toBe("block");
+    expect(generatedCover("").headline).toBe("无标题");
   });
 
   it("only emits palette entries and theme-token colors", () => {

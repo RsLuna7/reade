@@ -171,7 +171,7 @@ export async function resolveReadNextSuggestion(
 }
 
 export const READ_NEXT_REASON_LABEL: Record<ReadNextReason, string> = {
-  collection: "合集顺序",
+  collection: "书架顺序",
   folder: "同文件夹",
   backlinks: "关联最多",
 };

@@ -40,6 +40,10 @@ import {
   clampWheelSpeed,
   WHEEL_SPEED_DEFAULT,
 } from "./readerWheelSpeed";
+import {
+  clampLibraryCoverSize,
+  LIBRARY_COVER_SIZE_DEFAULT,
+} from "./libraryBrowse";
 
 export const READER_PREFERENCES_STORAGE_KEY = "reade-reader-preferences";
 export const READER_PREFERENCES_VERSION = 7;
@@ -201,6 +205,8 @@ export interface ReaderPreferences {
   autoPaceBias: number;
   readNextEnabled: boolean;
   libraryViewMode: LibraryViewMode;
+  /** Library cover tile size (px). Affects grid density only, not reader type. */
+  libraryCoverSize: number;
   reviewCardMode: ReviewCardMode;
 }
 
@@ -228,6 +234,7 @@ export function createDefaultReaderPreferences(
     autoPaceBias: AUTO_PACE_BIAS_DEFAULT,
     readNextEnabled: true,
     libraryViewMode: "tree",
+    libraryCoverSize: LIBRARY_COVER_SIZE_DEFAULT,
     reviewCardMode: "excerpt",
   };
 }
@@ -242,6 +249,7 @@ export function createResettablePreferencePatch(): Omit<
   | "expandedPaths"
   | "dailyGoalMinutes"
   | "libraryViewMode"
+  | "libraryCoverSize"
   | "reviewCardMode"
 > {
   const defaults = createDefaultReaderPreferences();
@@ -289,6 +297,7 @@ export function pickPersistedPreferences(state: ReaderPreferences): PersistedRea
     autoPaceBias: state.autoPaceBias,
     readNextEnabled: state.readNextEnabled,
     libraryViewMode: state.libraryViewMode,
+    libraryCoverSize: state.libraryCoverSize,
     reviewCardMode: state.reviewCardMode,
   };
 }
@@ -385,6 +394,9 @@ export function migrateReaderPreferences(
     ...(typeof state.libraryViewMode === "string"
       ? { libraryViewMode: normalizeLibraryViewMode(state.libraryViewMode) }
       : {}),
+    ...(typeof state.libraryCoverSize === "number"
+      ? { libraryCoverSize: clampLibraryCoverSize(state.libraryCoverSize) }
+      : {}),
     ...(typeof state.reviewCardMode === "string"
       ? { reviewCardMode: normalizeReviewCardMode(state.reviewCardMode) }
       : {}),
@@ -451,6 +463,10 @@ export function mergeReaderPreferences(
     libraryViewMode: normalizeLibraryViewMode(
       preferences.libraryViewMode,
       current.libraryViewMode,
+    ),
+    libraryCoverSize: clampLibraryCoverSize(
+      preferences.libraryCoverSize,
+      current.libraryCoverSize,
     ),
     reviewCardMode: normalizeReviewCardMode(
       preferences.reviewCardMode,

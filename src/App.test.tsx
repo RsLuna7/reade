@@ -11,6 +11,7 @@ import {
   findRelatedPassages,
   listAnnotations,
   listCollections,
+  listCollectionItems,
   listDocumentExtents,
   listDocumentLinks,
   localDataStatus,
@@ -126,6 +127,7 @@ vi.mock("./lib/backend", async () => {
     listDocumentLinks: vi.fn(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 })),
     // 命令面板打开时拉合集;jsdom 无 Tauri 后端,默认空列表。
     listCollections: vi.fn(async () => []),
+    listCollectionItems: vi.fn(async () => []),
     listReviewQueue: vi.fn(async () => []),
     recordReviewOutcome: vi.fn(async () => undefined),
     readDocument: vi.fn(async () => {
@@ -310,6 +312,7 @@ beforeEach(() => {
     .mockReset()
     .mockImplementation(async () => ({ backlinks: [], outgoing: [], brokenCount: 0 }));
   vi.mocked(listCollections).mockReset().mockImplementation(async () => []);
+  vi.mocked(listCollectionItems).mockReset().mockImplementation(async () => []);
   vi.mocked(listReviewQueue).mockReset().mockImplementation(async () => []);
   vi.mocked(readDocument).mockReset().mockImplementation(async () => {
     throw new Error("readDocument not mocked");
@@ -339,6 +342,13 @@ beforeEach(() => {
     expandedPaths: [],
     treeScopePath: null,
     activeView: "reader",
+    homeSurface: "today",
+    libraryBrowseScope: { kind: "all" },
+    libraryTitleQuery: "",
+    libraryFormatFilter: "",
+    libraryStatusFilter: "",
+    librarySort: "recent",
+    libraryScrollTop: 0,
     verticalWriting: false,
     annotationTool: "view",
     highlightColor: "yellow",
@@ -1930,6 +1940,29 @@ function setLibraryReadingState() {
   });
 }
 
+describe("today / library home tabs", () => {
+  it("keeps the file tree in the sidebar and opens the library grid from the 书库 tab", async () => {
+    setLibraryReadingState();
+    const view = render(<App />);
+    fireEvent.click(screen.getByRole("button", { name: "打开主页" }));
+    await waitFor(() => {
+      expect(view.container.querySelector(".home-view")).not.toBeNull();
+    });
+    expect(screen.getByRole("tab", { name: "今日" })).toHaveAttribute("aria-selected", "true");
+    expect(screen.queryByRole("group", { name: "库浏览形态" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "合集" })).not.toBeInTheDocument();
+    expect(screen.getByRole("tree")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("tab", { name: "书库" }));
+    expect(useReaderStore.getState().homeSurface).toBe("library");
+    expect(await screen.findByRole("heading", { name: "全部图书" })).toBeInTheDocument();
+    expect(screen.getByLabelText("搜索书名")).toBeInTheDocument();
+    expect(screen.getByLabelText("搜索文档")).toBeInTheDocument();
+    expect(view.container.querySelector(".library-browser")).not.toBeNull();
+    expect(screen.getByRole("tree")).toBeInTheDocument();
+  });
+});
+
 describe("home view mounting (H1)", () => {
   it("disables the home entry until a library is open", () => {
     render(<App />);
@@ -1986,7 +2019,7 @@ describe("review view mounting (方案二 R1)", () => {
 
     const view = render(<App />);
     expect(fireEvent.keyDown(window, { key: "p", ctrlKey: true })).toBe(false);
-    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.change(input, { target: { value: "间隔回顾" } });
     fireEvent.click(screen.getByRole("option", { name: /打开间隔回顾/ }));
 
@@ -2640,7 +2673,7 @@ describe("command palette (CP)", () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: "p", ctrlKey: true });
-    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.change(input, { target: { value: "命令面板笔记" } });
     fireEvent.keyDown(input, { key: "Enter" });
 
@@ -2665,12 +2698,36 @@ describe("command palette (CP)", () => {
     render(<App />);
 
     fireEvent.keyDown(window, { key: "p", ctrlKey: true });
-    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、书架与命令" });
     await screen.findByRole("option", { name: /考研数学/ });
 
     fireEvent.change(input, { target: { value: "深色" } });
     fireEvent.click(screen.getByRole("option", { name: /切换到深色主题/ }));
     expect(useReaderStore.getState().theme).toBe("paper-dark");
+  });
+
+  it("opens a named shelf in the library browser from the command palette", async () => {
+    vi.mocked(listCollections).mockResolvedValue([
+      {
+        id: "col-1",
+        name: "考研数学",
+        createdAt: 1,
+        updatedAt: 1,
+        itemCount: 3,
+        presentCount: 2,
+      },
+    ]);
+    setPaletteState();
+    render(<App />);
+
+    fireEvent.keyDown(window, { key: "p", ctrlKey: true });
+    fireEvent.click(await screen.findByRole("option", { name: /考研数学/ }));
+
+    expect(useReaderStore.getState().activeView).toBe("home");
+    expect(useReaderStore.getState().homeSurface).toBe("library");
+    expect(useReaderStore.getState().libraryBrowseScope).toEqual({ kind: "shelf", id: "col-1" });
+    expect(await screen.findByRole("heading", { name: "考研数学" })).toBeInTheDocument();
+    expect(screen.getByRole("tree")).toBeInTheDocument();
   });
 
   it("toggles closed on a second Ctrl+P", async () => {
@@ -2689,7 +2746,7 @@ describe("command palette (CP)", () => {
     expect(screen.queryByRole("button", { name: /朗读/ })).not.toBeInTheDocument();
 
     fireEvent.keyDown(window, { key: "p", ctrlKey: true });
-    const input = await screen.findByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = await screen.findByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.change(input, { target: { value: "朗读" } });
     expect(screen.queryByRole("option", { name: /朗读/ })).not.toBeInTheDocument();
   });

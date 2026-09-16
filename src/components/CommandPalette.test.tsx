@@ -29,7 +29,7 @@ const entries: PaletteEntry[] = [
     subtitle: "papers/thesis.pdf",
     badge: "PDF",
   },
-  { kind: "collection", id: "col:1", title: "考研数学", badge: "合集" },
+  { kind: "collection", id: "col:1", title: "考研数学", badge: "书架" },
   {
     kind: "command",
     id: "cmd:theme",
@@ -56,16 +56,16 @@ describe("CommandPalette", () => {
 
   it("opens with a focused input and the full entry list", () => {
     setup();
-    const input = screen.getByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = screen.getByRole("combobox", { name: "搜索文档、书架与命令" });
     expect(input).toHaveFocus();
     expect(screen.getAllByRole("option")).toHaveLength(entries.length);
-    expect(screen.getByText("合集")).toBeInTheDocument();
+    expect(screen.getByText("书架")).toBeInTheDocument();
     expect(screen.getByText("命令")).toBeInTheDocument();
   });
 
   it("filters entries as the query changes and shows the empty state", () => {
     setup();
-    const input = screen.getByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = screen.getByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.change(input, { target: { value: "数学" } });
     expect(screen.getAllByRole("option")).toHaveLength(1);
     expect(screen.getByRole("option", { name: /考研数学/ })).toBeInTheDocument();
@@ -77,7 +77,7 @@ describe("CommandPalette", () => {
 
   it("cycles the active option with arrow keys and tracks aria-activedescendant", () => {
     setup();
-    const input = screen.getByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = screen.getByRole("combobox", { name: "搜索文档、书架与命令" });
     expect(input).toHaveAttribute(
       "aria-activedescendant",
       "palette-option-doc:guides/长文阅读.md",
@@ -97,7 +97,7 @@ describe("CommandPalette", () => {
 
   it("executes the active entry on Enter", () => {
     const { onExecute } = setup();
-    const input = screen.getByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = screen.getByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.keyDown(input, { key: "ArrowDown" });
     fireEvent.keyDown(input, { key: "Enter" });
     expect(onExecute).toHaveBeenCalledWith(
@@ -115,7 +115,7 @@ describe("CommandPalette", () => {
     const { onClose } = setup();
     const windowEscape = vi.fn();
     window.addEventListener("keydown", windowEscape);
-    const input = screen.getByRole("combobox", { name: "搜索文档、合集与命令" });
+    const input = screen.getByRole("combobox", { name: "搜索文档、书架与命令" });
     fireEvent.keyDown(input, { key: "Escape" });
     expect(onClose).toHaveBeenCalledTimes(1);
     expect(windowEscape).not.toHaveBeenCalled();

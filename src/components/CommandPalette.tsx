@@ -98,8 +98,8 @@ export function CommandPalette<T extends PaletteEntry>({
             aria-activedescendant={
               activeEntry ? `palette-option-${activeEntry.id}` : undefined
             }
-            aria-label="搜索文档、合集与命令"
-            placeholder="搜索文档、合集与命令…"
+            aria-label="搜索文档、书架与命令"
+            placeholder="搜索文档、书架与命令…"
             autoComplete="off"
             spellCheck={false}
             value={query}

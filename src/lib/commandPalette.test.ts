@@ -118,7 +118,7 @@ describe("filterPaletteEntries", () => {
     kind: "collection",
     id: "col:1",
     title: "考研数学",
-    badge: "合集",
+    badge: "书架",
   };
   const command: PaletteEntry = {
     kind: "command",

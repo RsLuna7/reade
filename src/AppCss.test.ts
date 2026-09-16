@@ -122,6 +122,20 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.topbar\s*\{[^}]*z-index:\s*3/s);
   });
 
+  it("lifts library covers without transforming a 1px layout border", () => {
+    expect(css).toContain(".library-card__cover-face");
+    expect(css).toMatch(
+      /\.library-card__cover\s*\{[^}]*box-shadow:\s*var\(--shadow-edge\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.library-card__cover\s*\{[^}]*border:\s*1px solid\s+var\(--line\)/s,
+    );
+    expect(css).toContain("translateY(calc(-1 * var(--motion-distance)))");
+    expect(css).toMatch(
+      /\.library-card:hover \.library-card__cover[\s\S]*?hsl\(var\(--shadow-color\)/s,
+    );
+  });
+
   it("keeps the library sidebar scrollable above a pinned theme footer", () => {
     expect(css).toMatch(/\.library-sidebar\s*\{[^}]*min-height:\s*0/s);
     expect(css).toMatch(/\.library-sidebar\s*\{[^}]*overflow:\s*hidden/s);

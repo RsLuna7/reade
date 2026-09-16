@@ -145,6 +145,10 @@ describe("reading settings", () => {
     // The workspace view is session-only: launching into the statistics
     // dashboard instead of the reading surface would be surprising.
     expect(stored.state).not.toHaveProperty("activeView");
+    expect(stored.state).not.toHaveProperty("homeSurface");
+    expect(stored.state).not.toHaveProperty("libraryBrowseScope");
+    expect(stored.state).not.toHaveProperty("libraryTitleQuery");
+    expect(stored.state).not.toHaveProperty("libraryScrollTop");
   });
 
   it("sets an explicit theme id and ignores unknown values", () => {
@@ -937,6 +941,30 @@ describe("reading settings", () => {
     expect(useReaderStore.getState().libraryViewMode).toBe("shelf");
   });
 
+  it("persists library cover size and leaves browse session fields out of storage", async () => {
+    useReaderStore.getState().setLibraryCoverSize(210);
+    useReaderStore.getState().setHomeSurface("library");
+    useReaderStore.getState().setLibraryBrowseScope({ kind: "folder", path: "notes" });
+    useReaderStore.getState().setLibraryTitleQuery("天性");
+    const stored = JSON.parse(
+      localStorage.getItem(READER_PREFERENCES_STORAGE_KEY) ?? "{}",
+    ) as { state: Record<string, unknown> };
+    expect(stored.state).toMatchObject({ libraryCoverSize: 210 });
+    expect(stored.state).not.toHaveProperty("homeSurface");
+    expect(stored.state).not.toHaveProperty("libraryBrowseScope");
+
+    useReaderStore.setState({ libraryCoverSize: 170 });
+    localStorage.setItem(
+      READER_PREFERENCES_STORAGE_KEY,
+      JSON.stringify({
+        version: READER_PREFERENCES_VERSION,
+        state: { libraryCoverSize: 80 },
+      }),
+    );
+    await useReaderStore.persist.rehydrate();
+    expect(useReaderStore.getState().libraryCoverSize).toBe(130);
+  });
+
   it("persists annotation color names and normalizes them on write", () => {
     expect(useReaderStore.getState().annotationColorNames).toEqual({
       yellow: "暖砂",
@@ -1236,9 +1264,21 @@ describe("navigation history (plan-nav-history)", () => {
 
   it("clears the history when a library opens", async () => {
     useReaderStore.getState().recordNavLocation(departure);
+    useReaderStore.getState().setHomeSurface("library");
+    useReaderStore.getState().setLibraryBrowseScope({ kind: "folder", path: "旧库/笔记" });
+    useReaderStore.getState().setLibraryTitleQuery("残留");
+    useReaderStore.getState().setLibraryFormatFilter("pdf");
+    useReaderStore.getState().setLibraryStatusFilter("reading");
+    useReaderStore.getState().setLibraryScrollTop(420);
     await useReaderStore.getState().openLibrary("D:/next-library");
     expect(backendMocks.openLibrary).toHaveBeenCalledWith("D:/next-library");
     expect(useReaderStore.getState().navHistory).toEqual({ back: [], forward: [] });
+    expect(useReaderStore.getState().libraryBrowseScope).toEqual({ kind: "all" });
+    expect(useReaderStore.getState().libraryTitleQuery).toBe("");
+    expect(useReaderStore.getState().libraryFormatFilter).toBe("");
+    expect(useReaderStore.getState().libraryStatusFilter).toBe("");
+    expect(useReaderStore.getState().libraryScrollTop).toBe(0);
+    expect(useReaderStore.getState().homeSurface).toBe("library");
   });
 
   it("ignores a slower openLibrary response after a newer open wins", async () => {

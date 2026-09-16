@@ -1,20 +1,9 @@
 /**
- * Reading collections UI (docs/plan-collections.md §3.3):
+ * 我的书架 UI。存储与 IPC 仍是 collections 表；面向用户的名称已迁到书架。
  *
- * - `CollectionsSection` — the sidebar block above the document tree
- *   (CO-D1). Collections load on first expand; every collection row shows
- *   the `presentCount/itemCount` health badge; expanded collections list
- *   their items with a format badge, a scroll-progress badge derived from
- *   persisted reading positions (PDF page numbers are omitted — collections
- *   are a reading list, not a continue-reading surface), hover/focus reorder
- *   buttons (CO-D4) and a greyed-out state for missing paths (CO-D3: kept,
- *   never auto-deleted).
- * - `CollectionMembershipPopover` — the topbar "加入合集" popover (CO-D2):
- *   checkbox per collection for the current document, plus "新建合集并加入".
- *
- * Deleting a collection only deletes the list — the confirm wording says so
- * explicitly. All data access goes through the backend wrappers; paths are
- * never used for file access here (opening goes through `selectDocument`).
+ * - `ShelvesManagerPanel` — 书库页「管理书架」：新建/重命名/删除、成员
+ *   上下移（CO-D4）与失联灰显（CO-D3）。删除书架不删文档。
+ * - `CollectionMembershipPopover` — 阅读顶栏「加入书架」。
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -75,28 +64,30 @@ function errorText(cause: unknown, fallback: string): string {
   return cause instanceof Error ? cause.message : fallback;
 }
 
-export interface CollectionsSectionProps {
+export interface ShelvesManagerPanelProps {
   /** 当前库根;进度徽标从 readingPositions 读取。 */
   rootPath: string;
   /** 库扫描快照:标题/格式映射与失联判定的数据源。 */
   documents: DocumentInfo[];
-  /** App 在 popover 写操作后递增;分区已加载时随之静默重拉。 */
+  /** App 在 popover 写操作后递增;已加载时随之静默重拉。 */
   refreshToken: number;
-  /** 命令面板"切换到合集"(CP-D2):token 递增时展开分区与目标合集。 */
-  reveal?: { id: string; token: number } | null;
   onNotice: (message: string) => void;
-  onSelectDocument: (relativePath: string) => void;
+  onChanged: () => void;
+  onClose: () => void;
+  onSelectDocument?: (relativePath: string) => void;
+  onDeleted?: (collectionId: string) => void;
 }
 
-export function CollectionsSection({
+export function ShelvesManagerPanel({
   rootPath,
   documents,
   refreshToken,
-  reveal,
   onNotice,
+  onChanged,
+  onClose,
   onSelectDocument,
-}: CollectionsSectionProps) {
-  const [expanded, setExpanded] = useState(false);
+  onDeleted,
+}: ShelvesManagerPanelProps) {
   const [state, setState] = useState<CollectionsState>({ status: "idle" });
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set());
   const [itemsById, setItemsById] = useState<Record<string, ItemsState>>({});
@@ -121,7 +112,7 @@ export function CollectionsSection({
       loadedOnce.current = true;
       setState({ status: "ready", collections });
     } catch (cause) {
-      setState({ status: "error", message: errorText(cause, "合集读取失败") });
+      setState({ status: "error", message: errorText(cause, "书架读取失败") });
     }
   }, []);
 
@@ -148,14 +139,14 @@ export function CollectionsSection({
     setPositions(listLibraryReadingPositions(rootPath));
   }, [rootPath]);
 
-  // 首次展开分区才加载(打开库不预取);进度徽标同时刷新。
+  // 打开面板即加载;进度徽标同时刷新。
   useEffect(() => {
-    if (!expanded || state.status !== "idle") return;
+    if (state.status !== "idle") return;
     refreshPositions();
     void reloadCollections();
-  }, [expanded, refreshPositions, reloadCollections, state.status]);
+  }, [refreshPositions, reloadCollections, state.status]);
 
-  // popover 写操作 → App 递增 refreshToken → 已加载的分区静默重拉。
+  // popover 写操作 → App 递增 refreshToken → 已加载时静默重拉。
   useEffect(() => {
     if (refreshToken === 0 || !loadedOnce.current) return;
     void reloadCollections();
@@ -164,21 +155,6 @@ export function CollectionsSection({
       return current;
     });
   }, [refreshToken, reloadCollections, reloadItems]);
-
-  // 命令面板"切换到合集"(CP-D2):展开分区与目标合集并加载条目;
-  // reveal 的对象身份随 token 变化,重复执行同一合集也会重新触发。
-  useEffect(() => {
-    if (!reveal) return;
-    setExpanded(true);
-    refreshPositions();
-    setOpenIds((current) => {
-      if (current.has(reveal.id)) return current;
-      const next = new Set(current);
-      next.add(reveal.id);
-      return next;
-    });
-    void reloadItems(reveal.id);
-  }, [refreshPositions, reloadItems, reveal]);
 
   const toggleOpen = (collectionId: string) => {
     setOpenIds((current) => {
@@ -208,15 +184,16 @@ export function CollectionsSection({
       state.status === "ready" &&
       state.collections.some((collection) => collection.name === name)
     ) {
-      onNotice(`已存在同名合集「${name}」，已再建一个。`);
+      onNotice(`已存在同名书架「${name}」，已再建一个。`);
     }
     try {
       await createCollection(crypto.randomUUID(), name);
       setDraftName("");
       setCreating(false);
       await reloadCollections();
+      onChanged();
     } catch (cause) {
-      onNotice(errorText(cause, "新建合集失败"));
+      onNotice(errorText(cause, "新建书架失败"));
     }
   };
 
@@ -227,6 +204,7 @@ export function CollectionsSection({
     try {
       await renameCollection(collection.id, name);
       await reloadCollections();
+      onChanged();
     } catch (cause) {
       onNotice(errorText(cause, "重命名失败"));
     }
@@ -234,7 +212,7 @@ export function CollectionsSection({
 
   const handleDelete = async (collection: CollectionSummary) => {
     const confirmed = window.confirm(
-      `删除合集「${collection.name}」？清单内 ${collection.itemCount} 篇文档本身不会被删除。`,
+      `删除书架「${collection.name}」？清单内 ${collection.itemCount} 篇文档本身不会被删除。`,
     );
     if (!confirmed) return;
     try {
@@ -250,9 +228,11 @@ export function CollectionsSection({
         return next;
       });
       await reloadCollections();
-      onNotice(`已删除合集「${collection.name}」，文档未受影响。`);
+      onDeleted?.(collection.id);
+      onChanged();
+      onNotice(`已删除书架「${collection.name}」，文档未受影响。`);
     } catch (cause) {
-      onNotice(errorText(cause, "删除合集失败"));
+      onNotice(errorText(cause, "删除书架失败"));
     }
   };
 
@@ -260,8 +240,9 @@ export function CollectionsSection({
     try {
       await removeCollectionItem(collectionId, relativePath);
       await Promise.all([reloadItems(collectionId), reloadCollections()]);
+      onChanged();
     } catch (cause) {
-      onNotice(errorText(cause, "移出合集失败"));
+      onNotice(errorText(cause, "移出书架失败"));
     }
   };
 
@@ -289,6 +270,7 @@ export function CollectionsSection({
         collectionId,
         reordered.map((item) => item.relativePath),
       );
+      onChanged();
     } catch (cause) {
       onNotice(errorText(cause, "调整顺序失败"));
       void reloadItems(collectionId);
@@ -298,46 +280,42 @@ export function CollectionsSection({
   const collectionCount = state.status === "ready" ? state.collections.length : null;
 
   return (
-    <section className="collections-section" aria-label="合集">
-      <div className="collections-header">
+    <section className="shelves-panel reade-motion-panel" aria-label="我的书架">
+      <div className="settings-heading">
+        <span>我的书架</span>
         <button
+          className="icon-button"
           type="button"
-          className="collections-toggle"
-          aria-expanded={expanded}
-          onClick={() => setExpanded((open) => !open)}
+          onClick={onClose}
+          aria-label="关闭书架管理"
         >
-          {expanded ? (
-            <ChevronDown size={13} aria-hidden="true" />
-          ) : (
-            <ChevronRight size={13} aria-hidden="true" />
-          )}
-          <span>合集</span>
-          {collectionCount !== null && collectionCount > 0 ? (
-            <span className="side-panel-count">{collectionCount}</span>
-          ) : null}
+          <X size={15} aria-hidden="true" />
         </button>
+      </div>
+      <p className="shelves-panel__hint">书架保存文档引用，不会移动或删除原文件。</p>
+      <div className="collections-header">
+        <span className="shelves-panel__count">
+          {collectionCount !== null ? `${collectionCount} 个书架` : "我的书架"}
+        </span>
         <button
           type="button"
           className="icon-button collections-create"
-          aria-label="新建合集"
-          title="新建合集"
-          onClick={() => {
-            setExpanded(true);
-            setCreating(true);
-          }}
+          aria-label="新建书架"
+          title="新建书架"
+          onClick={() => setCreating(true)}
         >
           <Plus size={14} aria-hidden="true" />
         </button>
       </div>
 
-      {expanded && creating && (
+      {creating && (
         <div className="collections-create-row">
           <input
             type="text"
             value={draftName}
             autoFocus
-            placeholder="合集名称"
-            aria-label="合集名称"
+            placeholder="例如：这个月想读"
+            aria-label="书架名称"
             maxLength={100}
             onChange={(event) => setDraftName(event.target.value)}
             onKeyDown={(event) => {
@@ -355,21 +333,21 @@ export function CollectionsSection({
         </div>
       )}
 
-      {expanded && state.status === "loading" && (
+      {state.status === "loading" && (
         <p className="collections-empty" role="status">
-          正在读取合集…
+          正在读取书架…
         </p>
       )}
-      {expanded && state.status === "error" && (
+      {state.status === "error" && (
         <p className="collections-empty" role="status">
           {state.message}
         </p>
       )}
-      {expanded && state.status === "ready" && state.collections.length === 0 && !creating && (
-        <p className="collections-empty">还没有合集。点「+」新建一个跨文件夹的阅读清单。</p>
+      {state.status === "ready" && state.collections.length === 0 && !creating && (
+        <p className="collections-empty">还没有书架。点「+」新建一个跨文件夹的阅读清单。</p>
       )}
 
-      {expanded && state.status === "ready" && state.collections.length > 0 && (
+      {state.status === "ready" && state.collections.length > 0 && (
         <ul className="collections-list">
           {state.collections.map((collection) => {
             const open = openIds.has(collection.id);
@@ -404,7 +382,7 @@ export function CollectionsSection({
                       type="text"
                       value={renameDraft}
                       autoFocus
-                      aria-label="合集新名称"
+                      aria-label="书架新名称"
                       maxLength={100}
                       onChange={(event) => setRenameDraft(event.target.value)}
                       onKeyDown={(event) => {
@@ -450,7 +428,7 @@ export function CollectionsSection({
                 )}
                 {open && itemsState?.status === "ready" && itemsState.items.length === 0 && (
                   <p className="collections-empty">
-                    清单为空。打开文档后用顶部「加入合集」收录。
+                    清单为空。打开文档后用顶部「加入书架」收录。
                   </p>
                 )}
                 {open && itemsState?.status === "ready" && itemsState.items.length > 0 && (
@@ -483,7 +461,7 @@ export function CollectionsSection({
                             }
                             onMouseEnter={(event) => armOverflowMarquee(event.currentTarget)}
                             onMouseLeave={(event) => disarmOverflowMarquee(event.currentTarget)}
-                            onClick={() => onSelectDocument(item.relativePath)}
+                            onClick={() => onSelectDocument?.(item.relativePath)}
                           >
                             <span
                               className={`document-tree__format${info ? ` document-tree__format--${info.format}` : ""}`}
@@ -519,7 +497,7 @@ export function CollectionsSection({
                             </button>
                             <button
                               type="button"
-                              aria-label={`把 ${title} 移出合集`}
+                              aria-label={`把 ${title} 移出书架`}
                               onClick={() =>
                                 void handleRemoveItem(collection.id, item.relativePath)
                               }
@@ -558,7 +536,7 @@ type MembershipState =
 export interface CollectionMembershipPopoverProps {
   currentPath: string;
   onClose: () => void;
-  /** 任一写操作成功后触发,让侧栏分区重拉。 */
+  /** 任一写操作成功后触发,让书库页重拉书架。 */
   onChanged: () => void;
   onNotice: (message: string) => void;
 }
@@ -588,7 +566,7 @@ export function CollectionMembershipPopover({
       );
       setState({ status: "ready", entries });
     } catch (cause) {
-      setState({ status: "error", message: errorText(cause, "合集读取失败") });
+      setState({ status: "error", message: errorText(cause, "书架读取失败") });
     }
   }, [currentPath]);
 
@@ -634,7 +612,7 @@ export function CollectionMembershipPopover({
       });
       onChanged();
     } catch (cause) {
-      onNotice(errorText(cause, member ? "移出合集失败" : "加入合集失败"));
+      onNotice(errorText(cause, member ? "移出书架失败" : "加入书架失败"));
     } finally {
       setBusy(summary.id, false);
     }
@@ -649,9 +627,9 @@ export function CollectionMembershipPopover({
       setDraftName("");
       await load();
       onChanged();
-      onNotice(`已加入新合集「${name}」`);
+      onNotice(`已加入新书架「${name}」`);
     } catch (cause) {
-      onNotice(errorText(cause, "新建合集失败"));
+      onNotice(errorText(cause, "新建书架失败"));
     }
   };
 
@@ -659,22 +637,22 @@ export function CollectionMembershipPopover({
     <div
       className="collections-popover reade-motion-panel"
       role="dialog"
-      aria-label="加入合集"
+      aria-label="加入书架"
     >
       <div className="settings-heading">
-        <span>加入合集</span>
+        <span>加入书架</span>
         <button
           className="icon-button"
           type="button"
           onClick={onClose}
-          aria-label="关闭加入合集"
+          aria-label="关闭加入书架"
         >
           <X size={15} aria-hidden="true" />
         </button>
       </div>
       {state.status === "loading" && (
         <p className="collections-empty" role="status">
-          正在读取合集…
+          正在读取书架…
         </p>
       )}
       {state.status === "error" && (
@@ -685,7 +663,7 @@ export function CollectionMembershipPopover({
       {state.status === "ready" && (
         <>
           {state.entries.length === 0 ? (
-            <p className="collections-empty">还没有合集，在下方直接新建并加入。</p>
+            <p className="collections-empty">还没有书架，在下方直接新建并加入。</p>
           ) : (
             <ul className="collections-membership">
               {state.entries.map((entry) => (
@@ -710,8 +688,8 @@ export function CollectionMembershipPopover({
             <input
               type="text"
               value={draftName}
-              placeholder="新建合集并加入"
-              aria-label="新建合集并加入"
+              placeholder="新建书架并加入"
+              aria-label="新建书架并加入"
               maxLength={100}
               onChange={(event) => setDraftName(event.target.value)}
               onKeyDown={(event) => {
@@ -728,4 +706,4 @@ export function CollectionMembershipPopover({
   );
 }
 
-export default CollectionsSection;
+export default ShelvesManagerPanel;

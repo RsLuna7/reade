@@ -9,6 +9,7 @@ import {
   refreshLibrary as refreshLibraryFromBackend,
   searchDocuments,
   type DocumentContent,
+  type DocumentFormat,
   type DocumentInfo,
   type LibrarySnapshot,
   type DocumentIndexEvent,
@@ -98,6 +99,19 @@ import {
   type ReaderFontFamily,
   type ReadingSettings,
 } from "../lib/readerPreferences";
+import {
+  ALL_LIBRARY_SCOPE,
+  clampLibraryCoverSize,
+  normalizeHomeSurface,
+  normalizeLibraryBrowseScope,
+  normalizeLibraryFormatFilter,
+  normalizeLibraryReadStatus,
+  normalizeLibrarySortKey,
+  type HomeSurface,
+  type LibraryBrowseScope,
+  type LibraryReadStatus,
+  type LibrarySortKey,
+} from "../lib/libraryBrowse";
 
 export type { ReaderMotionLevel } from "../lib/motion";
 export type { ReaderTheme, ThemeSeriesId } from "../lib/themes";
@@ -122,6 +136,18 @@ export {
   type ReaderFontFamily,
   type ReadingSettings,
 };
+export type {
+  HomeSurface,
+  LibraryBrowseScope,
+  LibraryReadStatus,
+  LibrarySortKey,
+} from "../lib/libraryBrowse";
+export {
+  ALL_LIBRARY_SCOPE,
+  LIBRARY_COVER_SIZE_DEFAULT,
+  LIBRARY_COVER_SIZE_MAX,
+  LIBRARY_COVER_SIZE_MIN,
+} from "../lib/libraryBrowse";
 
 import type { ReaderMotionLevel } from "../lib/motion";
 
@@ -228,9 +254,26 @@ interface ReaderState {
   readNextEnabled: boolean;
   /**
    * 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架浏览形态。
-   * 持久化、双端同构。
+   * 持久化、双端同构。侧栏已固定为文件列表；该字段仅兼容旧偏好。
    */
   libraryViewMode: LibraryViewMode;
+  /**
+   * 书库封面格逻辑宽度（px）。持久化；只改网格密度，不改正文字号。
+   */
+  libraryCoverSize: number;
+  /**
+   * 主页「今日 / 书库」页签。Session-only；打开主页时恢复上次页签，
+   * 以便从阅读返回书库时接上浏览现场。
+   */
+  homeSurface: HomeSurface;
+  /** 书库浏览范围：全部 / 文件夹 / 书架，三者互斥。Session-only。 */
+  libraryBrowseScope: LibraryBrowseScope;
+  libraryTitleQuery: string;
+  libraryFormatFilter: DocumentFormat | "";
+  libraryStatusFilter: LibraryReadStatus | "";
+  librarySort: LibrarySortKey;
+  /** 书库封面区滚动位置，离开阅读后恢复。Session-only。 */
+  libraryScrollTop: number;
   expandedPaths: string[];
   /**
    * 面包屑/文件夹聚焦：左侧库只显示该目录子树（session-only）。
@@ -308,6 +351,14 @@ interface ReaderState {
   setAutoPaceBias: (bias: number) => void;
   setReadNextEnabled: (enabled: boolean) => void;
   setLibraryViewMode: (mode: LibraryViewMode) => void;
+  setLibraryCoverSize: (size: number) => void;
+  setHomeSurface: (surface: HomeSurface) => void;
+  setLibraryBrowseScope: (scope: LibraryBrowseScope) => void;
+  setLibraryTitleQuery: (query: string) => void;
+  setLibraryFormatFilter: (format: DocumentFormat | "") => void;
+  setLibraryStatusFilter: (status: LibraryReadStatus | "") => void;
+  setLibrarySort: (sort: LibrarySortKey) => void;
+  setLibraryScrollTop: (top: number) => void;
   setActiveView: (view: ReaderView) => void;
   setDailyGoalMinutes: (minutes: number) => void;
   setReviewCardMode: (mode: ReviewCardMode) => void;
@@ -420,6 +471,12 @@ export const useReaderStore = create<ReaderState>()(
             navHistory: EMPTY_NAV_HISTORY,
             treeReveal: null,
             treeScopePath: null,
+            libraryBrowseScope: ALL_LIBRARY_SCOPE,
+            libraryTitleQuery: "",
+            libraryFormatFilter: "",
+            libraryStatusFilter: "",
+            librarySort: "recent",
+            libraryScrollTop: 0,
             // 当前文档被清空,竖排镜像随之复位。
             verticalWriting: false,
           });
@@ -446,6 +503,13 @@ export const useReaderStore = create<ReaderState>()(
         treeScopePath: null,
         treeLayout: {},
         readMarks: {},
+        homeSurface: "today",
+        libraryBrowseScope: ALL_LIBRARY_SCOPE,
+        libraryTitleQuery: "",
+        libraryFormatFilter: "",
+        libraryStatusFilter: "",
+        librarySort: "recent",
+        libraryScrollTop: 0,
         activeView: "reader",
         navHistory: EMPTY_NAV_HISTORY,
         verticalWriting: false,
@@ -754,6 +818,46 @@ export const useReaderStore = create<ReaderState>()(
           set((state) => ({
             libraryViewMode: normalizeLibraryViewMode(mode, state.libraryViewMode),
           }));
+        },
+
+        setLibraryCoverSize: (size) => {
+          set((state) => ({
+            libraryCoverSize: clampLibraryCoverSize(size, state.libraryCoverSize),
+          }));
+        },
+
+        setHomeSurface: (surface) => {
+          set({ homeSurface: normalizeHomeSurface(surface) });
+        },
+
+        setLibraryBrowseScope: (scope) => {
+          set({
+            libraryBrowseScope: normalizeLibraryBrowseScope(scope),
+            libraryScrollTop: 0,
+          });
+        },
+
+        setLibraryTitleQuery: (query) => {
+          set({ libraryTitleQuery: typeof query === "string" ? query : "" });
+        },
+
+        setLibraryFormatFilter: (format) => {
+          set({ libraryFormatFilter: normalizeLibraryFormatFilter(format) });
+        },
+
+        setLibraryStatusFilter: (status) => {
+          set({ libraryStatusFilter: normalizeLibraryReadStatus(status) });
+        },
+
+        setLibrarySort: (sort) => {
+          set({ librarySort: normalizeLibrarySortKey(sort) });
+        },
+
+        setLibraryScrollTop: (top) => {
+          set({
+            libraryScrollTop:
+              typeof top === "number" && Number.isFinite(top) ? Math.max(0, top) : 0,
+          });
         },
 
         setActiveView: (view) => {

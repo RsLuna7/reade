@@ -44,7 +44,6 @@ import {
 import "./App.css";
 import { AnnotatedMarkdown } from "./components/AnnotatedMarkdown";
 import { ArticleErrorBoundary } from "./components/ArticleErrorBoundary";
-import { BookshelfView } from "./components/BookshelfView";
 import { BrandCompanion } from "./components/BrandCompanion";
 import { DocumentTree } from "./components/DocumentTree";
 import { MotionNotice } from "./components/MotionNotice";
@@ -160,7 +159,6 @@ import {
 } from "./lib/splitView";
 import {
   CollectionMembershipPopover,
-  CollectionsSection,
 } from "./components/CollectionsSection";
 import { createReadingTracker, type ReadingTracker } from "./lib/readingTracker";
 import {
@@ -349,6 +347,9 @@ const ReadNextCard = lazy(() => import("./components/ReadNextCard").then((module
 const SecondaryPane = lazy(() => import("./components/SecondaryPane").then((module) => ({ default: module.SecondaryPane })));
 const StatsView = lazy(() => import("./components/StatsView").then((module) => ({ default: module.StatsView })));
 const HomeView = lazy(() => import("./components/HomeView").then((module) => ({ default: module.HomeView })));
+const BookshelfView = lazy(() =>
+  import("./components/BookshelfView").then((module) => ({ default: module.BookshelfView })),
+);
 const ReviewView = lazy(() => import("./components/ReviewView").then((module) => ({ default: module.ReviewView })));
 const AnnotationHubView = lazy(() => import("./components/AnnotationHubView").then((module) => ({ default: module.AnnotationHubView })));
 const BookDigestView = lazy(() => import("./components/BookDigestView").then((module) => ({ default: module.BookDigestView })));
@@ -477,9 +478,10 @@ function App() {
   const setAutoPaceBias = useReaderStore((state) => state.setAutoPaceBias);
   const readNextEnabled = useReaderStore((state) => state.readNextEnabled);
   const treeLayout = useReaderStore((state) => state.treeLayout);
-  // 书架视图(plan-bookshelf-covers BC-D4):库 tab 的树/书架切换。
-  const libraryViewMode = useReaderStore((state) => state.libraryViewMode);
-  const setLibraryViewMode = useReaderStore((state) => state.setLibraryViewMode);
+  const homeSurface = useReaderStore((state) => state.homeSurface);
+  const setHomeSurface = useReaderStore((state) => state.setHomeSurface);
+  const libraryBrowseScope = useReaderStore((state) => state.libraryBrowseScope);
+  const setLibraryBrowseScope = useReaderStore((state) => state.setLibraryBrowseScope);
   const treeScopePath = useReaderStore((state) => state.treeScopePath);
   const setTreeScopePath = useReaderStore((state) => state.setTreeScopePath);
   const setAnnotationTool = useReaderStore((state) => state.setAnnotationTool);
@@ -518,15 +520,11 @@ function App() {
   // 合集(CO-D2):topbar popover 开关;写操作后 version 递增驱动分区重拉。
   const [collectionsPopoverOpen, setCollectionsPopoverOpen] = useState(false);
   const [collectionsVersion, setCollectionsVersion] = useState(0);
-  // 命令面板(plan-command-palette):开关、打开时拉取的合集快照、
-  // 以及"切换到合集"对侧栏分区的展开请求(CP-D2)。
+  // 命令面板:打开时拉取的书架快照。
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [folderDocsOpen, setFolderDocsOpen] = useState(false);
   const [folderDocsPath, setFolderDocsPath] = useState<string | null>(null);
   const [paletteCollections, setPaletteCollections] = useState<CollectionSummary[]>([]);
-  const [collectionsReveal, setCollectionsReveal] = useState<
-    { id: string; token: number } | null
-  >(null);
   // 分栏对照(plan-split-view,SP-D1):session-only App state,不进 store。
   // splitState 在窄窗退化时保留,窗口恢复 ≥1080px 自动回到分栏(SP-D6)。
   const [splitState, setSplitState] = useState<{
@@ -1488,15 +1486,14 @@ function App() {
           id: `col:${collection.id}`,
           title: collection.name,
           subtitle: `${collection.presentCount}/${collection.itemCount} 在库`,
-          badge: "合集",
+          badge: "书架",
+          keywords: "合集 书架",
           run: () => {
-            // 展开侧栏合集分区(搜索模式下分区隐藏,先清空搜索)。
             setSearchQuery("");
-            if (compactLibraryLayout) setMobileLibraryOpen(true);
-            setCollectionsReveal((current) => ({
-              id: collection.id,
-              token: (current?.token ?? 0) + 1,
-            }));
+            setLibraryBrowseScope({ kind: "shelf", id: collection.id });
+            setHomeSurface("library");
+            setActiveView("home");
+            setMobileLibraryOpen(false);
           },
         });
       }
@@ -1527,6 +1524,24 @@ function App() {
             badge: "命令",
             run: () => {
               setActiveView(homeOpen ? "reader" : "home");
+              setMobileLibraryOpen(false);
+            },
+          }
+        : null,
+      snapshot
+        ? {
+            kind: "command" as const,
+            id: "cmd:library",
+            title: homeOpen && homeSurface === "library" ? "返回阅读" : "打开书库",
+            keywords: "library shelf 书库 书架 封面",
+            badge: "命令",
+            run: () => {
+              if (homeOpen && homeSurface === "library") {
+                setActiveView("reader");
+              } else {
+                setHomeSurface("library");
+                setActiveView("home");
+              }
               setMobileLibraryOpen(false);
             },
           }
@@ -1722,6 +1737,7 @@ function App() {
     handleResetPdfFrontier,
     handleToggleSplit,
     homeOpen,
+    homeSurface,
     annotationsOpen,
     reviewOpen,
     paletteCollections,
@@ -1731,6 +1747,8 @@ function App() {
     refreshLibrary,
     selectDocument,
     setActiveView,
+    setHomeSurface,
+    setLibraryBrowseScope,
     setSearchQuery,
     setThemeSeries,
     snapshot,
@@ -4688,54 +4706,23 @@ function App() {
         </header>
 
         <div className="sidebar-content">
-          {snapshot && !searchQuery.trim() && (
-            <CollectionsSection
-              rootPath={snapshot.rootPath}
-              documents={documents}
-              refreshToken={collectionsVersion}
-              reveal={collectionsReveal}
-              onNotice={showNotice}
-              onSelectDocument={(path) => {
-                setMobileLibraryOpen(false);
-                recordNavDeparture();
-                void selectDocument(path);
-              }}
-            />
-          )}
-          {snapshot && !searchQuery.trim() && (
-            <div className="library-view-toggle" role="group" aria-label="库浏览形态">
-              <button
-                type="button"
-                aria-pressed={libraryViewMode === "tree"}
-                onClick={() => setLibraryViewMode("tree")}
-              >
-                列表
-              </button>
-              <button
-                type="button"
-                aria-pressed={libraryViewMode === "shelf"}
-                onClick={() => setLibraryViewMode("shelf")}
-              >
-                书架
-              </button>
-            </div>
-          )}
-          {libraryViewMode === "shelf" && snapshot && !searchQuery.trim() ? (
-            <BookshelfView
-              onOpenSecondary={handleOpenSecondary}
-              onBeforeSelect={recordNavDeparture}
-              extents={documentExtents}
-              onOpenFolderDocs={openFolderDocsList}
-            />
-          ) : (
-            <DocumentTree
-              onOpenSecondary={handleOpenSecondary}
-              onBeforeSelect={recordNavDeparture}
-              estimateForPath={treeEstimateForPath}
-              onNotice={showNotice}
-              onOpenFolderDocs={openFolderDocsList}
-            />
-          )}
+          <DocumentTree
+            onOpenSecondary={handleOpenSecondary}
+            onBeforeSelect={recordNavDeparture}
+            estimateForPath={treeEstimateForPath}
+            onNotice={showNotice}
+            onOpenFolderDocs={openFolderDocsList}
+            onSelectDirectory={
+              homeOpen && homeSurface === "library"
+                ? (path) => setLibraryBrowseScope({ kind: "folder", path })
+                : undefined
+            }
+            selectedDirectoryPath={
+              homeOpen && homeSurface === "library" && libraryBrowseScope.kind === "folder"
+                ? libraryBrowseScope.path
+                : null
+            }
+          />
         </div>
 
         <footer className="sidebar-footer">
@@ -4962,8 +4949,8 @@ function App() {
                 <button
                   className={`icon-button${collectionsPopoverOpen ? " is-armed" : ""}`}
                   type="button"
-                  aria-label="加入合集"
-                  title="把当前文档加入合集"
+                  aria-label="加入书架"
+                  title="把当前文档加入书架"
                   aria-expanded={collectionsPopoverOpen}
                   onClick={() => {
                     setCollectionsPopoverOpen((open) => !open);
@@ -5305,10 +5292,43 @@ function App() {
               </div>
             }
           >
-            <HomeView
-              remainingEstimate={remainingEstimateForItem}
-              onOpenAnnotation={handleSelectLibraryAnnotation}
-            />
+            <div className="home-surface">
+              <div className="home-tabs" role="tablist" aria-label="主页视图">
+                <button
+                  className="home-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={homeSurface === "today"}
+                  onClick={() => setHomeSurface("today")}
+                >
+                  今日
+                </button>
+                <button
+                  className="home-tab"
+                  type="button"
+                  role="tab"
+                  aria-selected={homeSurface === "library"}
+                  onClick={() => setHomeSurface("library")}
+                >
+                  书库
+                </button>
+              </div>
+              {homeSurface === "library" ? (
+                <BookshelfView
+                  onOpenSecondary={handleOpenSecondary}
+                  onBeforeSelect={recordNavDeparture}
+                  extents={documentExtents}
+                  onNotice={showNotice}
+                  refreshToken={collectionsVersion}
+                  onCollectionsChanged={() => setCollectionsVersion((value) => value + 1)}
+                />
+              ) : (
+                <HomeView
+                  remainingEstimate={remainingEstimateForItem}
+                  onOpenAnnotation={handleSelectLibraryAnnotation}
+                />
+              )}
+            </div>
           </Suspense>
         )}
 

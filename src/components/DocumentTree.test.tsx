@@ -171,8 +171,37 @@ describe("DocumentTree breadcrumb reveal", () => {
     expect(useReaderStore.getState().expandedPaths).toEqual(["正文", "正文/第一章"]);
     expect(screen.getByText("正在浏览")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "全部" })).toBeInTheDocument();
-    // Scoped view shows the folder's children, not the folder row itself.
     expect(screen.getByRole("button", { name: /导论/ })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /^正文$/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("DocumentTree library folder click", () => {
+  beforeEach(() => {
+    localStorage.clear();
+    seedLibrary([
+      documentInfo("技术/控制/笔记.md", "笔记"),
+      documentInfo("设计/设计.md", "设计"),
+    ]);
+    useReaderStore.setState({ motionLevel: "off", expandedPaths: [] });
+  });
+
+  afterEach(cleanup);
+
+  it("filters from the folder name and only toggles expand from the chevron", () => {
+    const onSelectDirectory = vi.fn();
+    render(
+      <DocumentTree onSelectDirectory={onSelectDirectory} selectedDirectoryPath="技术" />,
+    );
+    const folderRow = screen.getByRole("button", { name: /技术/ });
+    fireEvent.click(folderRow);
+    expect(onSelectDirectory).toHaveBeenCalledWith("技术");
+    expect(useReaderStore.getState().expandedPaths).toEqual([]);
+
+    const chevron = folderRow.querySelector(".document-tree__chevron");
+    if (!(chevron instanceof HTMLElement)) throw new Error("expected chevron");
+    fireEvent.click(chevron);
+    expect(onSelectDirectory).toHaveBeenCalledTimes(1);
+    expect(useReaderStore.getState().expandedPaths).toEqual(["技术"]);
   });
 });
