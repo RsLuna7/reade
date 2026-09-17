@@ -2,11 +2,13 @@
  * 我的书架 UI。存储与 IPC 仍是 collections 表；面向用户的名称已迁到书架。
  *
  * - `ShelvesManagerPanel` — 书库页「管理书架」：新建/重命名/删除、成员
- *   上下移（CO-D4）与失联灰显（CO-D3）。删除书架不删文档。
+ *   上下移（CO-D4）与失联灰显（CO-D3）。删除书架不删文档。传入 `anchorRef`
+ *   时作为下拉旁的浮层，而不是贴在窗口右侧。
  * - `CollectionMembershipPopover` — 阅读顶栏「加入书架」。
  */
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type RefObject } from "react";
+import { createPortal } from "react-dom";
 import { ChevronDown, ChevronRight, Plus, X } from "lucide-react";
 import { OverflowMarquee, armOverflowMarquee, disarmOverflowMarquee } from "./OverflowMarquee";
 import {
@@ -76,6 +78,8 @@ export interface ShelvesManagerPanelProps {
   onClose: () => void;
   onSelectDocument?: (relativePath: string) => void;
   onDeleted?: (collectionId: string) => void;
+  /** 书库范围下拉；有值时面板贴在触发器下方，避免飞到窗口右侧。 */
+  anchorRef?: RefObject<HTMLElement | null>;
 }
 
 export function ShelvesManagerPanel({
@@ -87,7 +91,16 @@ export function ShelvesManagerPanel({
   onClose,
   onSelectDocument,
   onDeleted,
+  anchorRef,
 }: ShelvesManagerPanelProps) {
+  const panelRef = useRef<HTMLElement>(null);
+  const [anchorPosition, setAnchorPosition] = useState<{
+    left: number;
+    top: number;
+    width: number;
+    maxHeight: number;
+    upwards: boolean;
+  } | null>(null);
   const [state, setState] = useState<CollectionsState>({ status: "idle" });
   const [openIds, setOpenIds] = useState<ReadonlySet<string>>(new Set());
   const [itemsById, setItemsById] = useState<Record<string, ItemsState>>({});
@@ -155,6 +168,57 @@ export function ShelvesManagerPanel({
       return current;
     });
   }, [refreshToken, reloadCollections, reloadItems]);
+
+  useLayoutEffect(() => {
+    if (!anchorRef) {
+      setAnchorPosition(null);
+      return;
+    }
+    const place = () => {
+      const rect = anchorRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      const width = Math.min(340, window.innerWidth - 24);
+      const below = window.innerHeight - rect.bottom - 16;
+      const above = rect.top - 16;
+      const upwards = below < 240 && above > below;
+      setAnchorPosition({
+        left: Math.max(12, Math.min(rect.left, window.innerWidth - width - 12)),
+        top: upwards ? rect.top - 8 : rect.bottom + 8,
+        width,
+        maxHeight: Math.max(160, Math.min(560, upwards ? above : below)),
+        upwards,
+      });
+    };
+    place();
+    window.addEventListener("resize", place);
+    return () => window.removeEventListener("resize", place);
+  }, [anchorRef]);
+
+  useEffect(() => {
+    if (!anchorRef) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape") return;
+      if (event.target instanceof HTMLElement && event.target.closest("input, textarea")) return;
+      event.stopPropagation();
+      onClose();
+    };
+    const onPointer = (event: PointerEvent) => {
+      const target = event.target as Node;
+      if (panelRef.current?.contains(target)) return;
+      onClose();
+    };
+    const onScroll = (event: Event) => {
+      if (!panelRef.current?.contains(event.target as Node)) onClose();
+    };
+    document.addEventListener("keydown", onKey);
+    document.addEventListener("pointerdown", onPointer);
+    window.addEventListener("scroll", onScroll, true);
+    return () => {
+      document.removeEventListener("keydown", onKey);
+      document.removeEventListener("pointerdown", onPointer);
+      window.removeEventListener("scroll", onScroll, true);
+    };
+  }, [anchorRef, onClose]);
 
   const toggleOpen = (collectionId: string) => {
     setOpenIds((current) => {
@@ -279,8 +343,26 @@ export function ShelvesManagerPanel({
 
   const collectionCount = state.status === "ready" ? state.collections.length : null;
 
-  return (
-    <section className="shelves-panel reade-motion-panel" aria-label="我的书架">
+  const panel = (
+    <section
+      ref={panelRef}
+      className="shelves-panel reade-motion-panel"
+      aria-label="我的书架"
+      data-anchored={anchorRef ? "" : undefined}
+      style={
+        anchorPosition
+          ? {
+              left: anchorPosition.left,
+              top: anchorPosition.top,
+              width: anchorPosition.width,
+              maxHeight: anchorPosition.maxHeight,
+              transform: anchorPosition.upwards ? "translateY(-100%)" : undefined,
+            }
+          : anchorRef
+            ? { visibility: "hidden" }
+            : undefined
+      }
+    >
       <div className="settings-heading">
         <span>我的书架</span>
         <button
@@ -517,6 +599,8 @@ export function ShelvesManagerPanel({
       )}
     </section>
   );
+
+  return anchorRef ? createPortal(panel, document.body) : panel;
 }
 
 // ---------------------------------------------------------------------------

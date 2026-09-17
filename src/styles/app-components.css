@@ -1288,10 +1288,14 @@
   font-size: 10.5px;
 }
 
+.collection-block > .collections-create-row {
+  padding: 10px 8px 6px 22px;
+}
+
 .collection-actions {
   display: flex;
   gap: 6px;
-  padding: 0 8px 4px 22px;
+  padding: 10px 8px 6px 22px;
 }
 
 .collection-actions button {

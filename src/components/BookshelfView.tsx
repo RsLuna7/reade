@@ -34,6 +34,7 @@ import { documentTreeName, flattenDocumentsInTreeOrder } from "../lib/tree";
 import { buildLaidOutDocumentTree } from "../lib/treeLayout";
 import { useReaderStore } from "../store/useReaderStore";
 import { ShelvesManagerPanel } from "./CollectionsSection";
+import { LibraryDropdown } from "./LibraryDropdown";
 
 /**
  * 书库主区封面浏览。封面三来源：缓存缩略图（PDF 首页 / EPUB 封面）、
@@ -250,6 +251,8 @@ export function BookshelfView({
   const [shelves, setShelves] = useState<CollectionSummary[]>([]);
   const [shelfItems, setShelfItems] = useState<CollectionItem[] | null>(null);
   const [manageOpen, setManageOpen] = useState(false);
+  const manageAnchorRef = useRef<HTMLDivElement>(null);
+  const closeManage = useCallback(() => setManageOpen(false), []);
   const [menu, setMenu] = useState<{
     item: LibraryBrowseItem;
     membership: Array<{ summary: CollectionSummary; member: boolean }>;
@@ -508,31 +511,37 @@ export function BookshelfView({
       style={{ ["--library-cover-size" as string]: `${coverSize}px` }}
     >
       <div className="library-toolbar">
-        <select
-          aria-label="书库范围"
-          value={
-            scope.kind === "folder"
-              ? `folder:${scope.path}`
-              : scope.kind === "shelf"
-                ? scope.id
-                : ""
-          }
-          onChange={(event) => handleScopeChange(event.target.value)}
-        >
-          <option value="">全部图书</option>
-          {scope.kind === "folder" ? (
-            <option value={`folder:${scope.path}`}>文件夹 · {scope.path.split("/").pop()}</option>
+        <div className="library-scope" ref={manageAnchorRef}>
+          <LibraryDropdown
+            label="书库范围"
+            scope
+            value={
+              scope.kind === "folder"
+                ? `folder:${scope.path}`
+                : scope.kind === "shelf"
+                  ? scope.id
+                  : ""
+            }
+            onChange={handleScopeChange}
+            options={[
+              { value: "", label: "全部图书" },
+              ...(scope.kind === "folder"
+                ? [{ value: `folder:${scope.path}`, label: `文件夹 · ${scope.path.split("/").pop()}` }]
+                : []),
+              ...shelves.map((shelf) => ({ value: shelf.id, label: shelf.name, group: "我的书架" })),
+            ]}
+            action={{ label: "管理书架…", onClick: () => setManageOpen(true) }}
+          />
+          {scope.kind !== "all" ? (
+            <button
+              type="button"
+              className="library-quiet"
+              onClick={() => setLibraryBrowseScope(ALL_LIBRARY_SCOPE)}
+            >
+              返回全部
+            </button>
           ) : null}
-          {shelves.length > 0 ? (
-            <optgroup label="我的书架">
-              {shelves.map((shelf) => (
-                <option key={shelf.id} value={shelf.id}>
-                  {shelf.name}
-                </option>
-              ))}
-            </optgroup>
-          ) : null}
-        </select>
+        </div>
         <input
           type="search"
           value={titleQuery}
@@ -540,58 +549,50 @@ export function BookshelfView({
           aria-label="搜索书名"
           onChange={(event) => setLibraryTitleQuery(event.target.value)}
         />
-        <select
-          aria-label="格式"
+        <LibraryDropdown
+          label="格式"
           value={formatFilter}
-          onChange={(event) => setLibraryFormatFilter(event.target.value as DocumentFormat | "")}
-        >
-          <option value="">全部格式</option>
-          <option value="pdf">PDF</option>
-          <option value="epub">EPUB</option>
-          <option value="markdown">MD</option>
-          <option value="mdx">MDX</option>
-        </select>
-        <select
-          aria-label="阅读状态"
+          active={Boolean(formatFilter)}
+          onChange={(value) => setLibraryFormatFilter(value as DocumentFormat | "")}
+          options={[
+            { value: "", label: "全部格式" },
+            { value: "pdf", label: "PDF" },
+            { value: "epub", label: "EPUB" },
+            { value: "markdown", label: "MD" },
+            { value: "mdx", label: "MDX" },
+          ]}
+        />
+        <LibraryDropdown
+          label="阅读状态"
           value={statusFilter}
-          onChange={(event) => setLibraryStatusFilter(event.target.value as typeof statusFilter)}
-        >
-          <option value="">全部状态</option>
-          <option value="new">未开始</option>
-          <option value="reading">阅读中</option>
-          <option value="read">已读</option>
-        </select>
-        <select
-          aria-label="排序"
+          active={Boolean(statusFilter)}
+          onChange={(value) => setLibraryStatusFilter(value as typeof statusFilter)}
+          options={[
+            { value: "", label: "全部状态" },
+            { value: "new", label: "未开始" },
+            { value: "reading", label: "阅读中" },
+            { value: "read", label: "已读" },
+          ]}
+        />
+        <LibraryDropdown
+          label="排序"
           value={sortKey}
-          onChange={(event) => setLibrarySort(event.target.value as typeof sortKey)}
-        >
-          <option value="recent">最近阅读</option>
-          <option value="title">标题顺序</option>
-          <option value="progress">阅读进度</option>
-        </select>
+          onChange={(value) => setLibrarySort(value as typeof sortKey)}
+          options={[
+            { value: "recent", label: "最近阅读" },
+            { value: "title", label: "标题顺序" },
+            { value: "progress", label: "阅读进度" },
+          ]}
+        />
       </div>
 
-      <div className="library-range">
-        <h1>{rangeTitle}</h1>
-        {scope.kind !== "all" ? (
-          <button
-            type="button"
-            className="library-quiet"
-            onClick={() => setLibraryBrowseScope(ALL_LIBRARY_SCOPE)}
-          >
-            返回全部
-          </button>
-        ) : null}
-        <button
-          type="button"
-          className="library-quiet"
-          style={{ marginLeft: "auto" }}
-          onClick={() => setManageOpen(true)}
-        >
-          管理书架
-        </button>
-      </div>
+      {scope.kind === "folder" ? (
+        <div className="library-range">
+          <h1>{rangeTitle}</h1>
+        </div>
+      ) : (
+        <h1 className="sr-only">{rangeTitle}</h1>
+      )}
 
       <div className="library-subtools">
         <span aria-live="polite">{libraryCountLabel(displayed.length, documents.length)}</span>
@@ -655,7 +656,8 @@ export function BookshelfView({
             void reloadShelves();
             onCollectionsChanged?.();
           }}
-          onClose={() => setManageOpen(false)}
+          onClose={closeManage}
+          anchorRef={manageAnchorRef}
           onSelectDocument={(path) => {
             setManageOpen(false);
             openDocument(path, false);

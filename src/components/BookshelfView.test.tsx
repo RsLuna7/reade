@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom/vitest";
-import { act, cleanup, fireEvent, render, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { DocumentExtent, DocumentInfo } from "../lib/backend";
 import { listCollections, listCollectionItems, readDocumentThumbnail } from "../lib/backend";
@@ -106,6 +106,50 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe("BookshelfView (library browser)", () => {
+  it("filters cards and changes sorting through the library menus", () => {
+    setLibrary([
+      documentInfo("guide.md", { title: "指南" }),
+      documentInfo("book.pdf", { title: "论文", format: "pdf" }),
+    ]);
+    useReaderStore.setState({ readMarks: { "book.pdf": Date.now() } });
+    const view = render(<BookshelfView />);
+    fireEvent.click(view.getByRole("button", { name: "格式：全部格式" }));
+    fireEvent.click(view.getByRole("menuitemradio", { name: "PDF" }));
+    expect(view.container.querySelectorAll(".library-card")).toHaveLength(1);
+    expect(useReaderStore.getState().libraryFormatFilter).toBe("pdf");
+    fireEvent.click(view.getByRole("button", { name: "阅读状态：全部状态" }));
+    fireEvent.click(view.getByRole("menuitemradio", { name: "未开始" }));
+    expect(view.getByText("没有符合条件的文档")).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: "清除搜索与筛选" }));
+    expect(view.container.querySelectorAll(".library-card")).toHaveLength(2);
+    fireEvent.click(view.getByRole("button", { name: "排序：最近阅读" }));
+    fireEvent.click(view.getByRole("menuitemradio", { name: "标题顺序" }));
+    expect(useReaderStore.getState().librarySort).toBe("title");
+  });
+
+  it("switches shelves and opens shelf management from the scope menu", async () => {
+    vi.mocked(listCollections).mockResolvedValue([
+      { id: "agent", name: "Agent book", itemCount: 1, presentCount: 1, createdAt: 1, updatedAt: 1 },
+    ]);
+    setLibrary([documentInfo("guide.md")]);
+    const view = render(<BookshelfView />);
+    expect(view.getByRole("heading", { name: "全部图书" })).toHaveClass("sr-only");
+    fireEvent.click(view.getByRole("button", { name: "书库范围：全部图书" }));
+    fireEvent.click(await view.findByRole("menuitemradio", { name: "Agent book" }));
+    expect(useReaderStore.getState().libraryBrowseScope).toEqual({ kind: "shelf", id: "agent" });
+    expect(view.getByRole("heading", { name: "Agent book" })).toHaveClass("sr-only");
+    expect(view.container.querySelector(".library-range")).toBeNull();
+    expect(view.getByRole("button", { name: "返回全部" })).toBeInTheDocument();
+    fireEvent.click(view.getByRole("button", { name: "书库范围：Agent book" }));
+    fireEvent.click(view.getByRole("menuitem", { name: "管理书架…" }));
+    expect(view.queryByRole("menu")).not.toBeInTheDocument();
+    const panel = await screen.findByRole("region", { name: "我的书架" });
+    expect(panel).toHaveAttribute("data-anchored");
+    expect(panel.style.right).toBe("");
+    expect(panel.style.left).not.toBe("");
+    expect(panel.parentElement).toBe(document.body);
+  });
+
   it("renders one card per document in tree order with format badges", () => {
     setLibrary([
       documentInfo("b-note.md", { title: "笔记" }),

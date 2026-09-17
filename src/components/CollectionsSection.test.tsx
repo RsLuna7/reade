@@ -250,6 +250,37 @@ describe("ShelvesManagerPanel", () => {
       confirmSpy.mockRestore();
     }
   });
+
+  it("anchors next to the trigger instead of the window's right edge", async () => {
+    const anchor = document.createElement("button");
+    document.body.append(anchor);
+    vi.spyOn(anchor, "getBoundingClientRect").mockReturnValue({
+      x: 80,
+      y: 40,
+      left: 80,
+      top: 40,
+      right: 200,
+      bottom: 72,
+      width: 120,
+      height: 32,
+      toJSON() {
+        return this;
+      },
+    });
+    const onClose = vi.fn();
+    try {
+      renderSection({ anchorRef: { current: anchor }, onClose });
+      const panel = await screen.findByRole("region", { name: "我的书架" });
+      expect(panel.parentElement).toBe(document.body);
+      expect(panel.style.left).toBe("80px");
+      expect(panel.style.top).toBe("80px");
+      expect(panel.style.right).toBe("");
+      fireEvent.pointerDown(document.body);
+      expect(onClose).toHaveBeenCalledOnce();
+    } finally {
+      anchor.remove();
+    }
+  });
 });
 
 describe("CollectionMembershipPopover", () => {
