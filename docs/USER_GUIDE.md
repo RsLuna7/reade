@@ -1,6 +1,6 @@
 # Reade 新手使用说明书
 
-> 适用于 Reade 0.1.0 Windows 桌面版。文末单独说明 Web 版的差异。
+> 适用于 Reade 0.2.0 Windows 桌面版。文末单独说明 Web 版的差异。
 
 Reade 是一款本地、只读的长文阅读器。你可以把装有 Markdown、PDF 或 EPUB 的文件夹交给 Reade，然后像使用个人电子书架一样浏览、搜索和阅读。Reade 不会修改书库里的原文件，也不会自动把文件上传到网络。
 
