@@ -104,6 +104,10 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.skip-link:focus(?:-visible)?[^{]*\{[^}]*outline:\s*2px solid/s);
   });
 
+  it("does not draw a focus frame around the article column", () => {
+    expect(css).toMatch(/\.article-shell:focus(?:-visible)?[^{]*\{[^}]*outline:\s*none/s);
+  });
+
   it("keeps the topbar seamless at rest and elevated only after scrolling", () => {
     // 滚动边缘浮起(plan B):静止态无分割线,浮起态走 data-scrolled +
     // 分层染色阴影;回归防止有人把常驻 1px 边线加回来。

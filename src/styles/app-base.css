@@ -220,10 +220,10 @@ a:focus-visible {
   outline-offset: 2px;
 }
 
+/* 跳到正文仍会聚焦此容器，但不画焦点框。 */
 .article-shell:focus,
 .article-shell:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 3px;
+  outline: none;
 }
 
 .library-sidebar {
