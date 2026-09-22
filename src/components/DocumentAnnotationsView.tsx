@@ -12,8 +12,8 @@ import {
 } from "../lib/annotationOutline";
 import type { TocItem } from "../lib/markdown";
 import { annotationFromBundleEntry } from "../lib/annotationBundle";
-import type { CommentAuthor } from "../lib/comments/commentModel";
-import { PdfCommentConversation } from "./comments/PdfCommentConversation";
+import { messagesForThread } from "../lib/comments/commentModel";
+import { pdfCommentSortKey } from "../lib/comments/commentPlacement";
 
 function entryId(item: AnnotationOutlineEntry): string {
   return item.entry.id;
@@ -35,9 +35,7 @@ export function DocumentAnnotationsView({
   onJump,
   onSaveReflection,
   onSetEnrollment,
-  onCreatePdfComment,
-  onReplyPdfComment,
-  onCreateCommentAuthor,
+  commentsEnabled = false,
 }: {
   format: DocumentFormat;
   toc: TocItem[];
@@ -63,7 +61,8 @@ export function DocumentAnnotationsView({
     body: string,
     authorId: string,
   ) => Promise<unknown>;
-  onCreateCommentAuthor?: (name: string) => Promise<CommentAuthor>;
+  /** PDF 批注开关。关闭时不显示讨论目录。 */
+  commentsEnabled?: boolean;
 }) {
   const [view, setView] = useState<AnnotationOutlineView | "comments">("outline");
   const [query, setQuery] = useState("");
@@ -72,13 +71,15 @@ export function DocumentAnnotationsView({
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [savingId, setSavingId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [authorDraft, setAuthorDraft] = useState("");
-  const [addingAuthor, setAddingAuthor] = useState(false);
 
   useEffect(() => {
     setView("outline");
     setExpandedId(null);
   }, [format]);
+
+  useEffect(() => {
+    if (!commentsEnabled && view === "comments") setView("outline");
+  }, [commentsEnabled, view]);
 
   const reflectionsByEntryId = useMemo(
     () => new Map(bundle.reflections.map((item) => [item.entryId, item])),
@@ -93,7 +94,6 @@ export function DocumentAnnotationsView({
       ),
     [bundle.reviewEnrollments],
   );
-  const commentAuthors = bundle.commentAuthors ?? [];
   const commentThreads = bundle.commentThreads ?? [];
   const commentMessages = bundle.commentMessages ?? [];
   const commentThreadsByAnnotationId = useMemo(
@@ -126,6 +126,18 @@ export function DocumentAnnotationsView({
       view,
     ],
   );
+
+  const commentDirectory = useMemo(() => {
+    return commentThreads
+      .map((thread) => {
+        const annotation = annotationFromBundleEntry(bundle, thread.annotationId);
+        const preview = messagesForThread(commentMessages, thread.id)[0]?.body ?? "";
+        const key = pdfCommentSortKey(annotation ?? undefined);
+        return { thread, annotation, preview, key };
+      })
+      .filter((item) => item.annotation)
+      .sort((left, right) => left.key[0] - right.key[0] || left.key[1] - right.key[1] || left.thread.id.localeCompare(right.thread.id));
+  }, [bundle, commentMessages, commentThreads]);
 
   const normalizedQuery = query.trim().toLowerCase();
   const defaultOpenId =
@@ -160,28 +172,13 @@ export function DocumentAnnotationsView({
     }
   };
 
-  const createAuthor = async () => {
-    const name = authorDraft.trim();
-    if (!name || !onCreateCommentAuthor) return;
-    setAddingAuthor(true);
-    setError(null);
-    try {
-      await onCreateCommentAuthor(name);
-      setAuthorDraft("");
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
-    } finally {
-      setAddingAuthor(false);
-    }
-  };
-
   return (
     <div className="document-annotations">
       <header className="document-annotations-header">
         <p className="document-annotations-meta">
-          {outline.excerptCount} 条重点 · {outline.sections.length} 个分组 · {format === "pdf"
-            ? `${commentThreads.length} 个讨论`
-            : `${outline.reflectionCount} 条感悟`}
+          {outline.excerptCount} 条重点 · {outline.sections.length} 个分组
+          {format === "pdf" && commentsEnabled ? ` · ${commentThreads.length} 个讨论` : ""}
+          {format !== "pdf" ? ` · ${outline.reflectionCount} 条感悟` : ""}
         </p>
         <div className="document-annotations-views" role="tablist" aria-label="本文标注视图">
           <button
@@ -193,6 +190,7 @@ export function DocumentAnnotationsView({
           >
             {format === "pdf" ? "按页" : "按章节"}
           </button>
+          {format !== "pdf" || commentsEnabled ? (
           <button
             type="button"
             role="tab"
@@ -202,6 +200,7 @@ export function DocumentAnnotationsView({
           >
             {format === "pdf" ? "讨论" : "我的感悟"}
           </button>
+          ) : null}
         </div>
         <label className="document-annotations-search">
           <span className="sr-only">搜索本文标注</span>
@@ -212,26 +211,6 @@ export function DocumentAnnotationsView({
             onChange={(event) => setQuery(event.target.value)}
           />
         </label>
-        {format === "pdf" && onCreateCommentAuthor ? (
-          <div className="document-annotations-author">
-            <input
-              value={authorDraft}
-              aria-label="新建本地评论身份"
-              placeholder="新建本地身份"
-              onChange={(event) => setAuthorDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") void createAuthor();
-              }}
-            />
-            <button
-              type="button"
-              disabled={!authorDraft.trim() || addingAuthor}
-              onClick={() => void createAuthor()}
-            >
-              添加
-            </button>
-          </div>
-        ) : null}
       </header>
       {loading ? <p className="document-annotations-status">正在读取标注…</p> : null}
       {error ? (
@@ -239,20 +218,45 @@ export function DocumentAnnotationsView({
           {error}
         </p>
       ) : null}
-      {(view === "comments" ? commentThreads.length === 0 : outline.sections.length === 0) ? (
+      {view === "comments" ? (
+        commentDirectory.filter((item) => {
+          if (!normalizedQuery) return true;
+          const source = item.annotation?.selectedText ?? "";
+          return `${item.preview}\n${source}`.toLowerCase().includes(normalizedQuery);
+        }).length === 0 ? (
+          <p className="document-annotations-empty">还没有讨论。</p>
+        ) : (
+          <ul className="pdf-comment-directory">
+            {commentDirectory.filter((item) => {
+              if (!normalizedQuery) return true;
+              const source = item.annotation?.selectedText ?? "";
+              return `${item.preview}\n${source}`.toLowerCase().includes(normalizedQuery);
+            }).map((item) => (
+              <li key={item.thread.id}>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (item.annotation) onJump(item.annotation);
+                  }}
+                >
+                  <span className="pdf-comment-directory-page">
+                    第 {item.annotation?.locator.kind === "pdf" ? item.annotation.locator.page : "?"} 页
+                  </span>
+                  <span>{item.preview || item.annotation?.selectedText || "讨论"}</span>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )
+      ) : outline.sections.length === 0 ? (
         <p className="document-annotations-empty">
-          {view === "comments"
-            ? "还没有带讨论的 PDF 标注。"
-            : view === "reflections"
-              ? "还没有写下感悟的摘录。"
-              : "本文还没有标注。"}
+          {view === "reflections"
+            ? "还没有写下感悟的摘录。"
+            : "本文还没有标注。"}
         </p>
       ) : (
         outline.sections.map((section) => {
           const entries = section.entries.filter((item) => {
-            if (view === "comments" && !commentThreadsByAnnotationId.has(entryId(item))) {
-              return false;
-            }
             if (!normalizedQuery) return true;
             const reflection = reflectionsByEntryId.get(entryId(item));
             const thread = commentThreadsByAnnotationId.get(entryId(item));
@@ -265,7 +269,7 @@ export function DocumentAnnotationsView({
             const haystack = `${entryPreview(item)}\n${reflection?.body ?? ""}\n${discussion}`.toLowerCase();
             return haystack.includes(normalizedQuery);
           });
-          if ((normalizedQuery || view === "comments") && entries.length === 0) return null;
+          if (normalizedQuery && entries.length === 0) return null;
           const open = sectionIsOpen(section.id);
           return (
             <section key={section.id} className="document-annotations-section">
@@ -319,36 +323,16 @@ export function DocumentAnnotationsView({
                                 : ""}
                           </span>
                         </button>
-                        <button
+                        {format === "pdf" ? null : <button
                           type="button"
                           className="document-annotations-entry-toggle"
                           aria-expanded={expanded}
                           onClick={() => setExpandedId(expanded ? null : id)}
                         >
-                          {expanded
-                            ? "收起"
-                            : format === "pdf"
-                              ? commentThread
-                                ? "查看讨论"
-                                : "添加评论"
-                              : reflection
-                                ? "看感悟"
-                                : "写感悟"}
-                        </button>
-                        {expanded ? (
+                          {expanded ? "收起" : reflection ? "看感悟" : "写感悟"}
+                        </button>}
+                        {expanded && format !== "pdf" ? (
                           <div className="document-annotations-editor">
-                            {format === "pdf" && item.kind === "excerpt" ? (
-                              <PdfCommentConversation
-                                thread={commentThread}
-                                messages={commentMessages}
-                                authors={commentAuthors}
-                                onSubmit={(body, authorId) =>
-                                  commentThread
-                                    ? onReplyPdfComment?.(commentThread.id, body, authorId) ?? Promise.resolve()
-                                    : onCreatePdfComment?.(id, body, authorId) ?? Promise.resolve()
-                                }
-                              />
-                            ) : (
                             <>
                             <label>
                               <span className="sr-only">感悟</span>
@@ -362,9 +346,7 @@ export function DocumentAnnotationsView({
                               />
                             </label>
                             </>
-                            )}
                             <div className="document-annotations-editor-actions">
-                              {format !== "pdf" ? (
                               <button
                                 type="button"
                                 onClick={() => void saveReflection(item)}
@@ -372,7 +354,6 @@ export function DocumentAnnotationsView({
                               >
                                 保存感悟
                               </button>
-                              ) : null}
                               {item.kind === "excerpt" && onSetEnrollment ? (
                                 <button
                                   type="button"

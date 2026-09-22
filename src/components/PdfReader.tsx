@@ -358,11 +358,17 @@ interface PdfReaderProps {
   commentMessages?: PdfCommentMessage[];
   activePdfCommentAnnotationId?: string | null;
   onActivatePdfComment?: (annotationId: string) => void;
+  /** Page scroll moved a comment into view. Must not scroll the page again. */
+  onPdfCommentInView?: (annotationId: string) => void;
   onReplyPdfComment?: (
     threadId: string,
     body: string,
     authorId: string,
   ) => Promise<unknown>;
+  onEditPdfComment?: (messageId: string, body: string) => Promise<unknown>;
+  onDeletePdfComment?: (messageId: string) => Promise<unknown>;
+  /** Reading-settings switch. Off hides the column and the page bubbles. */
+  pdfCommentsEnabled?: boolean;
   /** Enables the fuzzy last-resort anchoring step (global preference). */
   fuzzyAnchoring?: boolean;
   readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
@@ -430,6 +436,8 @@ interface PageProps {
   /** Corner badge / aria page number (printed when calibrated). */
   badgePage?: number;
   onHighlightResolutions?: (pageNumber: number, items: Array<{ id: string; resolution: AnchorResolution }>) => void;
+  commentBubbles?: Array<{ annotationId: string; top: number; active: boolean }>;
+  onActivateComment?: (annotationId: string) => void;
 }
 
 function sourceIdentity(relativePath: string, size: number, modified: number): string {
@@ -517,7 +525,7 @@ function capturePageCenterXRatio(reader: HTMLElement, pageNumber: number): numbe
   return Math.min(1, Math.max(0, (view.left + view.width / 2 - rect.left) / rect.width));
 }
 
-function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage, onHighlightResolutions }: PageProps) {
+function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage, onHighlightResolutions, commentBubbles = [], onActivateComment }: PageProps) {
   const shownPage = badgePage ?? pageNumber;
   const hostRef = useRef<HTMLElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -899,6 +907,16 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
       )}
     </>}
     <span className="reade-motion-locator-highlight" aria-hidden="true" />
+    {commentBubbles.map((bubble) => (
+      <button
+        key={bubble.annotationId}
+        type="button"
+        className={`pdf-comment-bubble${bubble.active ? " is-active" : ""}`}
+        style={{ top: `${bubble.top * 100}%` }}
+        aria-label="批注"
+        onClick={() => onActivateComment?.(bubble.annotationId)}
+      />
+    ))}
     <span className="pdf-page-number">{shownPage}</span>
   </section>;
 }
@@ -934,7 +952,11 @@ export function PdfReader({
   commentMessages = [],
   activePdfCommentAnnotationId = null,
   onActivatePdfComment,
+  onPdfCommentInView,
   onReplyPdfComment,
+  onEditPdfComment,
+  onDeletePdfComment,
+  pdfCommentsEnabled = false,
   fuzzyAnchoring = false,
   readerRef,
   onRegionCard,
@@ -1020,7 +1042,34 @@ export function PdfReader({
   const error = boundError?.sourceKey === sourceKey ? boundError.message : null;
   const readingLoading = readingLoadingKey === sourceKey;
   const spreadActive = spreadIntent && spreadCapable && mode === "original";
-  const hasPdfComments = commentThreads.length > 0;
+  const hasPdfComments = pdfCommentsEnabled && mode === "original" && commentThreads.length > 0;
+
+  useEffect(() => {
+    if (!hasPdfComments) return;
+    const scroller = pageAreaRef.current;
+    const pages = pagesRef.current;
+    if (!scroller || !pages) return;
+    const sync = () => {
+      const view = scroller.getBoundingClientRect();
+      const midline = view.top + view.height / 2;
+      let nearestId = "";
+      let nearestDistance = Number.POSITIVE_INFINITY;
+      for (const mark of pages.querySelectorAll<HTMLElement>(".pdf-user-highlight--lead, .pdf-user-highlight")) {
+        const id = mark.dataset.annotationId;
+        if (!id || !commentThreads.some((thread) => thread.annotationId === id)) continue;
+        const rect = mark.getBoundingClientRect();
+        if (rect.bottom < view.top || rect.top > view.bottom) continue;
+        const distance = Math.abs(rect.top + rect.height / 2 - midline);
+        if (distance < nearestDistance) {
+          nearestId = id;
+          nearestDistance = distance;
+        }
+      }
+      if (nearestId) (onPdfCommentInView ?? onActivatePdfComment)?.(nearestId);
+    };
+    scroller.addEventListener("scroll", sync, { passive: true });
+    return () => scroller.removeEventListener("scroll", sync);
+  }, [commentThreads, hasPdfComments, onActivatePdfComment, onPdfCommentInView]);
 
   const setActivePage = useCallback((page: number) => {
     if (currentPageRef.current !== page) {
@@ -2175,6 +2224,22 @@ export function PdfReader({
               annotation.locator.page === page,
           )}
           onHighlightResolutions={handleHighlightResolutions}
+          commentBubbles={hasPdfComments ? annotations.flatMap((annotation) => {
+            if (annotation.locator.kind !== "pdf" || annotation.locator.page !== page) return [];
+            if (!commentThreads.some((thread) => thread.annotationId === annotation.id && thread.deletedAt == null)) {
+              return [];
+            }
+            const top = annotation.locator.rects.reduce(
+              (min, rect) => Math.min(min, rect.y),
+              Number.POSITIVE_INFINITY,
+            );
+            return [{
+              annotationId: annotation.id,
+              top: Number.isFinite(top) ? top : 0.08,
+              active: activePdfCommentAnnotationId === annotation.id,
+            }];
+          }) : []}
+          onActivateComment={(annotationId) => (onPdfCommentInView ?? onActivatePdfComment)?.(annotationId)}
           onRatioChange={handlePageRatioChange}
           onJump={jump}
           badgePage={displayPageNumber(page, activeOffset)}
@@ -2184,18 +2249,17 @@ export function PdfReader({
       </div>
       </div>
       {hasPdfComments ? <PdfCommentRail
-        anchorRootRef={pagesRef}
-        layoutRootRef={originalLayoutRef}
         threads={commentThreads}
         messages={commentMessages}
         authors={commentAuthors}
         annotations={annotations}
         activeAnnotationId={activePdfCommentAnnotationId}
-        reflowKey={`${session.lifecycle.generation}:${zoomCommitRevision}:${scale}:${spreadActive}:${commentThreads.map((thread) => thread.id).join(",")}`}
         onActivate={(annotationId) => onActivatePdfComment?.(annotationId)}
         onReply={(threadId, body, authorId) =>
           onReplyPdfComment?.(threadId, body, authorId) ?? Promise.resolve()
         }
+        onEditMessage={onEditPdfComment}
+        onDeleteMessage={onDeletePdfComment}
       /> : null}
     </div>}
     {mode === "reading" && <div className="pdf-reading-mode">

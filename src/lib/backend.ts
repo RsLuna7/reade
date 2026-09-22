@@ -9,6 +9,8 @@ import type {
   CommentAuthor,
   CommentAuthorDraft,
   CreatePdfCommentDraft,
+  PdfCommentDeletion,
+  PdfCommentMessage,
   PdfCommentMutation,
   ReplyToPdfCommentDraft,
 } from "./comments/commentModel";
@@ -661,6 +663,23 @@ export async function replyToPdfComment(
   draft: ReplyToPdfCommentDraft,
 ): Promise<PdfCommentMutation> {
   return (await getTauriBackend()).replyToPdfComment(draft);
+}
+
+export async function updatePdfCommentMessage(
+  messageId: string,
+  body: string,
+): Promise<PdfCommentMessage> {
+  return (await getTauriBackend()).updatePdfCommentMessage(messageId, body);
+}
+
+export async function deletePdfCommentMessage(
+  messageId: string,
+): Promise<PdfCommentDeletion> {
+  return (await getTauriBackend()).deletePdfCommentMessage(messageId);
+}
+
+export async function clearPdfComments(): Promise<void> {
+  return (await getTauriBackend()).clearPdfComments();
 }
 
 export async function deleteAnnotationEntry(

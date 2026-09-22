@@ -1,23 +1,12 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type RefObject,
-} from "react";
+import { useEffect, useMemo, useRef } from "react";
 import type { Annotation } from "../../lib/backend";
 import {
-  findPdfCommentLead,
-  isCollapsedCommentRect,
+  commentAnchorYFromPageBox,
   measurePdfCommentAnchor,
-  type CommentAnchor,
+  normalizedAnnotationTop,
 } from "../../lib/comments/commentAnchor";
-import {
-  layoutCommentCards,
-  type CommentCardLayout,
-} from "../../lib/comments/commentRailLayout";
+import { layoutCommentCards } from "../../lib/comments/commentRailLayout";
+import { pdfCommentSortKey } from "../../lib/comments/commentPlacement";
 import type {
   CommentAuthor,
   PdfCommentMessage,
@@ -25,205 +14,220 @@ import type {
 } from "../../lib/comments/commentModel";
 import { PdfCommentCard } from "./PdfCommentCard";
 
-function layoutsEqual(
-  left: readonly CommentCardLayout[],
-  right: readonly CommentCardLayout[],
-): boolean {
-  return (
-    left.length === right.length &&
-    left.every((item, index) => {
-      const other = right[index];
-      return (
-        other?.id === item.id &&
-        Math.abs(other.desiredY - item.desiredY) < 0.5 &&
-        Math.abs(other.renderY - item.renderY) < 0.5 &&
-        Math.abs(other.height - item.height) < 0.5
-      );
-    })
-  );
-}
-
 export function PdfCommentRail({
-  anchorRootRef,
-  layoutRootRef,
   threads,
   messages,
   authors,
   annotations,
   activeAnnotationId,
-  reflowKey,
   onActivate,
   onReply,
+  onEditMessage,
+  onDeleteMessage,
+  anchorRootRef,
+  layoutRootRef,
+  reflowKey = "",
 }: {
-  anchorRootRef: RefObject<HTMLElement | null>;
-  layoutRootRef: RefObject<HTMLElement | null>;
   threads: readonly PdfCommentThread[];
   messages: readonly PdfCommentMessage[];
   authors: readonly CommentAuthor[];
   annotations: readonly Annotation[];
   activeAnnotationId: string | null;
-  reflowKey: string;
   onActivate: (annotationId: string) => void;
   onReply: (threadId: string, body: string, authorId: string) => Promise<unknown>;
+  onEditMessage?: (messageId: string, body: string) => Promise<unknown>;
+  onDeleteMessage?: (messageId: string) => Promise<unknown>;
+  /** Highlight host. Defaults to the rail's layout parent. */
+  anchorRootRef?: { current: HTMLElement | null };
+  /** Page-box host used when a highlight is not painted yet. */
+  layoutRootRef?: { current: HTMLElement | null };
+  reflowKey?: string;
 }) {
   const railRef = useRef<HTMLElement>(null);
-  const cardElementsRef = useRef(new Map<string, HTMLElement>());
-  const cardHeightsRef = useRef(new Map<string, number>());
-  const cardObserverRef = useRef<ResizeObserver | null>(null);
   const frameRef = useRef<number | null>(null);
-  const [layouts, setLayouts] = useState<CommentCardLayout[]>([]);
+  const heightsRef = useRef(new Map<string, number>());
+  const annotationsRef = useRef(annotations);
+  annotationsRef.current = annotations;
   const annotationsById = useMemo(
     () => new Map(annotations.map((annotation) => [annotation.id, annotation])),
     [annotations],
   );
-
-  const measure = useCallback(() => {
-    frameRef.current = null;
-    const anchorRoot = anchorRootRef.current;
-    const layoutRoot = layoutRootRef.current;
-    const rail = railRef.current;
-    if (!anchorRoot || !layoutRoot || !rail || rail.getClientRects().length === 0) {
-      setLayouts((current) => (current.length ? [] : current));
-      return;
-    }
-    const anchors: CommentAnchor[] = [];
-    let collapsedLeads = 0;
-    for (const thread of threads) {
-      const lead = findPdfCommentLead(anchorRoot, thread.annotationId);
-      if (lead && isCollapsedCommentRect(lead.getBoundingClientRect())) {
-        collapsedLeads += 1;
-        continue;
-      }
-      const anchor = measurePdfCommentAnchor(anchorRoot, layoutRoot, thread.annotationId);
-      if (anchor) anchors.push(anchor);
-    }
-    // Live zoom hides the text layer, so every lead collapses to a zero box.
-    // Dropping the cards here makes the column jump; keep the last alignment
-    // until the highlights are measurable again.
-    if (anchors.length === 0 && collapsedLeads > 0) return;
-    const next = layoutCommentCards(
-      anchors.map((anchor) => ({
-        id: anchor.annotationId,
-        desiredY: anchor.desiredY,
-        height: cardHeightsRef.current.get(anchor.annotationId) ?? 1,
-      })),
-    );
-    setLayouts((current) => (layoutsEqual(current, next) ? current : next));
-  }, [anchorRootRef, layoutRootRef, threads]);
-
-  const scheduleReflow = useCallback(() => {
-    if (frameRef.current === null) frameRef.current = window.requestAnimationFrame(measure);
-  }, [measure]);
-
-  const setCardRef = useCallback(
-    (annotationId: string, node: HTMLElement | null) => {
-      const previous = cardElementsRef.current.get(annotationId);
-      if (previous && previous !== node) cardObserverRef.current?.unobserve(previous);
-      if (!node) {
-        cardElementsRef.current.delete(annotationId);
-        cardHeightsRef.current.delete(annotationId);
-        return;
-      }
-      cardElementsRef.current.set(annotationId, node);
-      cardObserverRef.current?.observe(node);
-    },
-    [],
+  const ordered = useMemo(
+    () =>
+      threads
+        .filter((thread) => annotationsById.get(thread.annotationId)?.locator.kind === "pdf")
+        .slice()
+        .sort((left, right) => {
+          const leftKey = pdfCommentSortKey(annotationsById.get(left.annotationId));
+          const rightKey = pdfCommentSortKey(annotationsById.get(right.annotationId));
+          return (
+            leftKey[0] - rightKey[0] ||
+            leftKey[1] - rightKey[1] ||
+            left.id.localeCompare(right.id)
+          );
+        }),
+    [annotationsById, threads],
   );
-
-  useLayoutEffect(() => {
-    scheduleReflow();
-  }, [reflowKey, scheduleReflow]);
+  const layoutKey = `${reflowKey}\0${ordered.map((thread) => thread.annotationId).join("\0")}`;
 
   useEffect(() => {
+    const rail = railRef.current;
+    if (!rail) return;
+
+    const place = () => {
+      const layout = layoutRootRef?.current ?? rail.parentElement;
+      const queryRoot = anchorRootRef?.current ?? layout ?? rail;
+      const slots = Array.from(
+        rail.querySelectorAll<HTMLElement>(".pdf-comment-card-position"),
+      );
+      const inputs = [];
+      for (const slot of slots) {
+        const annotationId = slot.dataset.annotationId;
+        if (!annotationId) continue;
+        const measured = measurePdfCommentAnchor(queryRoot, rail, annotationId);
+        let desiredY = measured?.desiredY ?? null;
+        if (desiredY == null && layout) {
+          const annotation = annotationsRef.current.find((item) => item.id === annotationId);
+          const pageNumber = annotation?.locator.kind === "pdf" ? annotation.locator.page : null;
+          const page =
+            pageNumber == null
+              ? null
+              : layout.querySelector<HTMLElement>(`#pdf-page-${pageNumber}`);
+          if (page && annotation?.locator.kind === "pdf") {
+            desiredY = commentAnchorYFromPageBox(
+              page.getBoundingClientRect(),
+              rail.getBoundingClientRect(),
+              normalizedAnnotationTop(annotation.locator.rects),
+            );
+          }
+        }
+        if (desiredY == null) continue;
+        const measuredHeight = heightsRef.current.get(annotationId);
+        const height = measuredHeight ?? slot.getBoundingClientRect().height;
+        inputs.push({
+          id: annotationId,
+          desiredY,
+          height: Number.isFinite(height) ? height : 0,
+        });
+      }
+      const layouts = layoutCommentCards(inputs);
+      const placed = new Set(layouts.map((item) => item.id));
+      const viewHeight = rail.clientHeight;
+      let inView = viewHeight <= 0;
+      for (const slot of slots) {
+        const annotationId = slot.dataset.annotationId;
+        const layoutItem = layouts.find((item) => item.id === annotationId);
+        if (!annotationId || !layoutItem || !placed.has(annotationId)) continue;
+        slot.style.top = `${layoutItem.renderY}px`;
+        slot.dataset.placed = "true";
+        if (
+          viewHeight > 0 &&
+          layoutItem.renderY < viewHeight &&
+          layoutItem.renderY + layoutItem.height > 0
+        ) {
+          inView = true;
+        }
+      }
+      rail.dataset.cardsInView = inView ? "true" : "false";
+      const area = layout?.querySelector<HTMLElement>(".pdf-page-area");
+      const pages = area?.querySelector<HTMLElement>(".pdf-pages");
+      if (area && pages && layouts.length > 0) {
+        const scrollTop = area.scrollTop;
+        const maxBottom = layouts.reduce(
+          (max, item) => Math.max(max, item.renderY + scrollTop + item.height),
+          0,
+        );
+        const existing = Number(pages.dataset.commentTail || 0);
+        const natural = area.scrollHeight - (Number.isFinite(existing) ? existing : 0);
+        const tail = Math.max(0, Math.ceil(maxBottom + 24 - natural));
+        if (String(tail) !== (pages.dataset.commentTail ?? "0")) {
+          pages.dataset.commentTail = String(tail);
+          pages.style.paddingBottom = tail > 0 ? `${tail}px` : "";
+        }
+      }
+    };
+
+    const schedule = () => {
+      if (frameRef.current !== null) return;
+      frameRef.current = window.requestAnimationFrame(() => {
+        frameRef.current = null;
+        place();
+      });
+    };
+
+    const onWheel = (event: WheelEvent) => {
+      const area = rail.parentElement?.querySelector<HTMLElement>(".pdf-page-area");
+      if (!area || area.scrollHeight <= area.clientHeight + 1) return;
+      if (event.deltaY === 0) return;
+      area.scrollTop += event.deltaY;
+      event.preventDefault();
+    };
+
     const observer = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
-        const element = entry.target as HTMLElement;
-        const annotationId = element.dataset.annotationId;
-        if (!annotationId) continue;
-        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
-        if (Math.abs((cardHeightsRef.current.get(annotationId) ?? -1) - height) < 0.5) {
+        const target = entry.target;
+        if (!(target instanceof HTMLElement)) continue;
+        if (!target.classList.contains("pdf-comment-card-position")) {
+          schedule();
           continue;
         }
-        cardHeightsRef.current.set(annotationId, height);
-        changed = true;
+        const annotationId = target.dataset.annotationId;
+        if (!annotationId) continue;
+        const height = entry.borderBoxSize?.[0]?.blockSize ?? entry.contentRect.height;
+        if (heightsRef.current.get(annotationId) !== height) {
+          heightsRef.current.set(annotationId, height);
+          changed = true;
+        }
       }
-      if (changed) scheduleReflow();
+      if (changed) schedule();
     });
-    cardObserverRef.current = observer;
-    for (const element of cardElementsRef.current.values()) observer.observe(element);
+    rail.querySelectorAll<HTMLElement>(".pdf-comment-card-position").forEach((slot) => {
+      observer.observe(slot);
+    });
+    const pages = (layoutRootRef?.current ?? rail.parentElement)?.querySelector(".pdf-pages");
+    if (pages) observer.observe(pages);
+    const highlights = new MutationObserver((records) => {
+      for (const record of records) {
+        for (const node of record.addedNodes) {
+          if (!(node instanceof Element)) continue;
+          if (node.classList.contains("pdf-user-highlight")) {
+            schedule();
+            return;
+          }
+        }
+      }
+    });
+    if (pages) highlights.observe(pages, { childList: true, subtree: true });
+    place();
+    schedule();
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    rail.addEventListener("wheel", onWheel, { passive: false });
     return () => {
+      if (frameRef.current !== null) {
+        window.cancelAnimationFrame(frameRef.current);
+        frameRef.current = null;
+      }
       observer.disconnect();
-      cardObserverRef.current = null;
+      highlights.disconnect();
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+      rail.removeEventListener("wheel", onWheel);
     };
-  }, [scheduleReflow]);
-
-  useEffect(() => {
-    const anchorRoot = anchorRootRef.current;
-    const layoutRoot = layoutRootRef.current;
-    if (!anchorRoot || !layoutRoot) return;
-    const scrollRoot = anchorRoot.closest<HTMLElement>(".reading-scroll");
-    const resizeObserver = new ResizeObserver(scheduleReflow);
-    resizeObserver.observe(layoutRoot);
-    resizeObserver.observe(anchorRoot);
-    const mutationObserver = new MutationObserver(scheduleReflow);
-    mutationObserver.observe(anchorRoot, { childList: true, subtree: true });
-    scrollRoot?.addEventListener("scroll", scheduleReflow, { passive: true });
-    window.addEventListener("resize", scheduleReflow);
-    scheduleReflow();
-    return () => {
-      resizeObserver.disconnect();
-      mutationObserver.disconnect();
-      scrollRoot?.removeEventListener("scroll", scheduleReflow);
-      window.removeEventListener("resize", scheduleReflow);
-    };
-  }, [anchorRootRef, layoutRootRef, scheduleReflow]);
-
-  useEffect(() => {
-    if (!activeAnnotationId) return;
-    cardElementsRef.current.get(activeAnnotationId)?.scrollIntoView({
-      block: "nearest",
-      inline: "nearest",
-      behavior: "auto",
-    });
-  }, [activeAnnotationId]);
-
-  useEffect(
-    () => () => {
-      if (frameRef.current !== null) window.cancelAnimationFrame(frameRef.current);
-      // Reset the slot too: a canceled-but-uncleared id would make every later
-      // scheduleReflow() believe a frame is already pending (React StrictMode
-      // remounts effects, so the rail would otherwise never lay out at all).
-      frameRef.current = null;
-    },
-    [],
-  );
-
-  const layoutsById = new Map(layouts.map((layout) => [layout.id, layout]));
-  const visibleThreads = threads.filter((thread) => layoutsById.has(thread.annotationId));
-  const bottom = layouts.reduce(
-    (maximum, layout) => Math.max(maximum, layout.renderY + layout.height),
-    0,
-  );
+  }, [anchorRootRef, layoutKey, layoutRootRef]);
 
   return (
-    <aside
-      ref={railRef}
-      className="pdf-comment-rail"
-      aria-label="PDF 评论"
-      style={bottom > 0 ? { minHeight: `${Math.ceil(bottom)}px` } : undefined}
-    >
-      {visibleThreads.map((thread) => {
-        const layout = layoutsById.get(thread.annotationId);
+    <aside ref={railRef} className="pdf-comment-rail" aria-label="PDF 评论">
+      <p className="pdf-comment-rail-hint">批注跟在对应文字旁边。滚到那一页，卡片会出现在那一行的右侧。</p>
+      {ordered.map((thread) => {
         const annotation = annotationsById.get(thread.annotationId);
-        if (!layout || annotation?.locator.kind !== "pdf") return null;
+        if (!annotation || annotation.locator.kind !== "pdf") return null;
         return (
           <div
             key={thread.id}
-            ref={(node) => setCardRef(thread.annotationId, node)}
             className="pdf-comment-card-position"
             data-annotation-id={thread.annotationId}
-            style={{ top: `${layout.renderY}px` }}
           >
             <PdfCommentCard
               thread={thread}
@@ -233,6 +237,8 @@ export function PdfCommentRail({
               active={activeAnnotationId === thread.annotationId}
               onActivate={() => onActivate(thread.annotationId)}
               onReply={(body, authorId) => onReply(thread.id, body, authorId)}
+              onEditMessage={onEditMessage}
+              onDeleteMessage={onDeleteMessage}
             />
           </div>
         );

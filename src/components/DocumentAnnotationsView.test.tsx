@@ -213,16 +213,6 @@ describe("DocumentAnnotationsView", () => {
         },
       ],
     };
-    const onCreatePdfComment = vi.fn(async () => undefined);
-    const onReplyPdfComment = vi.fn(async () => undefined);
-    const onCreateCommentAuthor = vi.fn(async (name: string) => ({
-      id: "author-2",
-      name,
-      isDefault: true,
-      createdAt: 3,
-      updatedAt: 3,
-      deletedAt: null,
-    }));
     render(
       <DocumentAnnotationsView
         format="pdf"
@@ -233,37 +223,17 @@ describe("DocumentAnnotationsView", () => {
         loading={false}
         onJump={vi.fn()}
         onSaveReflection={vi.fn(async () => undefined)}
-        onCreatePdfComment={onCreatePdfComment}
-        onReplyPdfComment={onReplyPdfComment}
-        onCreateCommentAuthor={onCreateCommentAuthor}
+        commentsEnabled
       />,
     );
 
     expect(screen.getByText(/1 个讨论/)).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("button", { name: "添加评论" }));
-    fireEvent.change(screen.getByRole("textbox", { name: "添加评论" }), {
-      target: { value: "新的讨论" },
-    });
-    const addCommentButtons = screen.getAllByRole("button", { name: "添加评论" });
-    fireEvent.click(addCommentButtons[addCommentButtons.length - 1]!);
-    expect(onCreatePdfComment).toHaveBeenCalledWith("pdf-new", "新的讨论", "local-me");
-
-    fireEvent.click(screen.getByRole("button", { name: "查看讨论" }));
-    expect(screen.getByText("第一条评论")).toBeInTheDocument();
-    fireEvent.change(screen.getByRole("textbox", { name: "回复讨论" }), {
-      target: { value: "继续回复" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "回复" }));
-    expect(onReplyPdfComment).toHaveBeenCalledWith("thread-1", "继续回复", "local-me");
-
-    fireEvent.change(screen.getByRole("textbox", { name: "新建本地评论身份" }), {
-      target: { value: "研究者" },
-    });
-    fireEvent.click(screen.getByRole("button", { name: "添加" }));
-    expect(onCreateCommentAuthor).toHaveBeenCalledWith("研究者");
-
     fireEvent.click(screen.getByRole("tab", { name: "讨论" }));
-    expect(screen.getByText("Already discussed")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /第一条评论/ })).toBeInTheDocument();
     expect(screen.queryByText("Needs a first comment")).not.toBeInTheDocument();
+    fireEvent.change(screen.getByRole("searchbox", { name: "搜索本文标注" }), {
+      target: { value: "第一条" },
+    });
+    expect(screen.getByRole("button", { name: /第一条评论/ })).toBeInTheDocument();
   });
 });

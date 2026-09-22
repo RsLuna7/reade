@@ -2,10 +2,13 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   commentAnchorY,
+  commentAnchorYFromPageBox,
   findPdfCommentLead,
   isCollapsedCommentRect,
   measurePdfCommentAnchor,
+  normalizedAnnotationTop,
 } from "./commentAnchor";
+import { commentAuthorColor, commentAuthorInitials } from "./commentModel";
 
 describe("PDF comment anchors", () => {
   it("prefers the lead rect for a multiline annotation", () => {
@@ -45,6 +48,21 @@ describe("PDF comment anchors", () => {
       desiredY: 160,
     });
     expect(measurePdfCommentAnchor(root, layout, "missing")).toBeNull();
+  });
+
+  it("falls back to the page box when the highlight is not painted", () => {
+    expect(normalizedAnnotationTop([])).toBe(0.08);
+    expect(normalizedAnnotationTop([{ y: 0.4 }, { y: 0.2 }])).toBe(0.2);
+    expect(commentAnchorYFromPageBox({ top: 100, height: 800 }, { top: 40 }, 0.25)).toBe(260);
+    expect(commentAnchorYFromPageBox({ top: 100, height: 0 }, { top: 40 }, 0.25)).toBeNull();
+  });
+
+  it("builds a personal avatar mark from the display name", () => {
+    expect(commentAuthorInitials("我")).toBe("我");
+    expect(commentAuthorInitials("Dld ones Grear")).toBe("DG");
+    expect(commentAuthorInitials("")).toBe("我");
+    expect(commentAuthorColor("我")).toBe(commentAuthorColor("我"));
+    expect(commentAuthorColor("研究者")).not.toBe(commentAuthorColor("我"));
   });
 
   it("ignores a highlight collapsed to a zero box during zoom preview", () => {

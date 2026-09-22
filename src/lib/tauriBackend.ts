@@ -45,6 +45,8 @@ import type {
   CommentAuthor,
   CommentAuthorDraft,
   CreatePdfCommentDraft,
+  PdfCommentDeletion,
+  PdfCommentMessage,
   PdfCommentMutation,
   ReplyToPdfCommentDraft,
 } from "./comments/commentModel";
@@ -174,6 +176,18 @@ export function replyToPdfComment(
   draft: ReplyToPdfCommentDraft,
 ): Promise<PdfCommentMutation> {
   return invoke("reply_to_pdf_comment", { draft });
+}
+export function updatePdfCommentMessage(
+  messageId: string,
+  body: string,
+): Promise<PdfCommentMessage> {
+  return invoke("update_pdf_comment_message", { draft: { messageId, body } });
+}
+export function deletePdfCommentMessage(messageId: string): Promise<PdfCommentDeletion> {
+  return invoke("delete_pdf_comment_message", { messageId });
+}
+export function clearPdfComments(): Promise<void> {
+  return invoke("clear_pdf_comments");
 }
 export function deleteAnnotationEntry(id: string, entryKind: AnnotationEntryKind): Promise<void> {
   return invoke("delete_annotation_entry", { id, entryKind });

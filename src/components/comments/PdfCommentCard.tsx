@@ -13,6 +13,8 @@ export function PdfCommentCard({
   active,
   onActivate,
   onReply,
+  onEditMessage,
+  onDeleteMessage,
 }: {
   thread: PdfCommentThread;
   page: number;
@@ -21,17 +23,21 @@ export function PdfCommentCard({
   active: boolean;
   onActivate: () => void;
   onReply: (body: string, authorId: string) => Promise<unknown>;
+  onEditMessage?: (messageId: string, body: string) => Promise<unknown>;
+  onDeleteMessage?: (messageId: string) => Promise<unknown>;
 }) {
   return (
     <article
       className={`pdf-comment-card${active ? " is-active" : ""}`}
       data-comment-thread-id={thread.id}
       data-annotation-id={thread.annotationId}
+      aria-label={`第 ${page} 页的批注`}
+      onClick={(event) => {
+        const target = event.target;
+        if (target instanceof Element && target.closest("button, textarea, input, a")) return;
+        onActivate();
+      }}
     >
-      <button type="button" className="pdf-comment-card-jump" onClick={onActivate}>
-        <span>讨论</span>
-        <span>第 {page} 页</span>
-      </button>
       <PdfCommentConversation
         thread={thread}
         messages={messages}
@@ -39,6 +45,8 @@ export function PdfCommentCard({
         compact
         showComposer={active}
         onSubmit={onReply}
+        onEditMessage={active ? onEditMessage : undefined}
+        onDeleteMessage={active ? onDeleteMessage : undefined}
       />
     </article>
   );

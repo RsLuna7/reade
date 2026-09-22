@@ -63,12 +63,10 @@ class TestResizeObserver {
 
 function Harness({
   active = "a",
-  reflowKey = "test",
   onActivate = vi.fn(),
   onReply = vi.fn(async () => undefined),
 }: {
   active?: string | null;
-  reflowKey?: string;
   onActivate?: (annotationId: string) => void;
   onReply?: (threadId: string, body: string, authorId: string) => Promise<unknown>;
 }) {
@@ -82,14 +80,11 @@ function Harness({
         <span className="pdf-user-highlight pdf-user-highlight--lead" data-annotation-id="b" />
       </div>
       <PdfCommentRail
-        anchorRootRef={anchorRef}
-        layoutRootRef={layoutRef}
         threads={threads}
         messages={messages}
         authors={authors}
         annotations={annotations}
         activeAnnotationId={active}
-        reflowKey={reflowKey}
         onActivate={onActivate}
         onReply={onReply}
       />
@@ -143,24 +138,19 @@ describe("PdfCommentRail", () => {
     expect(screen.getByText("甲评论")).toBeInTheDocument();
     expect(screen.getByText("乙评论")).toBeInTheDocument();
     expect(document.querySelector('[data-comment-thread-id="thread-missing"]')).toBeNull();
-    await waitFor(() => {
-      const first = document.querySelector<HTMLElement>('.pdf-comment-card-position[data-annotation-id="a"]');
-      const second = document.querySelector<HTMLElement>('.pdf-comment-card-position[data-annotation-id="b"]');
-      expect(first).toHaveStyle({ top: "120px" });
-      expect(second).toHaveStyle({ top: "212px" });
-    });
+    const cards = document.querySelectorAll<HTMLElement>("[data-comment-thread-id]");
+    expect(cards[0]).toHaveAttribute("data-annotation-id", "a");
+    expect(cards[1]).toHaveAttribute("data-annotation-id", "b");
     expect(document.querySelector('[data-comment-thread-id="thread-a"]')).toHaveClass("is-active");
-  });
-
-  it("keeps laid-out cards when zoom preview collapses every highlight", async () => {
-    const rect = vi.spyOn(HTMLElement.prototype, "getBoundingClientRect");
-    const view = render(<Harness />);
-    await waitFor(() => expect(document.querySelectorAll(".pdf-comment-card")).toHaveLength(2));
-    rect.mockImplementation(() => ({ top: 0, width: 0, height: 0 }) as DOMRect);
-    view.rerender(<Harness reflowKey="zoom-preview" />);
-    await waitFor(() => expect(document.querySelectorAll(".pdf-comment-card")).toHaveLength(2));
-    expect(document.querySelector<HTMLElement>('.pdf-comment-card-position[data-annotation-id="a"]'))
-      .toHaveStyle({ top: "120px" });
+    await waitFor(() => {
+      expect(document.querySelector('.pdf-comment-card-position[data-annotation-id="a"]')).toHaveStyle({
+        top: "220px",
+      });
+    });
+    expect(document.querySelector('.pdf-comment-card-position[data-annotation-id="b"]')).toHaveStyle({
+      top: "312px",
+    });
+    expect(screen.getAllByText("我").length).toBeGreaterThan(0);
   });
 
   it("activates from the card and submits replies with the annotation mapping intact", async () => {
@@ -168,7 +158,7 @@ describe("PdfCommentRail", () => {
     const onReply = vi.fn(async () => undefined);
     render(<Harness onActivate={onActivate} onReply={onReply} />);
     await waitFor(() => expect(screen.getByText("甲评论")).toBeInTheDocument());
-    fireEvent.click(screen.getAllByRole("button", { name: /讨论第 2 页/ })[0]!);
+    fireEvent.click(screen.getByText("甲评论"));
     expect(onActivate).toHaveBeenCalledWith("a");
     fireEvent.change(screen.getByRole("textbox", { name: "回复讨论" }), {
       target: { value: "一条回复" },

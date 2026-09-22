@@ -219,6 +219,7 @@ interface ReaderState {
    * default: fuzzy may anchor a mark to similar but different text. Persisted.
    */
   fuzzyAnnotationAnchoring: boolean;
+  pdfCommentsEnabled: boolean;
   /**
    * Load HTTPS images referenced by Markdown from the network. Off by default
    * (local-first / no drive-by requests); persisted. CSP still forbids http:.
@@ -341,6 +342,7 @@ interface ReaderState {
   setAnnotationColorName: (color: AnnotationColorPreference, name: string) => void;
   resetAnnotationColorNames: () => void;
   setFuzzyAnnotationAnchoring: (enabled: boolean) => void;
+  setPdfCommentsEnabled: (enabled: boolean) => void;
   setAllowRemoteImages: (enabled: boolean) => void;
   setShowHighlightCaret: (enabled: boolean) => void;
   setShowScrollMap: (enabled: boolean) => void;
@@ -776,6 +778,10 @@ export const useReaderStore = create<ReaderState>()(
 
         setFuzzyAnnotationAnchoring: (enabled) => {
           set({ fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(enabled) });
+        },
+
+        setPdfCommentsEnabled: (enabled) => {
+          set({ pdfCommentsEnabled: enabled === true });
         },
 
         setAllowRemoteImages: (enabled) => {

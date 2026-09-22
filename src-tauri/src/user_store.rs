@@ -48,7 +48,7 @@ use crate::library::{
     validate_relative_library_path, AppState, CommandResult, DocumentInfo, MAX_MARKDOWN_BYTES,
 };
 
-const USER_SCHEMA_VERSION: i64 = 8;
+const USER_SCHEMA_VERSION: i64 = 9;
 pub(crate) const USER_DB_FILE: &str = "reade-user.sqlite3";
 pub(crate) const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
 /// Tombstoned annotations are physically purged 90 days after deletion.
@@ -394,6 +394,10 @@ pub struct PdfCommentThread {
     pub created_at: u64,
     pub updated_at: u64,
     pub deleted_at: Option<u64>,
+    /// The highlight was created only to anchor this thread. Deleting the
+    /// thread removes that highlight; a mark the reader drew first stays.
+    #[serde(default)]
+    pub anchor_created: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -424,6 +428,24 @@ pub struct CreatePdfCommentDraft {
     pub annotation_id: String,
     pub author_id: String,
     pub body: String,
+    #[serde(default)]
+    pub anchor_created: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct UpdatePdfCommentMessageDraft {
+    pub message_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCommentDeletion {
+    pub message_id: String,
+    pub thread_id: String,
+    pub thread_deleted: bool,
+    pub removed_annotation_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1562,6 +1584,7 @@ fn run_migration_chain(
             6 => migrate_to_v6(&transaction)?,
             7 => migrate_to_v7(&transaction)?,
             8 => migrate_to_v8(&transaction)?,
+            9 => migrate_to_v9(&transaction)?,
             _ => return Err(format!("Unknown user data migration step {step}")),
         }
         transaction
@@ -2078,6 +2101,16 @@ fn migrate_to_v8(transaction: &Connection) -> CommandResult<()> {
     Ok(())
 }
 
+/// v9: remember which highlights exist only as a comment anchor.
+fn migrate_to_v9(transaction: &Connection) -> CommandResult<()> {
+    transaction
+        .execute_batch(
+            "ALTER TABLE pdf_comment_threads
+                 ADD COLUMN anchor_created INTEGER NOT NULL DEFAULT 0;",
+        )
+        .map_err(|error| format!("Cannot record comment-anchor highlights: {error}"))
+}
+
 #[tauri::command]
 pub fn upsert_comment_author(
     draft: CommentAuthorDraft,
@@ -2163,6 +2196,7 @@ pub fn create_pdf_comment_thread(
         created_at: now,
         updated_at: now,
         deleted_at: None,
+        anchor_created: draft.anchor_created,
     };
     let message = PdfCommentMessage {
         id: draft.message_id,
@@ -2220,6 +2254,188 @@ pub fn reply_to_pdf_comment(
         .commit()
         .map_err(|error| format!("Cannot commit PDF comment reply: {error}"))?;
     Ok(PdfCommentMutation { thread, message })
+}
+
+#[tauri::command]
+pub fn update_pdf_comment_message(
+    draft: UpdatePdfCommentMessageDraft,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<PdfCommentMessage> {
+    let root = normalize_root(&current_root(&library)?);
+    validate_annotation_id(&draft.message_id)?;
+    let body = sanitize_required_text(draft.body, MAX_ANNOTATION_NOTE_CHARS, "comment")?;
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin PDF comment edit: {error}"))?;
+    let message = read_live_pdf_comment_message(&transaction, &root, &draft.message_id)?;
+    let thread = read_pdf_comment_thread_row(&transaction, &root, &message.thread_id)?
+        .filter(|item| item.deleted_at.is_none())
+        .ok_or_else(|| "Comment thread was not found".to_owned())?;
+    transaction
+        .execute(
+            "UPDATE pdf_comment_messages
+             SET body = ?1, updated_at = ?2
+             WHERE library_root = ?3 AND id = ?4 AND deleted_at IS NULL",
+            params![body, now as i64, root, draft.message_id],
+        )
+        .map_err(|error| sql_error("Cannot update PDF comment", error))?;
+    transaction
+        .execute(
+            "UPDATE pdf_comment_threads
+             SET updated_at = ?1
+             WHERE library_root = ?2 AND id = ?3 AND deleted_at IS NULL",
+            params![now as i64, root, thread.id],
+        )
+        .map_err(|error| sql_error("Cannot touch PDF comment thread", error))?;
+    sync_comments_to_excerpt_search(&transaction, &root, &thread.annotation_id)?;
+    let saved = read_live_pdf_comment_message(&transaction, &root, &draft.message_id)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit PDF comment edit: {error}"))?;
+    Ok(saved)
+}
+
+#[tauri::command]
+pub fn delete_pdf_comment_message(
+    message_id: String,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<PdfCommentDeletion> {
+    let root = normalize_root(&current_root(&library)?);
+    validate_annotation_id(&message_id)?;
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin PDF comment deletion: {error}"))?;
+    let message = read_live_pdf_comment_message(&transaction, &root, &message_id)?;
+    let thread = read_pdf_comment_thread_row(&transaction, &root, &message.thread_id)?
+        .filter(|item| item.deleted_at.is_none())
+        .ok_or_else(|| "Comment thread was not found".to_owned())?;
+    transaction
+        .execute(
+            "UPDATE pdf_comment_messages
+             SET deleted_at = ?1, updated_at = ?1
+             WHERE library_root = ?2 AND id = ?3 AND deleted_at IS NULL",
+            params![now as i64, root, message_id],
+        )
+        .map_err(|error| sql_error("Cannot delete PDF comment", error))?;
+    let remaining: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM pdf_comment_messages
+             WHERE library_root = ?1 AND thread_id = ?2 AND deleted_at IS NULL",
+            params![root, thread.id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Cannot count PDF comments", error))?;
+    let mut removed_annotation_id = None;
+    if remaining == 0 {
+        transaction
+            .execute(
+                "UPDATE pdf_comment_threads
+                 SET deleted_at = ?1, updated_at = ?1
+                 WHERE library_root = ?2 AND id = ?3 AND deleted_at IS NULL",
+                params![now as i64, root, thread.id],
+            )
+            .map_err(|error| sql_error("Cannot delete PDF comment thread", error))?;
+        if thread.anchor_created {
+            set_annotation_entry_deleted_row(
+                &transaction,
+                &root,
+                &thread.annotation_id,
+                &AnnotationEntryKind::Excerpt,
+                true,
+                now,
+            )?;
+            removed_annotation_id = Some(thread.annotation_id);
+        }
+    } else {
+        sync_comments_to_excerpt_search(&transaction, &root, &thread.annotation_id)?;
+    }
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit PDF comment deletion: {error}"))?;
+    Ok(PdfCommentDeletion {
+        message_id,
+        thread_id: thread.id,
+        thread_deleted: remaining == 0,
+        removed_annotation_id,
+    })
+}
+
+#[tauri::command]
+pub fn clear_pdf_comments(
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<()> {
+    let root = normalize_root(&current_root(&library)?);
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin clearing PDF comments: {error}"))?;
+    let anchors: Vec<String> = transaction
+        .prepare(
+            "SELECT annotation_id FROM pdf_comment_threads
+             WHERE library_root = ?1 AND deleted_at IS NULL AND anchor_created != 0",
+        )
+        .map_err(|error| sql_error("Cannot list comment anchors", error))?
+        .query_map(params![root], |row| row.get(0))
+        .map_err(|error| sql_error("Cannot list comment anchors", error))?
+        .collect::<Result<Vec<String>, _>>()
+        .map_err(|error| sql_error("Cannot list comment anchors", error))?;
+    for annotation_id in anchors {
+        set_annotation_entry_deleted_row(
+            &transaction,
+            &root,
+            &annotation_id,
+            &AnnotationEntryKind::Excerpt,
+            true,
+            now,
+        )?;
+    }
+    transaction
+        .execute(
+            "UPDATE pdf_comment_messages
+             SET deleted_at = ?1, updated_at = ?1
+             WHERE library_root = ?2 AND deleted_at IS NULL",
+            params![now as i64, root],
+        )
+        .map_err(|error| sql_error("Cannot clear PDF comments", error))?;
+    transaction
+        .execute(
+            "UPDATE pdf_comment_threads
+             SET deleted_at = ?1, updated_at = ?1
+             WHERE library_root = ?2 AND deleted_at IS NULL",
+            params![now as i64, root],
+        )
+        .map_err(|error| sql_error("Cannot clear PDF comment threads", error))?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit clearing PDF comments: {error}"))?;
+    Ok(())
+}
+
+fn read_live_pdf_comment_message(
+    connection: &Connection,
+    root: &str,
+    message_id: &str,
+) -> CommandResult<PdfCommentMessage> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT {COMMENT_MESSAGE_COLUMNS} FROM pdf_comment_messages
+                 WHERE library_root = ?1 AND id = ?2 AND deleted_at IS NULL"
+            ),
+            params![root, message_id],
+            pdf_comment_message_from_row,
+        )
+        .optional()
+        .map_err(|error| sql_error("Cannot read PDF comment", error))?
+        .ok_or_else(|| "Comment was not found".to_owned())
 }
 
 #[derive(Debug, Clone)]
@@ -4490,6 +4706,7 @@ fn pdf_comment_thread_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PdfC
         created_at: row.get::<_, i64>(2)? as u64,
         updated_at: row.get::<_, i64>(3)? as u64,
         deleted_at: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+        anchor_created: row.get::<_, i64>(5)? != 0,
     })
 }
 
@@ -4526,7 +4743,8 @@ const PLACE_COLUMNS: &str = "id, relative_path, title, target_json, source_revis
      legacy_color, legacy_selected_text, sort_index, created_at, updated_at, deleted_at";
 const REFLECTION_COLUMNS: &str = "entry_id, entry_kind, body, created_at, updated_at, deleted_at";
 const COMMENT_AUTHOR_COLUMNS: &str = "id, name, is_default, created_at, updated_at, deleted_at";
-const COMMENT_THREAD_COLUMNS: &str = "id, annotation_id, created_at, updated_at, deleted_at";
+const COMMENT_THREAD_COLUMNS: &str =
+    "id, annotation_id, created_at, updated_at, deleted_at, anchor_created";
 const COMMENT_MESSAGE_COLUMNS: &str =
     "id, thread_id, author_id, body, created_at, updated_at, deleted_at";
 const ENROLLMENT_COLUMNS: &str = "excerpt_id, enrolled_at, box, due_at, last_reviewed_at,
@@ -5114,14 +5332,15 @@ fn upsert_pdf_comment_thread_row(
     connection
         .execute(
             "INSERT INTO pdf_comment_threads(
-                 id, library_root, annotation_id, created_at, updated_at, deleted_at
-             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 id, library_root, annotation_id, created_at, updated_at, deleted_at, anchor_created
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
              ON CONFLICT(id) DO UPDATE SET
                  library_root = excluded.library_root,
                  annotation_id = excluded.annotation_id,
                  created_at = excluded.created_at,
                  updated_at = excluded.updated_at,
-                 deleted_at = excluded.deleted_at
+                 deleted_at = excluded.deleted_at,
+                 anchor_created = excluded.anchor_created
              WHERE pdf_comment_threads.library_root = excluded.library_root",
             params![
                 thread.id,
@@ -5130,6 +5349,7 @@ fn upsert_pdf_comment_thread_row(
                 thread.created_at as i64,
                 thread.updated_at as i64,
                 thread.deleted_at.map(|value| value as i64),
+                i64::from(thread.anchor_created),
             ],
         )
         .map_err(|error| sql_error("Cannot save PDF comment thread", error))?;
@@ -5712,6 +5932,7 @@ fn create_excerpt_rows(
         created_at: now,
         updated_at: now,
         deleted_at: None,
+        anchor_created: false,
     });
     let comment_message = comment_thread.as_ref().map(|thread| PdfCommentMessage {
         id: excerpt.id.clone(),
@@ -11030,6 +11251,7 @@ mod tests {
             created_at: 1_100,
             updated_at: 1_100,
             deleted_at: None,
+            anchor_created: false,
         };
         let message = PdfCommentMessage {
             id: "message-1".to_owned(),

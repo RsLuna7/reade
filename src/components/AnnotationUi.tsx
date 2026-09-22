@@ -45,6 +45,8 @@ interface SelectionToolbarProps {
   onMark: () => void;
   onPickTone: (tone: AnnotationTone) => void;
   onUnderline: () => void;
+  /** PDF 原版式批注。未传时不渲染。 */
+  onComment?: () => void;
   /** 金句卡片入口(QC-D5):选区文本生成引文卡片。未传时不渲染按钮。 */
   onMakeCard?: () => void;
   /** 相关段落入口(RP-D4)。未传时不渲染按钮。 */
@@ -68,6 +70,7 @@ export function SelectionToolbar({
   onMark,
   onPickTone,
   onUnderline,
+  onComment,
   onMakeCard,
   onFindRelated,
   canFindRelated = false,
@@ -88,6 +91,11 @@ export function SelectionToolbar({
       <button type="button" disabled={!canMark} onClick={onMark}>
         标记
       </button>
+      {onComment ? (
+        <button type="button" disabled={!canMark} onClick={onComment}>
+          批注
+        </button>
+      ) : null}
       <div className="annotation-toolbar-more">
         <button
           type="button"

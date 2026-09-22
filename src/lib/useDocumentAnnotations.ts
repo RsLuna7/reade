@@ -2,7 +2,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearDocumentAnnotations,
   createExcerpt,
+  clearPdfComments,
   createPdfCommentThread,
+  deletePdfCommentMessage,
+  updatePdfCommentMessage,
   deleteAnnotation,
   listDocumentAnnotations,
   restoreAnnotationEntry,
@@ -424,7 +427,12 @@ export function useDocumentAnnotations(relativePath: string | null) {
   );
 
   const savePdfComment = useCallback(
-    async (annotationId: string, body: string, authorId?: string) => {
+    async (
+      annotationId: string,
+      body: string,
+      authorId?: string,
+      options?: { anchorCreated?: boolean },
+    ) => {
       const epoch = documentEpochRef.current;
       return runMutation(async () => {
         const author = authorId ?? defaultCommentAuthor(commentAuthors(bundleRef.current))?.id;
@@ -435,6 +443,7 @@ export function useDocumentAnnotations(relativePath: string | null) {
           annotationId,
           authorId: author,
           body,
+          anchorCreated: options?.anchorCreated === true,
         });
         if (documentEpochRef.current !== epoch) return saved;
         commitBundle({
@@ -494,12 +503,62 @@ export function useDocumentAnnotations(relativePath: string | null) {
     [commitBundle, runMutation],
   );
 
+  const editPdfComment = useCallback(
+    async (messageId: string, body: string) => {
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const saved = await updatePdfCommentMessage(messageId, body);
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          commentMessages: commentMessages(bundleRef.current).map((item) =>
+            item.id === saved.id ? saved : item,
+          ),
+        });
+        dataVersionRef.current += 1;
+        return saved;
+      });
+    },
+    [commitBundle, runMutation],
+  );
+
+  const removePdfComment = useCallback(
+    async (messageId: string) => {
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const result = await deletePdfCommentMessage(messageId);
+        if (documentEpochRef.current !== epoch) return result;
+        const threads = result.threadDeleted
+          ? commentThreads(bundleRef.current).filter((item) => item.id !== result.threadId)
+          : commentThreads(bundleRef.current);
+        commitBundle({
+          ...bundleRef.current,
+          excerpts: result.removedAnnotationId
+            ? bundleRef.current.excerpts.filter((item) => item.id !== result.removedAnnotationId)
+            : bundleRef.current.excerpts,
+          commentThreads: threads,
+          commentMessages: commentMessages(bundleRef.current).filter(
+            (item) => item.id !== result.messageId,
+          ),
+        });
+        dataVersionRef.current += 1;
+        return result;
+      });
+    },
+    [commitBundle, runMutation],
+  );
+
+  const clearPdfCommentThreads = useCallback(async () => {
+    await clearPdfComments();
+    await reload();
+  }, [reload]);
+
   const saveCommentAuthor = useCallback(
-    async (name: string, makeDefault = true) => {
+    async (name: string, makeDefault = true, id?: string) => {
       const epoch = documentEpochRef.current;
       return runMutation(async () => {
         const saved = await upsertCommentAuthor({
-          id: createAnnotationId(),
+          id: id?.trim() || createAnnotationId(),
           name,
           makeDefault,
         });
@@ -560,6 +619,9 @@ export function useDocumentAnnotations(relativePath: string | null) {
     saveReflection,
     savePdfComment,
     replyPdfComment,
+    editPdfComment,
+    removePdfComment,
+    clearPdfCommentThreads,
     saveCommentAuthor,
     setEnrollment,
     remove,

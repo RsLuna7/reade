@@ -747,45 +747,117 @@
   list-style: none;
 }
 
+.pdf-comment-message {
+  display: grid;
+  grid-template-columns: 32px minmax(0, 1fr);
+  column-gap: 10px;
+  align-items: start;
+}
+
 .pdf-comment-message + .pdf-comment-message {
-  padding-top: 10px;
-  border-top: 1px solid var(--line);
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
+}
+
+.pdf-comment-avatar {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  place-items: center;
+  border-radius: 999px;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 650;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  user-select: none;
+}
+
+.pdf-comment-message-main {
+  min-width: 0;
 }
 
 .pdf-comment-message-meta {
   display: flex;
-  align-items: baseline;
+  align-items: center;
   justify-content: space-between;
   gap: 8px;
-  color: var(--ink-soft);
-  font-size: 10px;
+  min-height: 20px;
 }
 
 .pdf-comment-message-meta strong {
   color: var(--ink);
-  font-size: 11px;
+  font-size: 13px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.pdf-comment-message-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+}
+
+.pdf-comment-card:hover .pdf-comment-message-actions,
+.pdf-comment-card:focus-within .pdf-comment-message-actions {
+  opacity: 1;
+}
+
+.pdf-comment-message-actions button {
+  min-height: 22px;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 4px;
+  color: var(--muted);
+  background: transparent;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.pdf-comment-message-actions button:hover {
+  color: var(--ink);
+  background: color-mix(in srgb, var(--ink) 6%, transparent);
 }
 
 .pdf-comment-message p {
-  margin: 4px 0 0;
-  color: var(--ink-soft);
-  font-size: 12px;
-  line-height: 1.55;
+  margin: 2px 0 0;
+  color: var(--ink);
+  font-size: 13px;
+  line-height: 1.45;
   overflow-wrap: anywhere;
   white-space: pre-wrap;
+}
+
+.pdf-comment-message time {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.pdf-comment-edit {
+  box-sizing: border-box;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 13px;
+  line-height: 1.45;
+  resize: vertical;
 }
 
 .pdf-comment-composer {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  padding-top: 8px;
-  border-top: 1px solid var(--line);
-}
-
-.pdf-comment-composer-meta {
-  display: flex;
-  justify-content: flex-end;
+  margin-top: 4px;
+  padding-top: 10px;
 }
 
 .pdf-comment-composer select { max-width: 144px; }
@@ -793,20 +865,37 @@
 .pdf-comment-composer textarea {
   box-sizing: border-box;
   width: 100%;
-  padding: 8px;
-  border: 1px solid var(--line);
-  border-radius: 8px;
+  min-height: 36px;
+  padding: 7px 8px;
+  border: 1px solid color-mix(in srgb, var(--ink) 16%, var(--paper));
+  border-radius: 2px;
   color: var(--ink);
   background: var(--paper);
   font: inherit;
-  font-size: 12px;
-  line-height: 1.5;
+  font-size: 13px;
+  line-height: 1.45;
   resize: vertical;
 }
 
-.pdf-comment-composer button { align-self: flex-end; }
+.pdf-comment-composer textarea::placeholder { color: var(--muted); }
+
+.pdf-comment-composer button {
+  align-self: flex-end;
+  min-height: 26px;
+  padding: 2px 10px;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--ink-soft);
+  background: transparent;
+}
+
+.pdf-comment-composer button:hover:not(:disabled) {
+  color: #5b5fc7;
+  background: color-mix(in srgb, #5b5fc7 8%, transparent);
+}
+
 .pdf-comment-error { margin: 0; color: #b34e42; font-size: 11px; }
-.pdf-comment-card .pdf-comment-conversation { padding: 10px 12px 12px; }
+.pdf-comment-card .pdf-comment-conversation { padding: 12px 12px 10px; }
 
 @media (max-width: 640px) {
   .annotation-toolbar {
@@ -3065,6 +3154,17 @@ button.folder-docs-crumb:focus-visible {
 
 .color-name-input:focus {
   outline: none;
+}
+
+.pdf-comment-identity {
+  margin-top: 8px;
+}
+
+.pdf-comment-identity .pdf-comment-avatar {
+  width: 22px;
+  height: 22px;
+  flex: none;
+  font-size: 11px;
 }
 
 .settings-reset.color-names-reset {

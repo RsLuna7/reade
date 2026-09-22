@@ -541,6 +541,13 @@ describe("atomic actions and undo semantics", () => {
       .toBe(true);
     expect(result.current.bundle.commentAuthors?.find((item) => item.id === "local-me")?.isDefault)
       .toBe(false);
+
+    await act(async () => {
+      await result.current.saveCommentAuthor("书房", true, "local-me");
+    });
+    expect(result.current.bundle.commentAuthors?.find((item) => item.id === "local-me")?.name)
+      .toBe("书房");
+    expect(result.current.bundle.commentAuthors?.filter((item) => item.id === "local-me")).toHaveLength(1);
   });
 
   it("recolors an existing mark through the v6 appearance command", async () => {

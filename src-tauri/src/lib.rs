@@ -24,17 +24,17 @@ use stats::{list_reading_sessions, record_reading_session, start_reading_session
 use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use transfer::{export_annotations_file, pick_annotations_import_file};
 use user_store::{
-    add_collection_item, clear_document_annotations, create_collection, create_excerpt,
-    create_pdf_comment_thread, create_reading_place, delete_annotation, delete_annotation_entry,
-    delete_collection, delete_reflection, detect_moved_documents, import_annotations,
-    list_annotations, list_annotations_for_transfer, list_collection_items, list_collections,
-    list_document_annotations, list_document_fingerprints, list_review_queue,
-    rebind_document_annotations, record_excerpt_review_outcome, record_review_outcome,
-    remove_collection_item, rename_collection, reorder_collection_items, reply_to_pdf_comment,
-    restore_annotation_entry, restore_document_annotations, review_summary,
+    add_collection_item, clear_document_annotations, clear_pdf_comments, create_collection,
+    create_excerpt, create_pdf_comment_thread, create_reading_place, delete_annotation,
+    delete_annotation_entry, delete_collection, delete_pdf_comment_message, delete_reflection,
+    detect_moved_documents, import_annotations, list_annotations, list_annotations_for_transfer,
+    list_collection_items, list_collections, list_document_annotations, list_document_fingerprints,
+    list_review_queue, rebind_document_annotations, record_excerpt_review_outcome,
+    record_review_outcome, remove_collection_item, rename_collection, reorder_collection_items,
+    reply_to_pdf_comment, restore_annotation_entry, restore_document_annotations, review_summary,
     search_annotation_entries, search_annotations, set_review_enrollment,
-    update_excerpt_appearance, upsert_annotation, upsert_comment_author, upsert_reflection,
-    UserState,
+    update_excerpt_appearance, update_pdf_comment_message, upsert_annotation,
+    upsert_comment_author, upsert_reflection, UserState,
 };
 
 /// D05 close coordination: the first close request is held while the
@@ -154,6 +154,9 @@ pub fn run() {
             upsert_comment_author,
             create_pdf_comment_thread,
             reply_to_pdf_comment,
+            update_pdf_comment_message,
+            delete_pdf_comment_message,
+            clear_pdf_comments,
             delete_annotation_entry,
             restore_annotation_entry,
             set_review_enrollment,

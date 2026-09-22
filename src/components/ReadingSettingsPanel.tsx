@@ -28,12 +28,16 @@ import { downloadTextFile } from "../lib/fileTransfer";
 import { formatFileSize } from "../lib/displayFormat";
 import { describeLocalOpenError } from "../lib/localDataStatusDisplay";
 import { useDialogFocus } from "../lib/useDialogFocus";
+import { CommentAvatar } from "./comments/CommentAvatar";
 
 
 export function ReadingSettingsPanel({
   open,
   onClose,
   onNotice,
+  onClearPdfComments,
+  pdfCommentAuthor = null,
+  onRenamePdfCommentAuthor,
   focusUnavailableReason = null,
   verticalUnavailableReason = null,
   isWeb = IS_WEB_RUNTIME,
@@ -41,6 +45,9 @@ export function ReadingSettingsPanel({
   open: boolean;
   onClose: () => void;
   onNotice: (message: string) => void;
+  onClearPdfComments?: () => Promise<void>;
+  pdfCommentAuthor?: { id: string; name: string } | null;
+  onRenamePdfCommentAuthor?: (name: string) => Promise<void>;
   /** 聚焦模式在当前内容不适用的原因(如 PDF 原版式);null = 可用。 */
   focusUnavailableReason?: string | null;
   /** 竖排开关对当前文档不可用的原因(如 PDF/mdx);null = 可用。 */
@@ -59,6 +66,8 @@ export function ReadingSettingsPanel({
   const allowRemoteImages = useReaderStore((state) => state.allowRemoteImages);
   const setAllowRemoteImages = useReaderStore((state) => state.setAllowRemoteImages);
   const showHighlightCaret = useReaderStore((state) => state.showHighlightCaret);
+  const pdfCommentsEnabled = useReaderStore((state) => state.pdfCommentsEnabled);
+  const setPdfCommentsEnabled = useReaderStore((state) => state.setPdfCommentsEnabled);
   const setShowHighlightCaret = useReaderStore((state) => state.setShowHighlightCaret);
   const showScrollMap = useReaderStore((state) => state.showScrollMap);
   const setShowScrollMap = useReaderStore((state) => state.setShowScrollMap);
@@ -88,9 +97,13 @@ export function ReadingSettingsPanel({
   useDialogFocus(open, dialogRef);
   // 命名输入草稿:空值回落默认只在提交(blur/Enter)时发生,而非每个键击。
   const [colorNameDrafts, setColorNameDrafts] = useState(annotationColorNames);
+  const [commentNameDraft, setCommentNameDraft] = useState(pdfCommentAuthor?.name ?? "");
   useEffect(() => {
     setColorNameDrafts(annotationColorNames);
   }, [annotationColorNames]);
+  useEffect(() => {
+    setCommentNameDraft(pdfCommentAuthor?.name ?? "");
+  }, [pdfCommentAuthor?.id, pdfCommentAuthor?.name]);
 
   useEffect(() => {
     if (!open || isWeb) return;
@@ -435,6 +448,75 @@ export function ReadingSettingsPanel({
         <p className="setting-hint">
           在高亮标注左上角显示红色倒三角，便于扫视定位；不影响下划线标注。
         </p>
+      </fieldset>
+
+      <fieldset className="setting-row motion-setting">
+        <legend className="setting-label">PDF 批注</legend>
+        <div className="motion-level-control" role="group" aria-label="PDF 批注开关">
+          {([
+            [false, "关闭"],
+            [true, "开启"],
+          ] as const).map(([enabled, label]) => (
+            <button
+              type="button"
+              key={label}
+              aria-pressed={pdfCommentsEnabled === enabled}
+              className={pdfCommentsEnabled === enabled ? "active" : undefined}
+              onClick={() => setPdfCommentsEnabled(enabled)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+        <p className="setting-hint">
+          开启后，PDF 原版式可以在选区旁写批注。卡片跟在那一行旁边。关闭后批注界面消失，已有高亮和下划线仍在。
+        </p>
+        {onRenamePdfCommentAuthor && pdfCommentAuthor ? (
+          <label className="color-name-row pdf-comment-identity">
+            <CommentAvatar name={commentNameDraft || pdfCommentAuthor.name} />
+            <input
+              className="color-name-input"
+              value={commentNameDraft}
+              maxLength={80}
+              aria-label="批注署名"
+              placeholder="你的名字"
+              onChange={(event) => setCommentNameDraft(event.target.value)}
+              onBlur={() => {
+                const next = commentNameDraft.trim();
+                if (!next || next === pdfCommentAuthor.name) {
+                  setCommentNameDraft(pdfCommentAuthor.name);
+                  return;
+                }
+                void onRenamePdfCommentAuthor(next).catch((cause: unknown) => {
+                  setCommentNameDraft(pdfCommentAuthor.name);
+                  onNotice(cause instanceof Error ? cause.message : String(cause));
+                });
+              }}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") event.currentTarget.blur();
+              }}
+            />
+          </label>
+        ) : null}
+        {onRenamePdfCommentAuthor && pdfCommentAuthor ? (
+          <p className="setting-hint">卡片上的头像用这个名字的首字。只保留这一个本地署名。</p>
+        ) : null}
+        {onClearPdfComments ? (
+          <button
+            type="button"
+            className="settings-reset settings-cache-clear"
+            onClick={() => {
+              if (!window.confirm("清空本库全部 PDF 批注？只为批注自动补上的高亮会一起删除，手动做的标记会留下。")) {
+                return;
+              }
+              void onClearPdfComments().catch((cause: unknown) => {
+                onNotice(cause instanceof Error ? cause.message : String(cause));
+              });
+            }}
+          >
+            清空 PDF 批注
+          </button>
+        ) : null}
       </fieldset>
 
       <fieldset className="setting-row motion-setting">

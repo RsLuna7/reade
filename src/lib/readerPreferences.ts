@@ -195,6 +195,8 @@ export interface ReaderPreferences {
   annotationColorNames: Record<AnnotationColor, string>;
   dailyGoalMinutes: number;
   fuzzyAnnotationAnchoring: boolean;
+  /** PDF margin comments. Off until the reader opens them. Persisted. */
+  pdfCommentsEnabled: boolean;
   allowRemoteImages: boolean;
   showHighlightCaret: boolean;
   showScrollMap: boolean;
@@ -224,6 +226,7 @@ export function createDefaultReaderPreferences(
     annotationColorNames: { ...DEFAULT_ANNOTATION_COLOR_NAMES },
     dailyGoalMinutes: 0,
     fuzzyAnnotationAnchoring: false,
+    pdfCommentsEnabled: false,
     allowRemoteImages: false,
     showHighlightCaret: false,
     showScrollMap: true,
@@ -261,6 +264,7 @@ export function createResettablePreferencePatch(): Omit<
     excerptTone: defaults.excerptTone,
     annotationColorNames: { ...defaults.annotationColorNames },
     fuzzyAnnotationAnchoring: defaults.fuzzyAnnotationAnchoring,
+    pdfCommentsEnabled: defaults.pdfCommentsEnabled,
     allowRemoteImages: defaults.allowRemoteImages,
     showHighlightCaret: defaults.showHighlightCaret,
     showScrollMap: defaults.showScrollMap,
@@ -287,6 +291,7 @@ export function pickPersistedPreferences(state: ReaderPreferences): PersistedRea
     annotationColorNames: state.annotationColorNames,
     dailyGoalMinutes: state.dailyGoalMinutes,
     fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring,
+    pdfCommentsEnabled: state.pdfCommentsEnabled,
     allowRemoteImages: state.allowRemoteImages,
     showHighlightCaret: state.showHighlightCaret,
     showScrollMap: state.showScrollMap,
@@ -370,6 +375,9 @@ export function migrateReaderPreferences(
     ...(typeof state.fuzzyAnnotationAnchoring === "boolean"
       ? { fuzzyAnnotationAnchoring: state.fuzzyAnnotationAnchoring }
       : {}),
+    ...(typeof state.pdfCommentsEnabled === "boolean"
+      ? { pdfCommentsEnabled: state.pdfCommentsEnabled }
+      : {}),
     ...(typeof state.allowRemoteImages === "boolean"
       ? { allowRemoteImages: state.allowRemoteImages }
       : {}),
@@ -438,6 +446,10 @@ export function mergeReaderPreferences(
     fuzzyAnnotationAnchoring: normalizeFuzzyAnnotationAnchoring(
       preferences.fuzzyAnnotationAnchoring,
       current.fuzzyAnnotationAnchoring,
+    ),
+    pdfCommentsEnabled: normalizeBoolean(
+      preferences.pdfCommentsEnabled,
+      current.pdfCommentsEnabled,
     ),
     allowRemoteImages: normalizeBoolean(
       preferences.allowRemoteImages,

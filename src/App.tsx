@@ -228,6 +228,8 @@ import {
   captureReaderSelection,
   type PendingSelection,
 } from "./lib/annotationCapture";
+import { commentTargetForSelection } from "./lib/comments/commentPlacement";
+import { defaultCommentAuthor } from "./lib/comments/commentModel";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
 import {
@@ -464,6 +466,7 @@ function App() {
   const highlightColor = useReaderStore((state) => state.highlightColor);
   const underlineColor = useReaderStore((state) => state.underlineColor);
   const excerptTone = useReaderStore((state) => state.excerptTone);
+  const pdfCommentsEnabled = useReaderStore((state) => state.pdfCommentsEnabled);
   const fuzzyAnchoring = useReaderStore((state) => state.fuzzyAnnotationAnchoring);
   const allowRemoteImages = useReaderStore((state) => state.allowRemoteImages);
   const setAllowRemoteImages = useReaderStore((state) => state.setAllowRemoteImages);
@@ -571,6 +574,11 @@ function App() {
     | { status: "error"; message: string }
     | { status: "ready"; items: Annotation[] }
   >({ status: "idle" });
+  const [commentDraft, setCommentDraft] = useState("");
+  const [commentComposerOpen, setCommentComposerOpen] = useState(false);
+  const commentComposerOpenRef = useRef(false);
+  const commentSelectionRef = useRef<PendingSelection | null>(null);
+  commentComposerOpenRef.current = commentComposerOpen;
   const [noteDraft, setNoteDraft] = useState<
     | { mode: "edit"; annotationId: string; text: string }
     | { mode: "comment"; annotationId: string; text: string }
@@ -668,6 +676,9 @@ function App() {
     saveReflection,
     savePdfComment,
     replyPdfComment,
+    editPdfComment,
+    removePdfComment,
+    clearPdfCommentThreads,
     saveCommentAuthor,
     setEnrollment,
     remove: removeAnnotation,
@@ -2022,6 +2033,61 @@ function App() {
     await handleSaveMark(pendingSelection, "underline", toneToLegacyColor(excerptTone), null);
   }, [excerptTone, handleSaveMark, pendingSelection]);
 
+  useEffect(() => {
+    if (pdfCommentsEnabled) return;
+    commentSelectionRef.current = null;
+    setCommentComposerOpen(false);
+    setCommentDraft("");
+  }, [pdfCommentsEnabled]);
+
+  const commitPdfComment = useCallback(async () => {
+    const pending = commentSelectionRef.current ?? pendingSelection;
+    const body = commentDraft.trim();
+    if (!pending || !currentPath || !body) return;
+    if (pending.locator.kind !== "pdf" || pending.locator.view !== "original") return;
+    try {
+      const target = commentTargetForSelection(
+        pending,
+        annotations,
+        annotationBundle.commentThreads ?? [],
+      );
+      if (target?.threadId) {
+        await replyPdfComment(target.threadId, body);
+        setActivePdfCommentAnnotationId(target.annotationId);
+      } else if (target) {
+        await savePdfComment(target.annotationId, body, undefined, { anchorCreated: false });
+        setActivePdfCommentAnnotationId(target.annotationId);
+      } else {
+        const draft = buildExcerptDraftFromPending(currentPath, pending, {
+          style: "highlight",
+          tone: excerptTone,
+        });
+        const captured = await saveExcerpt(draft, null);
+        await savePdfComment(captured.excerpt.id, body, undefined, { anchorCreated: true });
+        setActivePdfCommentAnnotationId(captured.excerpt.id);
+      }
+      commentSelectionRef.current = null;
+      setCommentComposerOpen(false);
+      setCommentDraft("");
+      closeToolbar();
+      showNotice("批注已保存");
+    } catch (cause) {
+      showNotice(cause instanceof Error ? cause.message : String(cause));
+    }
+  }, [
+    annotationBundle.commentThreads,
+    annotations,
+    closeToolbar,
+    commentDraft,
+    currentPath,
+    excerptTone,
+    pendingSelection,
+    replyPdfComment,
+    saveExcerpt,
+    savePdfComment,
+    showNotice,
+  ]);
+
   const handlePickTone = useCallback(
     async (tone: typeof excerptTone) => {
       setExcerptTone(tone);
@@ -2597,6 +2663,7 @@ function App() {
           onSaveReflection={async (entryId, entryKind, body) => {
             await saveReflection(entryId, entryKind, body);
           }}
+          commentsEnabled={pdfCommentsEnabled && currentContent.kind === "pdf"}
           onCreatePdfComment={async (annotationId, body, authorId) => {
             await savePdfComment(annotationId, body, authorId);
             setActivePdfCommentAnnotationId(annotationId);
@@ -2604,7 +2671,6 @@ function App() {
           onReplyPdfComment={async (threadId, body, authorId) => {
             await replyPdfComment(threadId, body, authorId);
           }}
-          onCreateCommentAuthor={(name) => saveCommentAuthor(name, true)}
           onSetEnrollment={async (excerptId, enabled) => {
             await setEnrollment(excerptId, enabled);
           }}
@@ -3209,6 +3275,9 @@ function App() {
 
     const evaluate = () => {
       if (disposed) return;
+      // The comment card takes focus and collapses the PDF selection.
+      // Keep the captured range until the card is saved or cancelled.
+      if (commentComposerOpenRef.current) return;
       const pending = captureReaderSelection({
         root: reader,
         kind: currentContent.kind,
@@ -5035,6 +5104,18 @@ function App() {
               open={settingsOpen}
               onClose={() => setSettingsOpen(false)}
               onNotice={showNotice}
+              onClearPdfComments={async () => {
+                await clearPdfCommentThreads();
+                showNotice("已清空 PDF 批注");
+              }}
+              pdfCommentAuthor={(() => {
+                const author = defaultCommentAuthor(annotationBundle.commentAuthors ?? []);
+                return author ? { id: author.id, name: author.name } : null;
+              })()}
+              onRenamePdfCommentAuthor={async (name) => {
+                const author = defaultCommentAuthor(annotationBundle.commentAuthors ?? []);
+                await saveCommentAuthor(name, true, author?.id ?? "local-me");
+              }}
               focusUnavailableReason={focusUnavailableReason}
               verticalUnavailableReason={verticalUnavailableReason}
             />
@@ -5154,14 +5235,18 @@ function App() {
                   commentThreads={annotationBundle.commentThreads ?? []}
                   commentMessages={annotationBundle.commentMessages ?? []}
                   activePdfCommentAnnotationId={activePdfCommentAnnotationId}
+                  pdfCommentsEnabled={pdfCommentsEnabled}
                   onActivatePdfComment={(annotationId) => {
                     setActivePdfCommentAnnotationId(annotationId);
                     const annotation = annotations.find((item) => item.id === annotationId);
                     if (annotation) jumpToAnnotation(annotation);
                   }}
+                  onPdfCommentInView={setActivePdfCommentAnnotationId}
                   onReplyPdfComment={(threadId, body, authorId) =>
                     replyPdfComment(threadId, body, authorId)
                   }
+                  onEditPdfComment={(messageId, body) => editPdfComment(messageId, body)}
+                  onDeletePdfComment={(messageId) => removePdfComment(messageId)}
                   fuzzyAnchoring={fuzzyAnchoring}
                   readerRef={pdfReaderHandleRef}
                   libraryRoot={snapshot?.rootPath}
@@ -5517,11 +5602,20 @@ function App() {
         )}
 
         <SelectionToolbar
-          open={Boolean(pendingSelection) && annotationTool === "view"}
+          open={Boolean(pendingSelection) && annotationTool === "view" && !commentComposerOpen}
           x={toolbarPos.x}
           y={toolbarPos.y}
           tone={excerptTone}
           onMark={() => void handleSaveHighlight(false)}
+          onComment={
+            pdfCommentsEnabled && currentContent?.kind === "pdf" && pdfViewMode === "original"
+              ? () => {
+                  commentSelectionRef.current = pendingSelection;
+                  setCommentDraft("");
+                  setCommentComposerOpen(true);
+                }
+              : undefined
+          }
           onPickTone={(tone) => void handlePickTone(tone)}
           onUnderline={() => void handleSaveUnderline()}
           onMakeCard={handleMakeCardFromSelection}
@@ -5533,6 +5627,41 @@ function App() {
           onClose={closeToolbar}
           canMark={Boolean(pendingSelection)}
         />
+
+        {commentComposerOpen && (commentSelectionRef.current ?? pendingSelection) ? (
+          <form
+            className="pdf-comment-draft"
+            style={{ left: toolbarPos.x, top: toolbarPos.y }}
+            onMouseDown={(event) => event.stopPropagation()}
+            onSubmit={(event) => {
+              event.preventDefault();
+              void commitPdfComment();
+            }}
+          >
+            <label>
+              <span className="sr-only">批注</span>
+              <textarea
+                value={commentDraft}
+                placeholder="写下批注"
+                onChange={(event) => setCommentDraft(event.target.value)}
+              />
+            </label>
+            <div className="pdf-comment-draft-actions">
+              <button
+                type="button"
+                onClick={() => {
+                  commentSelectionRef.current = null;
+                  setCommentComposerOpen(false);
+                  setCommentDraft("");
+                  setPendingSelection(null);
+                }}
+              >
+                取消
+              </button>
+              <button type="submit" disabled={!commentDraft.trim()}>保存</button>
+            </div>
+          </form>
+        ) : null}
 
         {relatedPassages && (
           <RelatedPassagesPopover

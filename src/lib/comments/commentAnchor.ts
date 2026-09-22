@@ -42,6 +42,31 @@ export function isCollapsedCommentRect(
   return rect.width === 0 && rect.height === 0;
 }
 
+/** Top of the anchor rect, normalized to the page box. Empty rects sit near the page top. */
+export function normalizedAnnotationTop(rects: readonly { y: number }[]): number {
+  let top = Number.POSITIVE_INFINITY;
+  for (const rect of rects) {
+    if (Number.isFinite(rect.y)) top = Math.min(top, rect.y);
+  }
+  return Number.isFinite(top) ? top : 0.08;
+}
+
+/**
+ * Fallback when the highlight has not been painted yet (lazy pages).
+ * `normalizedTop` is 0 at the page top and 1 at the page bottom.
+ */
+export function commentAnchorYFromPageBox(
+  pageRect: Pick<DOMRect, "top" | "height">,
+  layoutRect: Pick<DOMRect, "top">,
+  normalizedTop: number,
+): number | null {
+  if (!(pageRect.height > 0)) return null;
+  const y = Number.isFinite(normalizedTop)
+    ? Math.min(1, Math.max(0, normalizedTop))
+    : 0.08;
+  return commentAnchorY({ top: pageRect.top + y * pageRect.height }, layoutRect);
+}
+
 export function measurePdfCommentAnchor(
   root: ParentNode,
   layoutRoot: Element,
