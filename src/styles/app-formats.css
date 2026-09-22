@@ -379,28 +379,62 @@
   align-items: stretch;
   grid-template-columns: minmax(0, 1fr);
 }
+/* Word print layout: the page and its comment margin are one zoomed strip.
+   Center the strip when it fits the column; when it does not, the reading
+   scroller moves both together. The margin stays on the page's right edge
+   at every zoom, including 100%, instead of sitting in the window center. */
 .pdf-original-layout[data-comment-rail="true"] {
-  gap: 0;
-  grid-template-columns: minmax(0, 1fr) minmax(288px, 320px);
-}
-.pdf-reader:has(.pdf-original-layout[data-comment-rail="true"]) {
   display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-}
-.pdf-original-layout[data-comment-rail="true"] {
-  flex: 1 1 auto;
-  min-height: 0;
-  overflow: hidden;
+  justify-content: center;
+  align-items: flex-start;
+  width: max-content;
+  min-width: 100%;
+  height: auto;
+  margin: 0;
+  overflow: visible;
 }
 .pdf-original-layout[data-comment-rail="true"] .pdf-page-area {
-  min-height: 0;
-  overflow: auto;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: stretch;
+  position: relative;
+  width: max-content;
+  overflow: visible;
+  min-height: auto;
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-pages {
+  flex: 0 0 auto;
+  width: max-content;
+  min-width: 0;
+  align-items: flex-start;
 }
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-rail {
-  min-height: 0;
-  overflow: hidden;
+  --pdf-comment-scale: calc(var(--pdf-live-page-width, var(--pdf-page-width, 820px)) / var(--pdf-native-page-width, 820px));
+  position: relative;
+  flex: 0 0 auto;
+  align-self: stretch;
+  width: calc(300px * var(--pdf-comment-scale));
+  margin-left: calc(12px * var(--pdf-comment-scale));
+  overflow: visible;
+  border-left: 0;
+  background: transparent;
+  font-size: calc(13px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-meta strong,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message p,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-composer textarea,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit {
+  font-size: 1em;
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message time,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-actions button,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-composer button {
+  font-size: 0.85em;
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-avatar {
+  width: 2.46em;
+  height: 2.46em;
+  font-size: 0.85em;
 }
 .pdf-page-area {
   min-width: 0;
@@ -615,8 +649,8 @@
 
 .pdf-comment-card-position {
   position: absolute;
-  right: 12px;
-  left: 12px;
+  right: 0;
+  left: 0;
   z-index: 1;
   visibility: hidden;
 }
@@ -632,28 +666,36 @@
 .pdf-comment-bubble {
   position: absolute;
   z-index: 6;
-  right: 8px;
+  right: 4px;
+  display: grid;
+  place-items: center;
   width: 22px;
   height: 22px;
   margin-top: -11px;
-  border: 1px solid var(--line-strong);
-  border-radius: 999px;
-  background: var(--paper-raised);
-  box-shadow: 0 1px 4px rgb(35 31 25 / 12%);
+  padding: 0;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: #8a8886;
   cursor: pointer;
 }
-.pdf-comment-bubble::before {
-  content: "";
+.pdf-comment-bubble svg {
   display: block;
-  width: 8px;
-  height: 6px;
-  margin: 7px auto 0;
-  border: 1.5px solid var(--ink-soft);
-  border-radius: 4px 4px 3px 3px;
+  width: 16px;
+  height: 16px;
 }
+.pdf-comment-bubble svg path {
+  fill: none;
+}
+.pdf-comment-bubble:hover,
 .pdf-comment-bubble.is-active {
-  border-color: var(--accent);
-  background: var(--accent-soft);
+  color: #5b5fc7;
+  background: #eeedfc;
+}
+.pdf-comment-bubble:hover svg path,
+.pdf-comment-bubble.is-active svg path {
+  fill: currentColor;
+  fill-opacity: 0.16;
 }
 .pdf-comment-draft {
   position: fixed;
@@ -744,8 +786,8 @@
 
 .pdf-comment-card {
   overflow: hidden;
-  border: 1px solid color-mix(in srgb, var(--ink) 22%, var(--paper));
-  border-radius: 4px;
+  border: 1px solid #d2d0ce;
+  border-radius: 8px;
   color: var(--ink);
   background: var(--paper-raised);
   box-shadow:
@@ -758,16 +800,26 @@
 }
 
 .pdf-comment-card:hover,
-.pdf-comment-card:focus-within {
+.pdf-comment-card:focus-within,
+.pdf-comment-card.is-active {
   border-color: #5b5fc7;
   box-shadow:
+    0 0 0 1px #5b5fc7,
     0 1px 2px rgb(32 39 41 / 6%),
     0 8px 18px rgb(91 95 199 / 16%);
 }
 
+:root[data-theme$="-dark"] .pdf-comment-card {
+  border-color: #484644;
+}
+
 :root[data-theme$="-dark"] .pdf-comment-card:hover,
-:root[data-theme$="-dark"] .pdf-comment-card:focus-within {
+:root[data-theme$="-dark"] .pdf-comment-card:focus-within,
+:root[data-theme$="-dark"] .pdf-comment-card.is-active {
   border-color: #9b98f0;
+  box-shadow:
+    0 0 0 1px #9b98f0,
+    0 8px 18px rgb(155 152 240 / 18%);
 }
 
 

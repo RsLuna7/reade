@@ -106,6 +106,17 @@ describe("pdf zoom preview", () => {
     expect(host.style.getPropertyValue("--pdf-live-page-width")).toBe("");
   });
 
+  it("mirrors the live page width onto the original layout so the comment margin can follow", () => {
+    const layout = document.createElement("div");
+    layout.className = "pdf-original-layout";
+    const host = document.createElement("div");
+    layout.append(host);
+    applyPdfZoomPreview(host, 1.5, 1230);
+    expect(layout.style.getPropertyValue("--pdf-live-page-width")).toBe("1230px");
+    applyPdfZoomPreview(host, 1, 820);
+    expect(layout.style.getPropertyValue("--pdf-live-page-width")).toBe("");
+  });
+
   it("rounds live page width from native size and layout scale", () => {
     expect(pdfZoomLivePageWidth(820, 1.2)).toBe(984);
   });

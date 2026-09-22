@@ -1,5 +1,22 @@
 export const COMMENT_CARD_GAP = 12;
 
+/** Card track plus the gap beside the page, at scale 1. It multiplies with the page scale. */
+export const PDF_COMMENT_MARGIN_PX = 312;
+
+/**
+ * Native width to feed the existing fit-width helpers so the page and a
+ * scale-sized comment track share the window. A zero margin leaves it unchanged.
+ */
+export function commentFitNativeWidth(
+  nativeWidth: number,
+  spread: boolean,
+  marginPx = 0,
+): number {
+  if (!(nativeWidth > 0)) return nativeWidth;
+  const margin = Number.isFinite(marginPx) ? Math.max(0, marginPx) : 0;
+  return spread ? nativeWidth + margin / 2 : nativeWidth + margin;
+}
+
 export interface CommentCardInput {
   id: string;
   desiredY: number;

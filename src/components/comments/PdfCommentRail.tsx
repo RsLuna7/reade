@@ -129,7 +129,9 @@ export function PdfCommentRail({
         }
       }
       rail.dataset.cardsInView = inView ? "true" : "false";
-      const area = layout?.querySelector<HTMLElement>(".pdf-page-area");
+      const area = layout?.classList.contains("pdf-page-area")
+        ? layout
+        : layout?.querySelector<HTMLElement>(".pdf-page-area");
       const pages = area?.querySelector<HTMLElement>(".pdf-pages");
       if (area && pages && layouts.length > 0) {
         const scrollTop = area.scrollTop;
@@ -156,7 +158,10 @@ export function PdfCommentRail({
     };
 
     const onWheel = (event: WheelEvent) => {
-      const area = rail.parentElement?.querySelector<HTMLElement>(".pdf-page-area");
+      const parent = rail.parentElement;
+      const area = parent?.classList.contains("pdf-page-area")
+        ? parent
+        : parent?.querySelector<HTMLElement>(".pdf-page-area");
       if (!area || area.scrollHeight <= area.clientHeight + 1) return;
       if (event.deltaY === 0) return;
       area.scrollTop += event.deltaY;

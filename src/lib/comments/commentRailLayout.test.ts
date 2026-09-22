@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { layoutCommentCards } from "./commentRailLayout";
+import { PDF_COMMENT_MARGIN_PX, commentFitNativeWidth, layoutCommentCards } from "./commentRailLayout";
+
+describe("comment margin fit", () => {
+  it("reserves the card track and the gap that sit beside the page", () => {
+    expect(PDF_COMMENT_MARGIN_PX).toBe(312);
+  });
+
+  it("widens the fit target by the margin and leaves a zero margin unchanged", () => {
+    expect(commentFitNativeWidth(600, false, 0)).toBe(600);
+    expect(commentFitNativeWidth(600, true, 0)).toBe(600);
+    expect(commentFitNativeWidth(600, false, 300)).toBe(900);
+    expect(commentFitNativeWidth(600, true, 300)).toBe(750);
+  });
+});
 
 describe("layoutCommentCards", () => {
   it("keeps separated cards at their anchors", () => {

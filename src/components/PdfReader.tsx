@@ -82,6 +82,7 @@ import type {
   PdfCommentThread,
 } from "../lib/comments/commentModel";
 import { PdfCommentRail } from "./comments/PdfCommentRail";
+import { commentFitNativeWidth, PDF_COMMENT_MARGIN_PX } from "../lib/comments/commentRailLayout";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 const RANGE_CHUNK = 256 * 1024;
@@ -358,8 +359,8 @@ interface PdfReaderProps {
   commentMessages?: PdfCommentMessage[];
   activePdfCommentAnnotationId?: string | null;
   onActivatePdfComment?: (annotationId: string) => void;
-  /** Page scroll moved a comment into view. Must not scroll the page again. */
-  onPdfCommentInView?: (annotationId: string) => void;
+  /** Margin icon click. Selects that comment and does not scroll the page. */
+  onSelectPdfComment?: (annotationId: string) => void;
   onReplyPdfComment?: (
     threadId: string,
     body: string,
@@ -487,6 +488,7 @@ function restorePositionInstantly(
   position: PdfPagePosition,
   xRatio?: number,
   referenceY?: number,
+  anchorClientX?: number,
 ): boolean {
   const scrollRoot = findReadingRoot(reader);
   const page = reader.querySelector<HTMLElement>(`#pdf-page-${position.page}`);
@@ -505,8 +507,8 @@ function restorePositionInstantly(
   if (view && xRatio !== undefined && Number.isFinite(xRatio)) {
     const ratio = Math.min(1, Math.max(0, xRatio));
     const target = rect.left + rect.width * ratio;
-    const center = view.left + view.width / 2;
-    next.left = scrollRoot.scrollLeft + target - center;
+    const anchorX = Number.isFinite(anchorClientX) ? (anchorClientX as number) : view.left + view.width / 2;
+    next.left = scrollRoot.scrollLeft + target - anchorX;
   }
   // One native instant scroll avoids toggling scroll-behavior on the ancestor
   // (and invalidating the whole PDF subtree) twice per preview frame.
@@ -515,14 +517,12 @@ function restorePositionInstantly(
   return true;
 }
 
-function capturePageCenterXRatio(reader: HTMLElement, pageNumber: number): number {
-  const scrollRoot = findReadingRoot(reader);
+function capturePageXRatio(reader: HTMLElement, pageNumber: number, clientX: number): number {
   const page = reader.querySelector<HTMLElement>(`#pdf-page-${pageNumber}`);
-  if (!scrollRoot || !page) return 0.5;
-  const view = scrollRoot.getBoundingClientRect();
+  if (!page) return 0;
   const rect = page.getBoundingClientRect();
-  if (!(rect.width > 0)) return 0.5;
-  return Math.min(1, Math.max(0, (view.left + view.width / 2 - rect.left) / rect.width));
+  if (!(rect.width > 0)) return 0;
+  return Math.min(1, Math.max(0, (clientX - rect.left) / rect.width));
 }
 
 function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAnchoring, regionActive = false, renderMargin = PAGE_RENDER_MARGIN, onRegionCapture, onRatioChange, onJump, badgePage, onHighlightResolutions, commentBubbles = [], onActivateComment }: PageProps) {
@@ -914,8 +914,21 @@ function PdfPage({ session, pageNumber, scale, initialRatio, highlights, fuzzyAn
         className={`pdf-comment-bubble${bubble.active ? " is-active" : ""}`}
         style={{ top: `${bubble.top * 100}%` }}
         aria-label="批注"
-        onClick={() => onActivateComment?.(bubble.annotationId)}
-      />
+        onClick={(event) => {
+          event.stopPropagation();
+          onActivateComment?.(bubble.annotationId);
+        }}
+      >
+        <svg viewBox="0 0 20 20" aria-hidden="true">
+          <path
+            d="M4.1 3.4h11.8c.8 0 1.5.7 1.5 1.5v6.1c0 .8-.7 1.5-1.5 1.5H8.6L5.6 16.1v-3.6H4.1c-.8 0-1.5-.7-1.5-1.5V4.9c0-.8.7-1.5 1.5-1.5z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.35"
+            strokeLinejoin="round"
+          />
+        </svg>
+      </button>
     ))}
     <span className="pdf-page-number">{shownPage}</span>
   </section>;
@@ -952,7 +965,7 @@ export function PdfReader({
   commentMessages = [],
   activePdfCommentAnnotationId = null,
   onActivatePdfComment,
-  onPdfCommentInView,
+  onSelectPdfComment,
   onReplyPdfComment,
   onEditPdfComment,
   onDeletePdfComment,
@@ -993,6 +1006,7 @@ export function PdfReader({
   const layoutScaleRef = useRef(1);
   const scaleRef = useRef(1);
   const zoomAnchorXRef = useRef<number | null>(null);
+  const zoomClientXRef = useRef<number | null>(null);
   const zoomReferenceYRef = useRef<number | null>(null);
   const commitTimerRef = useRef<number | null>(null);
   const zoomFrameRef = useRef<number | null>(null);
@@ -1043,33 +1057,6 @@ export function PdfReader({
   const readingLoading = readingLoadingKey === sourceKey;
   const spreadActive = spreadIntent && spreadCapable && mode === "original";
   const hasPdfComments = pdfCommentsEnabled && mode === "original" && commentThreads.length > 0;
-
-  useEffect(() => {
-    if (!hasPdfComments) return;
-    const scroller = pageAreaRef.current;
-    const pages = pagesRef.current;
-    if (!scroller || !pages) return;
-    const sync = () => {
-      const view = scroller.getBoundingClientRect();
-      const midline = view.top + view.height / 2;
-      let nearestId = "";
-      let nearestDistance = Number.POSITIVE_INFINITY;
-      for (const mark of pages.querySelectorAll<HTMLElement>(".pdf-user-highlight--lead, .pdf-user-highlight")) {
-        const id = mark.dataset.annotationId;
-        if (!id || !commentThreads.some((thread) => thread.annotationId === id)) continue;
-        const rect = mark.getBoundingClientRect();
-        if (rect.bottom < view.top || rect.top > view.bottom) continue;
-        const distance = Math.abs(rect.top + rect.height / 2 - midline);
-        if (distance < nearestDistance) {
-          nearestId = id;
-          nearestDistance = distance;
-        }
-      }
-      if (nearestId) (onPdfCommentInView ?? onActivatePdfComment)?.(nearestId);
-    };
-    scroller.addEventListener("scroll", sync, { passive: true });
-    return () => scroller.removeEventListener("scroll", sync);
-  }, [commentThreads, hasPdfComments, onActivatePdfComment, onPdfCommentInView]);
 
   const setActivePage = useCallback((page: number) => {
     if (currentPageRef.current !== page) {
@@ -1153,19 +1140,21 @@ export function PdfReader({
     if (!reader) return;
     const measure = () => {
       const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
-      setSpreadCapable(
-        canSpread(window.innerWidth, pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth),
-      );
+      const scrollWidth = findReadingRoot(reader)?.clientWidth ?? 0;
+      const available = hasPdfComments
+        ? (scrollWidth > 0 ? scrollWidth : reader.clientWidth)
+        : (pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth);
+      setSpreadCapable(canSpread(window.innerWidth, available));
     };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(pageAreaRef.current ?? reader);
+    observer.observe((hasPdfComments ? findReadingRoot(reader) : pageAreaRef.current) ?? reader);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, [session]);
+  }, [hasPdfComments, session]);
 
   useEffect(() => {
     const root = rootRef.current;
@@ -1297,6 +1286,7 @@ export function PdfReader({
     if (pagesRef.current) applyPdfZoomPreview(pagesRef.current, 1, 0);
     layoutScaleRef.current = scaleRef.current;
     zoomAnchorXRef.current = null;
+    zoomClientXRef.current = null;
     zoomReferenceYRef.current = null;
     if (zoomPercentRef.current) zoomPercentRef.current.textContent = `${Math.round(scaleRef.current * 100)}%`;
   }, []);
@@ -1541,6 +1531,7 @@ export function PdfReader({
       position,
       zoomAnchorXRef.current ?? undefined,
       zoomReferenceYRef.current ?? undefined,
+      zoomClientXRef.current ?? undefined,
     );
   }, []);
 
@@ -1597,26 +1588,33 @@ export function PdfReader({
     }, PDF_SCALE_COMMIT_DELAY_MS);
   }, [commitPdfScale]);
 
-  const beginZoomGesture = useCallback((_clientX?: number, clientY?: number) => {
+  const beginZoomGesture = useCallback((clientX?: number, clientY?: number) => {
     const reader = rootRef.current;
     if (!reader || commitTimerRef.current !== null) return;
-    zoomReferenceYRef.current = Number.isFinite(clientY) ? (clientY as number) : null;
+    const scroller = findReadingRoot(reader);
+    const view = scroller?.getBoundingClientRect();
+    // Wheel keeps the pointer. Buttons keep the top-left of the view, so the
+    // page grows down and to the right instead of swelling around the center.
+    const originX = Number.isFinite(clientX) ? (clientX as number) : (view ? view.left + 24 : 0);
+    const originY = Number.isFinite(clientY) ? (clientY as number) : (view ? view.top + 24 : null);
+    zoomClientXRef.current = originX;
+    zoomReferenceYRef.current = originY;
     pendingPositionRef.current = captureCurrentPosition(
       reader,
       toolbarRef.current,
       currentPageRef.current,
       ".pdf-page",
-      zoomReferenceYRef.current ?? undefined,
+      originY ?? undefined,
     );
-    zoomAnchorXRef.current = capturePageCenterXRatio(
+    zoomAnchorXRef.current = capturePageXRatio(
       reader,
       pendingPositionRef.current.page,
+      originX,
     );
     bitmapPreviewRef.current?.dispose();
     bitmapPreviewRef.current = null;
     previewBaseScaleRef.current = scaleRef.current;
     const pages = pagesRef.current;
-    const scroller = findReadingRoot(reader);
     if (pages && scroller) {
       bitmapPreviewRef.current = createPdfZoomPreview(pages, scroller, toolbarRef.current,
         zoomReferenceYRef.current ?? undefined);
@@ -1647,15 +1645,23 @@ export function PdfReader({
       scaleFollowsWidthRef.current = true;
       // 适宽语义(plan-pdf-spread §2):双页 = 两页 + 列距填满容器。
       const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
-      const availableWidth = pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth;
+      const scrollWidth = findReadingRoot(reader)?.clientWidth ?? 0;
+      const availableWidth = hasPdfComments
+        ? (scrollWidth > 0 ? scrollWidth : reader.clientWidth)
+        : (pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth);
+      const nativeForFit = commentFitNativeWidth(
+        nativeWidth,
+        spreadActive,
+        hasPdfComments ? PDF_COMMENT_MARGIN_PX : 0,
+      );
       const fitted = spreadActive
-        ? spreadFitScale(availableWidth, nativeWidth)
-        : singleFitScale(availableWidth, nativeWidth);
+        ? spreadFitScale(availableWidth, nativeForFit)
+        : singleFitScale(availableWidth, nativeForFit);
       commitPdfScale(fitted);
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
     }
-  }, [commitPdfScale, session, spreadActive]);
+  }, [commitPdfScale, hasPdfComments, session, spreadActive]);
 
   const adjustScale = useCallback((direction: WheelZoomDirection) => {
     if (direction === 0) return;
@@ -1706,11 +1712,12 @@ export function PdfReader({
     if (session) void fitWidth();
   }, [fitWidth, hasPdfComments, session]);
 
-  // The comment column keeps a fixed track. While scale is still fit-to-width,
-  // a window or pane resize refits the page into the column beside it so the
-  // spread does not slide under the cards.
+  // While scale is still fit-to-width, a window or pane resize refits the
+  // page. The comment margin is part of that fit, then grows with later zoom
+  // and can scroll out of the window.
   useEffect(() => {
-    const area = pageAreaRef.current;
+    const reader = rootRef.current;
+    const area = (hasPdfComments ? findReadingRoot(reader) : pageAreaRef.current) ?? reader;
     if (!area || !session) return;
     let lastWidth = area.clientWidth;
     const refit = () => {
@@ -1727,7 +1734,7 @@ export function PdfReader({
       observer.disconnect();
       window.removeEventListener("resize", refit);
     };
-  }, [fitWidth, session]);
+  }, [fitWidth, hasPdfComments, session]);
 
 
   const pageSelector = mode === "original" ? ".pdf-page" : ".pdf-reading-page";
@@ -1985,11 +1992,12 @@ export function PdfReader({
     const reader = rootRef.current;
     if (!reader) return;
     const xRatio = zoomAnchorXRef.current ?? undefined;
-    if (restorePositionInstantly(reader, toolbarRef.current, position, xRatio, zoomReferenceYRef.current ?? undefined)) {
+    if (restorePositionInstantly(reader, toolbarRef.current, position, xRatio, zoomReferenceYRef.current ?? undefined, zoomClientXRef.current ?? undefined)) {
       const previewing = isPdfZoomPreviewing(layoutScale, scale);
       if (!previewing && (mode === "reading" || pageRatiosRef.current.has(position.page))) {
         pendingPositionRef.current = null;
         zoomAnchorXRef.current = null;
+        zoomClientXRef.current = null;
         zoomReferenceYRef.current = null;
       }
       setActivePage(position.page);
@@ -2202,6 +2210,10 @@ export function PdfReader({
       className="pdf-original-layout"
       data-comment-rail={hasPdfComments ? "true" : undefined}
       ref={originalLayoutRef}
+      style={hasPdfComments ? {
+        "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px`,
+        "--pdf-native-page-width": `${nativePageWidth ?? 820}px`,
+      } as React.CSSProperties : undefined}
     >
       <div className="pdf-page-area" ref={pageAreaRef}>
       <div className="pdf-pages" ref={pagesRef} data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
@@ -2239,14 +2251,15 @@ export function PdfReader({
               active: activePdfCommentAnnotationId === annotation.id,
             }];
           }) : []}
-          onActivateComment={(annotationId) => (onPdfCommentInView ?? onActivatePdfComment)?.(annotationId)}
+          onActivateComment={(annotationId) =>
+            (onSelectPdfComment ?? onActivatePdfComment)?.(annotationId)
+          }
           onRatioChange={handlePageRatioChange}
           onJump={jump}
           badgePage={displayPageNumber(page, activeOffset)}
           key={`${session.lifecycle.generation}-${page}`}
         />;
       })}
-      </div>
       </div>
       {hasPdfComments ? <PdfCommentRail
         threads={commentThreads}
@@ -2261,6 +2274,7 @@ export function PdfReader({
         onEditMessage={onEditPdfComment}
         onDeleteMessage={onDeletePdfComment}
       /> : null}
+      </div>
     </div>}
     {mode === "reading" && <div className="pdf-reading-mode">
       {readingLoading && <div className="pdf-state"><span className="spinner" />正在生成按页阅读文本…</div>}

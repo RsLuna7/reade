@@ -2069,6 +2069,8 @@ function App() {
       commentSelectionRef.current = null;
       setCommentComposerOpen(false);
       setCommentDraft("");
+      setPendingSelection(null);
+      window.getSelection()?.removeAllRanges();
       closeToolbar();
       showNotice("批注已保存");
     } catch (cause) {
@@ -3345,11 +3347,38 @@ function App() {
     // 事件委托:点击正文中的标注 mark 打开编辑气泡。
     const onClick = (event: MouseEvent) => {
       const selection = window.getSelection();
-      // 刚结束一次划选(选区未折叠)时不视为点击标注。
-      if (selection && !selection.isCollapsed) return;
+      // 点在仍展开的划选内部时，不把它当成点标注。点到划选外面则收起框选。
+      if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+        const rects = selection.getRangeAt(0).getClientRects();
+        let insideSelection = false;
+        for (let index = 0; index < rects.length; index += 1) {
+          const rect = rects[index];
+          if (!rect) continue;
+          if (
+            event.clientX >= rect.left &&
+            event.clientX <= rect.right &&
+            event.clientY >= rect.top &&
+            event.clientY <= rect.bottom
+          ) {
+            insideSelection = true;
+            break;
+          }
+        }
+        if (insideSelection) return;
+        selection.removeAllRanges();
+        setPendingSelection(null);
+      }
       const target = event.target instanceof Element ? event.target : null;
       if (!target) return;
       if (target.closest("a")) return;
+      // Comment selection is explicit: the margin icon or the card. A click on
+      // the page, including empty space, dismisses it and does not move to
+      // whichever mark happens to be nearest.
+      if (target.closest(".pdf-comment-bubble, .pdf-comment-card")) return;
+      if (target.closest(".pdf-comment-rail")) {
+        if (currentContent.kind === "pdf") setActivePdfCommentAnnotationId(null);
+        return;
+      }
 
       let annotationId: string | null =
         target.closest<HTMLElement>("[data-annotation-id]")?.dataset.annotationId ?? null;
@@ -3376,8 +3405,13 @@ function App() {
         }
       }
 
-      if (!annotationId) return;
-      if (currentContent.kind === "pdf") setActivePdfCommentAnnotationId(annotationId);
+      if (!annotationId) {
+        window.getSelection()?.removeAllRanges();
+        setPendingSelection(null);
+        if (currentContent.kind === "pdf") setActivePdfCommentAnnotationId(null);
+        return;
+      }
+      if (currentContent.kind === "pdf") setActivePdfCommentAnnotationId(null);
       const padding = 12;
       const bubbleWidth = 240;
       const bubbleHeight = 96;
@@ -5241,7 +5275,7 @@ function App() {
                     const annotation = annotations.find((item) => item.id === annotationId);
                     if (annotation) jumpToAnnotation(annotation);
                   }}
-                  onPdfCommentInView={setActivePdfCommentAnnotationId}
+                  onSelectPdfComment={setActivePdfCommentAnnotationId}
                   onReplyPdfComment={(threadId, body, authorId) =>
                     replyPdfComment(threadId, body, authorId)
                   }
@@ -5654,6 +5688,7 @@ function App() {
                   setCommentComposerOpen(false);
                   setCommentDraft("");
                   setPendingSelection(null);
+                  window.getSelection()?.removeAllRanges();
                 }}
               >
                 取消

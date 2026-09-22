@@ -248,6 +248,23 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.pdf-page\s*\{[^}]*--scale-round-y:\s*1px/s);
   });
 
+  it("centers the zoomed PDF page with its comment margin beside the page", () => {
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s*\{[^}]*justify-content:\s*center/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-page-area\s*\{[^}]*display:\s*flex/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-rail\s*\{[^}]*position:\s*relative/s,
+    );
+    expect(css).not.toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-rail\s*\{[^}]*left:\s*100%/s,
+    );
+    expect(css).toMatch(/\.pdf-comment-bubble:hover[\s\S]{0,180}color:\s*#5b5fc7/);
+    expect(css).toMatch(/\.pdf-comment-card:hover[\s\S]{0,240}border-color:\s*#5b5fc7/);
+  });
+
   it("scales PDF pages via a live width variable during wheel-zoom", () => {
     expect(css).toMatch(
       /\.pdf-page\s*\{[^}]*width:\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)/s,

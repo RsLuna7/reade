@@ -97,12 +97,21 @@ export function applyPdfZoomPreview(host: HTMLElement, factor: number, pageWidth
     host.style.removeProperty("--pdf-live-page-width");
     host.style.removeProperty("--pdf-preview-factor");
     delete host.dataset.zoomPreview;
+    mirrorLivePageWidth(host, null);
     return;
   }
   const width = Number.isFinite(pageWidthPx) && pageWidthPx > 0 ? Math.round(pageWidthPx) : 820;
   host.style.setProperty("--pdf-live-page-width", `${width}px`);
   host.style.setProperty("--pdf-preview-factor", String(factor));
   host.dataset.zoomPreview = "true";
+  mirrorLivePageWidth(host, `${width}px`);
+}
+
+function mirrorLivePageWidth(host: HTMLElement, value: string | null): void {
+  const layout = host.closest(".pdf-original-layout");
+  if (!(layout instanceof HTMLElement) || layout === host) return;
+  if (value == null) layout.style.removeProperty("--pdf-live-page-width");
+  else layout.style.setProperty("--pdf-live-page-width", value);
 }
 
 /**
