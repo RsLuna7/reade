@@ -267,6 +267,21 @@ describe("application CSS isolation", () => {
     );
     expect(css).toMatch(/\.pdf-comment-bubble:hover[\s\S]{0,180}color:\s*#5b5fc7/);
     expect(css).toMatch(/\.pdf-comment-card:hover[\s\S]{0,240}border-color:\s*#5b5fc7/);
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-message\s*\{[^}]*grid-template-columns:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*width:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*height:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
+    );
+    expect(css).not.toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*width:\s*2\.46em/s,
+    );
+    expect(css).toMatch(/\.pdf-comment-replies\s*\{[^}]*border-left:\s*2px solid/s);
+    expect(css).toMatch(/\.pdf-comment-edit-confirm\s*\{[^}]*background:\s*#5b5fc7/s);
+    expect(css).toMatch(/\.pdf-comment-edit-cancel\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/s);
   });
 
   it("scales PDF pages via a live width variable during wheel-zoom", () => {

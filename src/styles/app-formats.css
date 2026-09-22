@@ -431,10 +431,42 @@
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-composer button {
   font-size: 0.85em;
 }
+/* The message row is a fixed 32px track in the shared card styles. Zoom only
+   grew the avatar (and its em size used the avatar's own smaller font), so the
+   circle slid over the name. Keep the track, gap, inset, and avatar on the
+   same scale as the rail. */
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message {
+  grid-template-columns: calc(32px * var(--pdf-comment-scale)) minmax(0, 1fr);
+  column-gap: calc(10px * var(--pdf-comment-scale));
+}
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-avatar {
-  width: 2.46em;
-  height: 2.46em;
-  font-size: 0.85em;
+  width: calc(32px * var(--pdf-comment-scale));
+  height: calc(32px * var(--pdf-comment-scale));
+  font-size: calc(12px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-card .pdf-comment-conversation {
+  gap: calc(10px * var(--pdf-comment-scale));
+  padding:
+    calc(12px * var(--pdf-comment-scale))
+    calc(12px * var(--pdf-comment-scale))
+    calc(10px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-replies {
+  margin-left: calc(4px * var(--pdf-comment-scale));
+  padding-left: calc(12px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-actions button.pdf-comment-icon-button {
+  width: calc(26px * var(--pdf-comment-scale));
+  height: calc(26px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit-actions button {
+  width: calc(32px * var(--pdf-comment-scale));
+  height: calc(28px * var(--pdf-comment-scale));
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-icon-button svg,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit-actions svg {
+  width: calc(15px * var(--pdf-comment-scale));
+  height: calc(15px * var(--pdf-comment-scale));
 }
 .pdf-page-area {
   min-width: 0;

@@ -760,6 +760,29 @@
   border-top: 1px solid color-mix(in srgb, var(--ink) 8%, transparent);
 }
 
+.pdf-comment-replies {
+  margin: 0.75em 0 0 0.35em;
+  padding: 0.15em 0 0.15em 0.85em;
+  border-left: 2px solid color-mix(in srgb, #5b5fc7 34%, var(--line));
+  list-style: none;
+}
+
+.pdf-comment-reply-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.pdf-comment-message.is-reply,
+.pdf-comment-reply-list .pdf-comment-message + .pdf-comment-message {
+  margin-top: 0;
+  padding-top: 0;
+  border-top: 0;
+}
+
 .pdf-comment-avatar {
   display: grid;
   width: 32px;
@@ -819,6 +842,67 @@
 .pdf-comment-message-actions button:hover {
   color: var(--ink);
   background: color-mix(in srgb, var(--ink) 6%, transparent);
+}
+
+.pdf-comment-message-actions button.pdf-comment-icon-button {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  min-height: 26px;
+  padding: 0;
+}
+
+.pdf-comment-icon-button svg,
+.pdf-comment-edit-actions svg {
+  width: 15px;
+  height: 15px;
+}
+
+.pdf-comment-edit-panel {
+  margin-top: 4px;
+}
+
+.pdf-comment-edit-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.pdf-comment-edit-actions button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+.pdf-comment-edit-confirm {
+  border: 1px solid #5b5fc7;
+  color: #fff;
+  background: #5b5fc7;
+}
+
+.pdf-comment-edit-confirm:hover:not(:disabled) {
+  background: #4f53b8;
+}
+
+.pdf-comment-edit-cancel {
+  border: 1px solid var(--line-strong);
+  color: var(--ink);
+  background: var(--paper);
+}
+
+.pdf-comment-edit-cancel:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--ink) 6%, var(--paper));
+}
+
+.pdf-comment-edit-actions button:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .pdf-comment-message p {

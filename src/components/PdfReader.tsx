@@ -359,7 +359,7 @@ interface PdfReaderProps {
   commentMessages?: PdfCommentMessage[];
   activePdfCommentAnnotationId?: string | null;
   onActivatePdfComment?: (annotationId: string) => void;
-  /** Margin icon click. Selects that comment and does not scroll the page. */
+  /** Bubble or card click. Selects that comment and does not scroll the page. */
   onSelectPdfComment?: (annotationId: string) => void;
   onReplyPdfComment?: (
     threadId: string,
@@ -2267,7 +2267,9 @@ export function PdfReader({
         authors={commentAuthors}
         annotations={annotations}
         activeAnnotationId={activePdfCommentAnnotationId}
-        onActivate={(annotationId) => onActivatePdfComment?.(annotationId)}
+        onActivate={(annotationId) =>
+          (onSelectPdfComment ?? onActivatePdfComment)?.(annotationId)
+        }
         onReply={(threadId, body, authorId) =>
           onReplyPdfComment?.(threadId, body, authorId) ?? Promise.resolve()
         }
