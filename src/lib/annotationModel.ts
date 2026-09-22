@@ -5,6 +5,11 @@ import type {
   AnnotationRect,
   BookmarkTarget,
 } from "./backend";
+import type {
+  CommentAuthor,
+  PdfCommentMessage,
+  PdfCommentThread,
+} from "./comments/commentModel";
 
 export const ANNOTATION_TONES = ["sand", "sage", "slate"] as const;
 export type AnnotationTone = (typeof ANNOTATION_TONES)[number];
@@ -149,11 +154,17 @@ export interface DocumentAnnotationBundle {
   places: ReadingPlace[];
   reflections: Reflection[];
   reviewEnrollments: ReviewEnrollment[];
+  /** Desktop PDF comments; optional keeps archived Web snapshots compatible. */
+  commentAuthors?: CommentAuthor[];
+  commentThreads?: PdfCommentThread[];
+  commentMessages?: PdfCommentMessage[];
 }
 
 export interface ExcerptCaptureResult {
   excerpt: Excerpt;
   reflection: Reflection | null;
+  commentThread?: PdfCommentThread | null;
+  commentMessage?: PdfCommentMessage | null;
 }
 
 export interface ExcerptDraft {

@@ -192,7 +192,7 @@ interface AnnotationEditBubbleProps {
   onClose: () => void;
 }
 
-/** 点击正文中的标注 mark 后弹出的小型编辑气泡(改色/感悟/删除)。 */
+/** 点击正文中的标注 mark 后弹出的小型编辑气泡(改色/感悟或 PDF 评论/删除)。 */
 export function AnnotationEditBubble({
   annotation,
   x,
@@ -252,7 +252,7 @@ export function AnnotationEditBubble({
       ) : null}
       <div className="annotation-edit-actions">
         <button type="button" onClick={() => onEditNote(annotation)}>
-          感悟
+          {annotation.locator.kind === "pdf" ? "评论" : "感悟"}
         </button>
         {onGenerateCard && annotationSupportsCard(annotation) ? (
           <button type="button" onClick={() => onGenerateCard(annotation)}>

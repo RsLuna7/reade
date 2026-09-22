@@ -41,6 +41,13 @@ import type {
   Reflection,
   ReviewEnrollment,
 } from "./annotationModel";
+import type {
+  CommentAuthor,
+  CommentAuthorDraft,
+  CreatePdfCommentDraft,
+  PdfCommentMutation,
+  ReplyToPdfCommentDraft,
+} from "./comments/commentModel";
 
 function asBytes(value: ArrayBuffer | Uint8Array | number[]): Uint8Array {
   if (value instanceof Uint8Array) return value;
@@ -154,6 +161,19 @@ export function upsertReflection(
 }
 export function deleteReflection(entryId: string): Promise<void> {
   return invoke("delete_reflection", { entryId });
+}
+export function upsertCommentAuthor(draft: CommentAuthorDraft): Promise<CommentAuthor> {
+  return invoke("upsert_comment_author", { draft });
+}
+export function createPdfCommentThread(
+  draft: CreatePdfCommentDraft,
+): Promise<PdfCommentMutation> {
+  return invoke("create_pdf_comment_thread", { draft });
+}
+export function replyToPdfComment(
+  draft: ReplyToPdfCommentDraft,
+): Promise<PdfCommentMutation> {
+  return invoke("reply_to_pdf_comment", { draft });
 }
 export function deleteAnnotationEntry(id: string, entryKind: AnnotationEntryKind): Promise<void> {
   return invoke("delete_annotation_entry", { id, entryKind });

@@ -25,14 +25,15 @@ use tauri::{AppHandle, Emitter, Manager, WindowEvent};
 use transfer::{export_annotations_file, pick_annotations_import_file};
 use user_store::{
     add_collection_item, clear_document_annotations, create_collection, create_excerpt,
-    create_reading_place, delete_annotation, delete_annotation_entry, delete_collection,
-    delete_reflection, detect_moved_documents, import_annotations, list_annotations,
-    list_annotations_for_transfer, list_collection_items, list_collections,
+    create_pdf_comment_thread, create_reading_place, delete_annotation, delete_annotation_entry,
+    delete_collection, delete_reflection, detect_moved_documents, import_annotations,
+    list_annotations, list_annotations_for_transfer, list_collection_items, list_collections,
     list_document_annotations, list_document_fingerprints, list_review_queue,
     rebind_document_annotations, record_excerpt_review_outcome, record_review_outcome,
-    remove_collection_item, rename_collection, reorder_collection_items, restore_annotation_entry,
-    restore_document_annotations, review_summary, search_annotation_entries, search_annotations,
-    set_review_enrollment, update_excerpt_appearance, upsert_annotation, upsert_reflection,
+    remove_collection_item, rename_collection, reorder_collection_items, reply_to_pdf_comment,
+    restore_annotation_entry, restore_document_annotations, review_summary,
+    search_annotation_entries, search_annotations, set_review_enrollment,
+    update_excerpt_appearance, upsert_annotation, upsert_comment_author, upsert_reflection,
     UserState,
 };
 
@@ -150,6 +151,9 @@ pub fn run() {
             create_reading_place,
             upsert_reflection,
             delete_reflection,
+            upsert_comment_author,
+            create_pdf_comment_thread,
+            reply_to_pdf_comment,
             delete_annotation_entry,
             restore_annotation_entry,
             set_review_enrollment,

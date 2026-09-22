@@ -150,4 +150,120 @@ describe("DocumentAnnotationsView", () => {
     expect(currentBand).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByText("Page forty-one quote")).toBeInTheDocument();
   });
+
+  it("uses PDF discussions instead of reflections and keeps author attribution", async () => {
+    const pdfBundle: DocumentAnnotationBundle = {
+      excerpts: [
+        excerpt({
+          id: "pdf-new",
+          relativePath: "paper.pdf",
+          sourceText: "Needs a first comment",
+          anchor: {
+            format: "pdfText",
+            page: 3,
+            view: "original",
+            quote: { exact: "Needs a first comment", prefix: "", suffix: "" },
+            rects: [{ x: 0.1, y: 0.1, w: 0.2, h: 0.03 }],
+          },
+        }),
+        excerpt({
+          id: "pdf-threaded",
+          relativePath: "paper.pdf",
+          sourceText: "Already discussed",
+          anchor: {
+            format: "pdfText",
+            page: 3,
+            view: "original",
+            quote: { exact: "Already discussed", prefix: "", suffix: "" },
+            rects: [{ x: 0.1, y: 0.3, w: 0.2, h: 0.03 }],
+          },
+        }),
+      ],
+      places: [],
+      reflections: [],
+      reviewEnrollments: [],
+      commentAuthors: [
+        {
+          id: "local-me",
+          name: "我",
+          isDefault: true,
+          createdAt: 1,
+          updatedAt: 1,
+          deletedAt: null,
+        },
+      ],
+      commentThreads: [
+        {
+          id: "thread-1",
+          annotationId: "pdf-threaded",
+          createdAt: 2,
+          updatedAt: 2,
+          deletedAt: null,
+        },
+      ],
+      commentMessages: [
+        {
+          id: "message-1",
+          threadId: "thread-1",
+          authorId: "local-me",
+          body: "第一条评论",
+          createdAt: 2,
+          updatedAt: 2,
+          deletedAt: null,
+        },
+      ],
+    };
+    const onCreatePdfComment = vi.fn(async () => undefined);
+    const onReplyPdfComment = vi.fn(async () => undefined);
+    const onCreateCommentAuthor = vi.fn(async (name: string) => ({
+      id: "author-2",
+      name,
+      isDefault: true,
+      createdAt: 3,
+      updatedAt: 3,
+      deletedAt: null,
+    }));
+    render(
+      <DocumentAnnotationsView
+        format="pdf"
+        toc={[]}
+        currentHeadingId="pdf-page-3"
+        currentPage={3}
+        bundle={pdfBundle}
+        loading={false}
+        onJump={vi.fn()}
+        onSaveReflection={vi.fn(async () => undefined)}
+        onCreatePdfComment={onCreatePdfComment}
+        onReplyPdfComment={onReplyPdfComment}
+        onCreateCommentAuthor={onCreateCommentAuthor}
+      />,
+    );
+
+    expect(screen.getByText(/1 个讨论/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "添加评论" }));
+    fireEvent.change(screen.getByRole("textbox", { name: "添加评论" }), {
+      target: { value: "新的讨论" },
+    });
+    const addCommentButtons = screen.getAllByRole("button", { name: "添加评论" });
+    fireEvent.click(addCommentButtons[addCommentButtons.length - 1]!);
+    expect(onCreatePdfComment).toHaveBeenCalledWith("pdf-new", "新的讨论", "local-me");
+
+    fireEvent.click(screen.getByRole("button", { name: "查看讨论" }));
+    expect(screen.getByText("第一条评论")).toBeInTheDocument();
+    fireEvent.change(screen.getByRole("textbox", { name: "回复讨论" }), {
+      target: { value: "继续回复" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "回复" }));
+    expect(onReplyPdfComment).toHaveBeenCalledWith("thread-1", "继续回复", "local-me");
+
+    fireEvent.change(screen.getByRole("textbox", { name: "新建本地评论身份" }), {
+      target: { value: "研究者" },
+    });
+    fireEvent.click(screen.getByRole("button", { name: "添加" }));
+    expect(onCreateCommentAuthor).toHaveBeenCalledWith("研究者");
+
+    fireEvent.click(screen.getByRole("tab", { name: "讨论" }));
+    expect(screen.getByText("Already discussed")).toBeInTheDocument();
+    expect(screen.queryByText("Needs a first comment")).not.toBeInTheDocument();
+  });
 });

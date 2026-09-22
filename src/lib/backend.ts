@@ -5,6 +5,13 @@ import type {
   ExcerptCaptureResult,
   ExcerptDraft,
 } from "./annotationModel";
+import type {
+  CommentAuthor,
+  CommentAuthorDraft,
+  CreatePdfCommentDraft,
+  PdfCommentMutation,
+  ReplyToPdfCommentDraft,
+} from "./comments/commentModel";
 import { RELATED_DEFAULT_LIMIT } from "./relatedFragments";
 import { DAILY_REVIEW_LIMIT, type ReviewState } from "./reviewScheduler";
 import { WebLibraryClient, type WebManifestDocument } from "./webLibrary";
@@ -635,6 +642,25 @@ export async function deleteReflection(entryId: string): Promise<void> {
     return deleteWeb(entryId);
   }
   return (await getTauriBackend()).deleteReflection(entryId);
+}
+
+/** Desktop-only local identity and PDF discussion commands. */
+export async function upsertCommentAuthor(
+  draft: CommentAuthorDraft,
+): Promise<CommentAuthor> {
+  return (await getTauriBackend()).upsertCommentAuthor(draft);
+}
+
+export async function createPdfCommentThread(
+  draft: CreatePdfCommentDraft,
+): Promise<PdfCommentMutation> {
+  return (await getTauriBackend()).createPdfCommentThread(draft);
+}
+
+export async function replyToPdfComment(
+  draft: ReplyToPdfCommentDraft,
+): Promise<PdfCommentMutation> {
+  return (await getTauriBackend()).replyToPdfComment(draft);
 }
 
 export async function deleteAnnotationEntry(

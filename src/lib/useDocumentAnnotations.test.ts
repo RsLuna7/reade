@@ -14,6 +14,11 @@ import {
   type Reflection,
   type ReviewEnrollment,
 } from "./annotationModel";
+import type {
+  CommentAuthorDraft,
+  CreatePdfCommentDraft,
+  ReplyToPdfCommentDraft,
+} from "./comments/commentModel";
 
 const backendMocks = vi.hoisted(() => ({
   listDocumentAnnotations: vi.fn(),
@@ -26,6 +31,9 @@ const backendMocks = vi.hoisted(() => ({
   restoreDocumentAnnotations: vi.fn(),
   upsertReflection: vi.fn(),
   setReviewEnrollment: vi.fn(),
+  createPdfCommentThread: vi.fn(),
+  replyToPdfComment: vi.fn(),
+  upsertCommentAuthor: vi.fn(),
 }));
 
 vi.mock("./backend", () => backendMocks);
@@ -183,6 +191,69 @@ beforeEach(() => {
       : serverBundle.reflections.filter((item) => item.entryId !== excerpt.id);
     return { excerpt, reflection };
   });
+  backendMocks.createPdfCommentThread.mockReset().mockImplementation(
+    async (draft: CreatePdfCommentDraft) => {
+      const thread = {
+        id: draft.threadId,
+        annotationId: draft.annotationId,
+        createdAt: 20,
+        updatedAt: 20,
+        deletedAt: null,
+      };
+      const message = {
+        id: draft.messageId,
+        threadId: draft.threadId,
+        authorId: draft.authorId,
+        body: draft.body,
+        createdAt: 20,
+        updatedAt: 20,
+        deletedAt: null,
+      };
+      serverBundle.commentThreads = [...(serverBundle.commentThreads ?? []), thread];
+      serverBundle.commentMessages = [...(serverBundle.commentMessages ?? []), message];
+      return { thread, message };
+    },
+  );
+  backendMocks.replyToPdfComment.mockReset().mockImplementation(
+    async (draft: ReplyToPdfCommentDraft) => {
+      const thread = (serverBundle.commentThreads ?? []).find(
+        (item) => item.id === draft.threadId,
+      );
+      if (!thread) throw new Error("Comment thread was not found");
+      const updatedThread = { ...thread, updatedAt: 30 };
+      const message = {
+        id: draft.messageId,
+        threadId: draft.threadId,
+        authorId: draft.authorId,
+        body: draft.body,
+        createdAt: 30,
+        updatedAt: 30,
+        deletedAt: null,
+      };
+      serverBundle.commentThreads = (serverBundle.commentThreads ?? []).map((item) =>
+        item.id === thread.id ? updatedThread : item,
+      );
+      serverBundle.commentMessages = [...(serverBundle.commentMessages ?? []), message];
+      return { thread: updatedThread, message };
+    },
+  );
+  backendMocks.upsertCommentAuthor.mockReset().mockImplementation(
+    async (draft: CommentAuthorDraft) => {
+      const author = {
+        id: draft.id,
+        name: draft.name,
+        isDefault: draft.makeDefault,
+        createdAt: 15,
+        updatedAt: 15,
+        deletedAt: null,
+      };
+      serverBundle.commentAuthors = [
+        ...(serverBundle.commentAuthors ?? []).map((item) => ({ ...item, isDefault: false })),
+        author,
+      ];
+      return author;
+    },
+  );
   backendMocks.deleteAnnotation.mockReset().mockImplementation(async (id: string) => {
     removeServerEntry(id);
   });
@@ -417,6 +488,59 @@ describe("atomic actions and undo semantics", () => {
     });
     expect(result.current.annotations[0]?.note).toBe("new thought");
     expect(result.current.bundle.reviewEnrollments[0]?.totalReviews).toBe(3);
+  });
+
+  it("creates a PDF thread, appends a reply, and maintains local authors", async () => {
+    serverBundle = bundleFromAnnotations([
+      makeAnnotation("pdf-1", {
+        relativePath: "paper.pdf",
+        locator: {
+          kind: "pdf",
+          page: 2,
+          view: "original",
+          quote: "quote",
+          prefix: "",
+          suffix: "",
+          rects: [],
+        },
+        sortIndex: "P|00002|00000000",
+      }),
+    ]);
+    serverBundle.commentAuthors = [
+      {
+        id: "local-me",
+        name: "我",
+        isDefault: true,
+        createdAt: 1,
+        updatedAt: 1,
+        deletedAt: null,
+      },
+    ];
+    const { result } = renderAnnotations("paper.pdf");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    await act(async () => {
+      await result.current.savePdfComment("pdf-1", "首条评论", "local-me");
+    });
+    const thread = result.current.bundle.commentThreads?.[0];
+    expect(thread?.annotationId).toBe("pdf-1");
+    expect(result.current.bundle.commentMessages?.[0]?.body).toBe("首条评论");
+
+    await act(async () => {
+      await result.current.replyPdfComment(thread!.id, "第二条回复", "local-me");
+    });
+    expect(result.current.bundle.commentMessages?.map((item) => item.body)).toEqual([
+      "首条评论",
+      "第二条回复",
+    ]);
+
+    await act(async () => {
+      await result.current.saveCommentAuthor("研究者", true);
+    });
+    expect(result.current.bundle.commentAuthors?.find((item) => item.name === "研究者")?.isDefault)
+      .toBe(true);
+    expect(result.current.bundle.commentAuthors?.find((item) => item.id === "local-me")?.isDefault)
+      .toBe(false);
   });
 
   it("recolors an existing mark through the v6 appearance command", async () => {

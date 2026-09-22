@@ -373,6 +373,24 @@
 :root[data-motion="full"] .pdf-mode-indicator { opacity: 1; transition: transform var(--motion-standard) var(--motion-ease); }
 :root[data-motion="full"] .pdf-mode-toggle[data-mode="reading"] .pdf-mode-indicator { transform: translateX(calc(100% + 2px)); }
 :root[data-motion="full"] .pdf-mode-toggle button.active { background: transparent; }
+.pdf-original-layout {
+  display: grid;
+  min-width: 0;
+  align-items: stretch;
+  grid-template-columns: minmax(0, 1fr);
+}
+.pdf-original-layout[data-comment-rail="true"] {
+  gap: 24px;
+  grid-template-columns: minmax(0, 1fr) minmax(288px, 320px);
+}
+.pdf-page-area {
+  min-width: 0;
+  /* Horizontal overflow stays in the page column. The comment column is the
+     other grid track, so a zoomed or dual-page spread cannot paint over it.
+     `clip` on the block axis keeps the shared vertical scroll on .reading-scroll. */
+  overflow-x: auto;
+  overflow-y: clip;
+}
 .pdf-pages {
   display: flex;
   align-items: center;
@@ -535,6 +553,10 @@
 .pdf-user-highlight--underline.pdf-user-highlight--pink { border-bottom-color: #7f6537; }
 .pdf-user-highlight--underline.pdf-user-highlight--green { border-bottom-color: #4d6f67; }
 .pdf-user-highlight--underline.pdf-user-highlight--blue { border-bottom-color: #50657f; }
+.pdf-user-highlight--comment-active {
+  outline: 2px solid color-mix(in srgb, var(--accent) 78%, transparent);
+  outline-offset: 2px;
+}
 .pdf-annotation-layer { pointer-events: none; z-index: 3; }
 .pdf-annotation-layer a { position: absolute; pointer-events: auto; border-radius: 2px; background: color-mix(in srgb, #3f82b8 12%, transparent); }
 .pdf-annotation-layer a:hover { outline: 1px solid #3f82b8; background: color-mix(in srgb, #3f82b8 22%, transparent); }
@@ -548,6 +570,55 @@
 .pdf-reading-page { position: relative; padding: 18px 0 54px; border-bottom: 1px solid var(--line); }
 .pdf-reading-page-label, .epub-chapter-label { color: var(--accent); font-size: 10px; font-weight: 750; letter-spacing: .12em; text-transform: uppercase; }
 .pdf-page-missing { color: var(--muted); font-style: italic; }
+
+.pdf-comment-rail {
+  position: relative;
+  min-width: 0;
+  border-left: 1px solid var(--line);
+}
+
+.pdf-comment-card-position {
+  position: absolute;
+  right: 0;
+  left: 16px;
+}
+
+.pdf-comment-card {
+  overflow: hidden;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  color: var(--ink);
+  background: var(--paper-raised);
+}
+
+.pdf-comment-card.is-active {
+  border-color: color-mix(in srgb, var(--accent) 64%, var(--line-strong));
+  box-shadow: 0 8px 24px rgb(35 31 25 / 12%);
+}
+
+.pdf-comment-card-jump {
+  display: flex;
+  width: 100%;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  color: var(--ink-soft);
+  background: transparent;
+  font-size: 11px;
+  font-weight: 650;
+  text-align: left;
+  cursor: pointer;
+}
+
+.pdf-comment-card-jump:hover,
+.pdf-comment-card-jump:focus-visible {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+
 
 .epub-reader { width: 100%; max-width: 100%; color: var(--ink); font-family: var(--reader-font-family); font-size: var(--reader-font-size); line-height: var(--reader-line-height); }
 .epub-chapter { padding-bottom: 72px; margin-bottom: 64px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }

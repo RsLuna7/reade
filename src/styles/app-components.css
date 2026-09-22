@@ -602,6 +602,31 @@
   font-size: 12px;
 }
 
+.document-annotations-author {
+  display: flex;
+  gap: 6px;
+}
+
+.document-annotations-author input,
+.document-annotations-author button,
+.pdf-comment-composer select,
+.pdf-comment-composer button {
+  min-height: 30px;
+  padding: 4px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink-soft);
+  background: var(--paper);
+  font: inherit;
+  font-size: 12px;
+}
+
+.document-annotations-author input { min-width: 0; flex: 1; }
+.document-annotations-author button,
+.pdf-comment-composer button { cursor: pointer; }
+.document-annotations-author button:disabled,
+.pdf-comment-composer button:disabled { opacity: .48; cursor: not-allowed; }
+
 .document-annotations-status,
 .document-annotations-empty {
   margin: 0;
@@ -705,6 +730,83 @@
   display: flex;
   gap: 6px;
 }
+
+.pdf-comment-conversation {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.pdf-comment-timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
+}
+
+.pdf-comment-message + .pdf-comment-message {
+  padding-top: 10px;
+  border-top: 1px solid var(--line);
+}
+
+.pdf-comment-message-meta {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  color: var(--ink-soft);
+  font-size: 10px;
+}
+
+.pdf-comment-message-meta strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.pdf-comment-message p {
+  margin: 4px 0 0;
+  color: var(--ink-soft);
+  font-size: 12px;
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.pdf-comment-composer {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.pdf-comment-composer-meta {
+  display: flex;
+  justify-content: flex-end;
+}
+
+.pdf-comment-composer select { max-width: 144px; }
+
+.pdf-comment-composer textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  color: var(--ink);
+  background: var(--paper);
+  font: inherit;
+  font-size: 12px;
+  line-height: 1.5;
+  resize: vertical;
+}
+
+.pdf-comment-composer button { align-self: flex-end; }
+.pdf-comment-error { margin: 0; color: #b34e42; font-size: 11px; }
+.pdf-comment-card .pdf-comment-conversation { padding: 10px 12px 12px; }
 
 @media (max-width: 640px) {
   .annotation-toolbar {

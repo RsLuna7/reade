@@ -563,6 +563,7 @@ function App() {
   const relatedRequest = useRef(0);
   const [toolbarPos, setToolbarPos] = useState({ x: 0, y: 0 });
   const [markEditor, setMarkEditor] = useState<{ annotationId: string; x: number; y: number } | null>(null);
+  const [activePdfCommentAnnotationId, setActivePdfCommentAnnotationId] = useState<string | null>(null);
   const [annotationSort, setAnnotationSort] = useState<AnnotationListSort>("time");
   const [libraryAnnotations, setLibraryAnnotations] = useState<
     | { status: "idle" }
@@ -572,6 +573,7 @@ function App() {
   >({ status: "idle" });
   const [noteDraft, setNoteDraft] = useState<
     | { mode: "edit"; annotationId: string; text: string }
+    | { mode: "comment"; annotationId: string; text: string }
     | {
         mode: "create";
         pending: PendingSelection;
@@ -664,6 +666,9 @@ function App() {
     save: saveAnnotation,
     saveExcerpt,
     saveReflection,
+    savePdfComment,
+    replyPdfComment,
+    saveCommentAuthor,
     setEnrollment,
     remove: removeAnnotation,
     clearAll: clearAnnotations,
@@ -671,6 +676,10 @@ function App() {
     updateNote,
     updateColor,
   } = useDocumentAnnotations(currentPath);
+
+  useEffect(() => {
+    setActivePdfCommentAnnotationId(null);
+  }, [currentPath]);
   const annotationBundleLoading = annotationsLoading;
   const activeMarkTone =
     annotationTool === "underline" ? legacyColorToTone(underlineColor) : excerptTone;
@@ -1948,7 +1957,8 @@ function App() {
             style: kind,
             tone,
           });
-          await saveExcerpt(draft, note?.trim() || null);
+          const captured = await saveExcerpt(draft, note?.trim() || null);
+          if (captured.commentThread) setActivePdfCommentAnnotationId(captured.excerpt.id);
         } else {
           const annotation = buildMarkFromPending(
             currentPath,
@@ -1960,7 +1970,9 @@ function App() {
           await saveAnnotation(annotation);
         }
         const message = note?.trim()
-          ? "已保存摘录与感悟"
+          ? currentContent?.kind === "pdf"
+            ? "已保存摘录与评论"
+            : "已保存摘录与感悟"
           : "已标记";
         showNotice(
           message,
@@ -2324,9 +2336,20 @@ function App() {
 
   const handleEditAnnotationNote = useCallback(
     (annotation: Annotation) => {
+      if (annotation.locator.kind === "pdf") {
+        setActivePdfCommentAnnotationId(annotation.id);
+        setMarkEditor(null);
+        const thread = (annotationBundle.commentThreads ?? []).find(
+          (item) => item.annotationId === annotation.id,
+        );
+        if (!thread) {
+          setNoteDraft({ mode: "comment", annotationId: annotation.id, text: "" });
+        }
+        return;
+      }
       setNoteDraft({ mode: "edit", annotationId: annotation.id, text: annotation.note ?? "" });
     },
-    [],
+    [annotationBundle.commentThreads],
   );
 
   const handleChangeAnnotationColor = useCallback(
@@ -2432,6 +2455,17 @@ function App() {
       setNoteDraft(null);
       return;
     }
+    if (noteDraft.mode === "comment") {
+      try {
+        await savePdfComment(noteDraft.annotationId, noteDraft.text.trim());
+        setActivePdfCommentAnnotationId(noteDraft.annotationId);
+        setNoteDraft(null);
+        showNotice("评论已添加");
+      } catch (cause) {
+        showNotice(cause instanceof Error ? cause.message : String(cause));
+      }
+      return;
+    }
     const annotation = annotations.find((item) => item.id === noteDraft.annotationId);
     if (!annotation) {
       setNoteDraft(null);
@@ -2444,7 +2478,7 @@ function App() {
     } catch (cause) {
       showNotice(cause instanceof Error ? cause.message : String(cause));
     }
-  }, [annotations, handleSaveMark, noteDraft, showNotice, updateNote]);
+  }, [annotations, handleSaveMark, noteDraft, savePdfComment, showNotice, updateNote]);
 
   // B6:按位置排序的键。pdf 用页码、epub 用章节序+段落偏移;
   // markdown 引文需对照正文 DOM 解析,memo 避免每次 render 全文遍历
@@ -2563,6 +2597,14 @@ function App() {
           onSaveReflection={async (entryId, entryKind, body) => {
             await saveReflection(entryId, entryKind, body);
           }}
+          onCreatePdfComment={async (annotationId, body, authorId) => {
+            await savePdfComment(annotationId, body, authorId);
+            setActivePdfCommentAnnotationId(annotationId);
+          }}
+          onReplyPdfComment={async (threadId, body, authorId) => {
+            await replyPdfComment(threadId, body, authorId);
+          }}
+          onCreateCommentAuthor={(name) => saveCommentAuthor(name, true)}
           onSetEnrollment={async (excerptId, enabled) => {
             await setEnrollment(excerptId, enabled);
           }}
@@ -2594,6 +2636,11 @@ function App() {
         ? annotations.find((item) => item.id === markEditor.annotationId) ?? null
         : null,
     [annotations, markEditor],
+  );
+  const noteDraftUsesCommentCopy = Boolean(
+    noteDraft &&
+      (noteDraft.mode === "comment" ||
+        (noteDraft.mode === "create" && noteDraft.pending.locator.kind === "pdf")),
   );
 
   // B7:全库标注总览。打开全屏「全库摘录」时拉取;当前文档标注
@@ -3261,6 +3308,7 @@ function App() {
       }
 
       if (!annotationId) return;
+      if (currentContent.kind === "pdf") setActivePdfCommentAnnotationId(annotationId);
       const padding = 12;
       const bubbleWidth = 240;
       const bubbleHeight = 96;
@@ -5102,6 +5150,18 @@ function App() {
                   locator={currentLocator}
                   motionLevel={motionLevel}
                   annotations={annotations}
+                  commentAuthors={annotationBundle.commentAuthors ?? []}
+                  commentThreads={annotationBundle.commentThreads ?? []}
+                  commentMessages={annotationBundle.commentMessages ?? []}
+                  activePdfCommentAnnotationId={activePdfCommentAnnotationId}
+                  onActivatePdfComment={(annotationId) => {
+                    setActivePdfCommentAnnotationId(annotationId);
+                    const annotation = annotations.find((item) => item.id === annotationId);
+                    if (annotation) jumpToAnnotation(annotation);
+                  }}
+                  onReplyPdfComment={(threadId, body, authorId) =>
+                    replyPdfComment(threadId, body, authorId)
+                  }
                   fuzzyAnchoring={fuzzyAnchoring}
                   readerRef={pdfReaderHandleRef}
                   libraryRoot={snapshot?.rootPath}
@@ -5635,10 +5695,16 @@ function App() {
           <div
             className="annotation-note-editor reade-motion-panel"
             role="dialog"
-            aria-label={noteDraft.mode === "create" ? "添加感悟" : "编辑感悟"}
+            aria-label={
+              noteDraftUsesCommentCopy
+                ? "添加评论"
+                : noteDraft.mode === "create"
+                  ? "添加感悟"
+                  : "编辑感悟"
+            }
           >
             <label>
-              感悟
+              {noteDraftUsesCommentCopy ? "评论" : "感悟"}
               <textarea
                 value={noteDraft.text}
                 onChange={(event) =>

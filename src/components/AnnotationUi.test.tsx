@@ -194,6 +194,28 @@ describe("AnnotationEditBubble", () => {
     expect(screen.queryByRole("group", { name: "更改颜色" })).not.toBeInTheDocument();
   });
 
+  it("names the note action as a comment for PDF annotations", () => {
+    render(
+      <AnnotationEditBubble
+        {...baseProps}
+        annotation={highlight({
+          relativePath: "paper.pdf",
+          locator: {
+            kind: "pdf",
+            page: 2,
+            view: "original",
+            quote: "quote",
+            prefix: "",
+            suffix: "",
+            rects: [],
+          },
+        })}
+      />,
+    );
+    expect(screen.getByRole("button", { name: "评论" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "感悟" })).not.toBeInTheDocument();
+  });
+
   it("closes on Escape and on outside pointerdown", () => {
     const onClose = vi.fn();
     render(<AnnotationEditBubble {...baseProps} onClose={onClose} />);

@@ -76,6 +76,12 @@ import {
   type PdfPagePinSlots,
 } from "../lib/pdfPagePins";
 import { MarkdownRenderer } from "./MarkdownRenderer";
+import type {
+  CommentAuthor,
+  PdfCommentMessage,
+  PdfCommentThread,
+} from "../lib/comments/commentModel";
+import { PdfCommentRail } from "./comments/PdfCommentRail";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 const RANGE_CHUNK = 256 * 1024;
@@ -347,6 +353,16 @@ interface PdfReaderProps {
   locator: SearchLocator | null;
   motionLevel: ReaderMotionLevel;
   annotations?: Annotation[];
+  commentAuthors?: CommentAuthor[];
+  commentThreads?: PdfCommentThread[];
+  commentMessages?: PdfCommentMessage[];
+  activePdfCommentAnnotationId?: string | null;
+  onActivatePdfComment?: (annotationId: string) => void;
+  onReplyPdfComment?: (
+    threadId: string,
+    body: string,
+    authorId: string,
+  ) => Promise<unknown>;
   /** Enables the fuzzy last-resort anchoring step (global preference). */
   fuzzyAnchoring?: boolean;
   readerRef?: React.MutableRefObject<PdfReaderHandle | null>;
@@ -913,6 +929,12 @@ export function PdfReader({
   locator,
   motionLevel,
   annotations = [],
+  commentAuthors = [],
+  commentThreads = [],
+  commentMessages = [],
+  activePdfCommentAnnotationId = null,
+  onActivatePdfComment,
+  onReplyPdfComment,
   fuzzyAnchoring = false,
   readerRef,
   onRegionCard,
@@ -930,6 +952,8 @@ export function PdfReader({
   onActiveChange,
 }: PdfReaderProps) {
   const rootRef = useRef<HTMLDivElement>(null);
+  const originalLayoutRef = useRef<HTMLDivElement>(null);
+  const pageAreaRef = useRef<HTMLDivElement>(null);
   const toolbarRef = useRef<HTMLDivElement>(null);
   const pageInputRef = useRef<HTMLInputElement>(null);
   const calibrateInputRef = useRef<HTMLInputElement>(null);
@@ -953,6 +977,10 @@ export function PdfReader({
   const bitmapPreviewRef = useRef<PdfZoomPreview | null>(null);
   const previewBaseScaleRef = useRef(1);
   const [zoomCommitRevision, setZoomCommitRevision] = useState(0);
+  // True while scale is the last fit-to-width result. Window resize then
+  // refits into the page column beside the comment rail. A manual zoom
+  // opts out until the user hits 适宽 again.
+  const scaleFollowsWidthRef = useRef(true);
   const pagesRef = useRef<HTMLDivElement | null>(null);
   const zoomPercentRef = useRef<HTMLButtonElement | null>(null);
   const nativePageWidthRef = useRef<number | null>(null);
@@ -992,6 +1020,7 @@ export function PdfReader({
   const error = boundError?.sourceKey === sourceKey ? boundError.message : null;
   const readingLoading = readingLoadingKey === sourceKey;
   const spreadActive = spreadIntent && spreadCapable && mode === "original";
+  const hasPdfComments = commentThreads.length > 0;
 
   const setActivePage = useCallback((page: number) => {
     if (currentPageRef.current !== page) {
@@ -1074,17 +1103,45 @@ export function PdfReader({
     const reader = rootRef.current;
     if (!reader) return;
     const measure = () => {
-      setSpreadCapable(canSpread(window.innerWidth, reader.clientWidth));
+      const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
+      setSpreadCapable(
+        canSpread(window.innerWidth, pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth),
+      );
     };
     measure();
     const observer = new ResizeObserver(measure);
-    observer.observe(reader);
+    observer.observe(pageAreaRef.current ?? reader);
     window.addEventListener("resize", measure);
     return () => {
       observer.disconnect();
       window.removeEventListener("resize", measure);
     };
-  }, []);
+  }, [session]);
+
+  useEffect(() => {
+    const root = rootRef.current;
+    if (!root) return;
+    const sync = () => {
+      root
+        .querySelectorAll<HTMLElement>(".pdf-user-highlight--comment-active")
+        .forEach((mark) => mark.classList.remove("pdf-user-highlight--comment-active"));
+      if (!activePdfCommentAnnotationId) return;
+      root
+        .querySelectorAll<HTMLElement>(
+          `.pdf-user-highlight[data-annotation-id="${CSS.escape(activePdfCommentAnnotationId)}"]`,
+        )
+        .forEach((mark) => mark.classList.add("pdf-user-highlight--comment-active"));
+    };
+    sync();
+    const observer = new MutationObserver(sync);
+    observer.observe(root, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
+      root
+        .querySelectorAll<HTMLElement>(".pdf-user-highlight--comment-active")
+        .forEach((mark) => mark.classList.remove("pdf-user-highlight--comment-active"));
+    };
+  }, [activePdfCommentAnnotationId]);
 
   // 阅读模式没有页位图可裁;Esc 只在模式激活时消费(不 preventDefault,
   // App 全局 Esc 链的收尾行为保持不变)。
@@ -1520,6 +1577,7 @@ export function PdfReader({
   const previewPdfScale = useCallback((next: number, clientX?: number, clientY?: number) => {
     const clamped = clampPdfScale(next);
     if (clamped === layoutScaleRef.current) return;
+    scaleFollowsWidthRef.current = false;
     beginZoomGesture(clientX, clientY);
     layoutScaleRef.current = clamped;
     if (zoomFrameRef.current === null) {
@@ -1537,10 +1595,13 @@ export function PdfReader({
       if (!activeSession.lifecycle.isActive() || sourceKeyRef.current !== activeSession.sourceKey) return;
       const nativeWidth = firstPage.getViewport({ scale: 1 }).width;
       setNativePageWidth(nativeWidth);
+      scaleFollowsWidthRef.current = true;
       // 适宽语义(plan-pdf-spread §2):双页 = 两页 + 列距填满容器。
+      const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
+      const availableWidth = pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth;
       const fitted = spreadActive
-        ? spreadFitScale(reader.clientWidth, nativeWidth)
-        : singleFitScale(reader.clientWidth, nativeWidth);
+        ? spreadFitScale(availableWidth, nativeWidth)
+        : singleFitScale(availableWidth, nativeWidth);
       commitPdfScale(fitted);
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
@@ -1594,6 +1655,29 @@ export function PdfReader({
     // 加载即适宽;spreadActive 改变 fitWidth 身份,切换双页/单页时
     // 顺带重新适宽(定稿 §6.1 的已知取舍:手动缩放不跨切换保留)。
     if (session) void fitWidth();
+  }, [fitWidth, hasPdfComments, session]);
+
+  // The comment column keeps a fixed track. While scale is still fit-to-width,
+  // a window or pane resize refits the page into the column beside it so the
+  // spread does not slide under the cards.
+  useEffect(() => {
+    const area = pageAreaRef.current;
+    if (!area || !session) return;
+    let lastWidth = area.clientWidth;
+    const refit = () => {
+      if (!scaleFollowsWidthRef.current) return;
+      const width = area.clientWidth;
+      if (width <= 0 || Math.abs(width - lastWidth) < 1) return;
+      lastWidth = width;
+      void fitWidth();
+    };
+    const observer = new ResizeObserver(refit);
+    observer.observe(area);
+    window.addEventListener("resize", refit);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", refit);
+    };
   }, [fitWidth, session]);
 
 
@@ -1989,7 +2073,7 @@ export function PdfReader({
         </div>}
         <div className="pdf-toolbar-group">
           <button type="button" aria-label="缩小" onClick={() => previewPdfScale(adjustPdfScale(layoutScaleRef.current, -1))}><Minus size={14} /></button>
-          <button ref={zoomPercentRef} type="button" title="实际大小" onClick={() => commitPdfScale(1)}>{Math.round(layoutScale * 100)}%</button>
+          <button ref={zoomPercentRef} type="button" title="实际大小" onClick={() => { scaleFollowsWidthRef.current = false; commitPdfScale(1); }}>{Math.round(layoutScale * 100)}%</button>
           <button type="button" aria-label="放大" onClick={() => previewPdfScale(adjustPdfScale(layoutScaleRef.current, 1))}><Plus size={14} /></button>
           <button type="button" onClick={() => void fitWidth()}>适宽</button>
         </div>
@@ -2065,7 +2149,13 @@ export function PdfReader({
       </div>
     )}
     {!error && mode === "original" && !session && <div className="pdf-state"><span className="spinner" />正在读取 PDF 结构…</div>}
-    {mode === "original" && session && <div className="pdf-pages" ref={pagesRef} data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
+    {mode === "original" && session && <div
+      className="pdf-original-layout"
+      data-comment-rail={hasPdfComments ? "true" : undefined}
+      ref={originalLayoutRef}
+    >
+      <div className="pdf-page-area" ref={pageAreaRef}>
+      <div className="pdf-pages" ref={pagesRef} data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>
       {Array.from({ length: session.pdf.numPages }, (_, index) => {
         const page = index + 1;
         return <PdfPage
@@ -2091,6 +2181,22 @@ export function PdfReader({
           key={`${session.lifecycle.generation}-${page}`}
         />;
       })}
+      </div>
+      </div>
+      {hasPdfComments ? <PdfCommentRail
+        anchorRootRef={pagesRef}
+        layoutRootRef={originalLayoutRef}
+        threads={commentThreads}
+        messages={commentMessages}
+        authors={commentAuthors}
+        annotations={annotations}
+        activeAnnotationId={activePdfCommentAnnotationId}
+        reflowKey={`${session.lifecycle.generation}:${zoomCommitRevision}:${scale}:${spreadActive}:${commentThreads.map((thread) => thread.id).join(",")}`}
+        onActivate={(annotationId) => onActivatePdfComment?.(annotationId)}
+        onReply={(threadId, body, authorId) =>
+          onReplyPdfComment?.(threadId, body, authorId) ?? Promise.resolve()
+        }
+      /> : null}
     </div>}
     {mode === "reading" && <div className="pdf-reading-mode">
       {readingLoading && <div className="pdf-state"><span className="spinner" />正在生成按页阅读文本…</div>}

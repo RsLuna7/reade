@@ -48,7 +48,7 @@ use crate::library::{
     validate_relative_library_path, AppState, CommandResult, DocumentInfo, MAX_MARKDOWN_BYTES,
 };
 
-const USER_SCHEMA_VERSION: i64 = 7;
+const USER_SCHEMA_VERSION: i64 = 8;
 pub(crate) const USER_DB_FILE: &str = "reade-user.sqlite3";
 pub(crate) const LEGACY_CACHE_DB_FILE: &str = "reade-cache.sqlite3";
 /// Tombstoned annotations are physically purged 90 days after deletion.
@@ -78,6 +78,7 @@ const MIN_FTS_QUERY_CHARS: usize = 3;
 
 const MAX_ANNOTATION_ID_CHARS: usize = 64;
 const MAX_ANNOTATION_NOTE_CHARS: usize = 4_000;
+const MAX_COMMENT_AUTHOR_NAME_CHARS: usize = 80;
 const MAX_ANNOTATION_TITLE_CHARS: usize = 200;
 const MAX_ANNOTATION_TEXT_CHARS: usize = 2_000;
 const MAX_ANNOTATION_RECTS: usize = 64;
@@ -376,6 +377,73 @@ pub struct Reflection {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
+pub struct CommentAuthor {
+    pub id: String,
+    pub name: String,
+    pub is_default: bool,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub deleted_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCommentThread {
+    pub id: String,
+    pub annotation_id: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub deleted_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCommentMessage {
+    pub id: String,
+    pub thread_id: String,
+    pub author_id: String,
+    pub body: String,
+    pub created_at: u64,
+    pub updated_at: u64,
+    pub deleted_at: Option<u64>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommentAuthorDraft {
+    pub id: String,
+    pub name: String,
+    pub make_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct CreatePdfCommentDraft {
+    pub thread_id: String,
+    pub message_id: String,
+    pub annotation_id: String,
+    pub author_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ReplyToPdfCommentDraft {
+    pub message_id: String,
+    pub thread_id: String,
+    pub author_id: String,
+    pub body: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct PdfCommentMutation {
+    pub thread: PdfCommentThread,
+    pub message: PdfCommentMessage,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
 pub struct ReviewEnrollment {
     pub excerpt_id: String,
     pub enrolled_at: u64,
@@ -396,6 +464,12 @@ pub struct DocumentAnnotationBundle {
     pub places: Vec<ReadingPlace>,
     pub reflections: Vec<Reflection>,
     pub review_enrollments: Vec<ReviewEnrollment>,
+    #[serde(default)]
+    pub comment_authors: Vec<CommentAuthor>,
+    #[serde(default)]
+    pub comment_threads: Vec<PdfCommentThread>,
+    #[serde(default)]
+    pub comment_messages: Vec<PdfCommentMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
@@ -403,6 +477,8 @@ pub struct DocumentAnnotationBundle {
 pub struct ExcerptCaptureResult {
     pub excerpt: Excerpt,
     pub reflection: Option<Reflection>,
+    pub comment_thread: Option<PdfCommentThread>,
+    pub comment_message: Option<PdfCommentMessage>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -1485,6 +1561,7 @@ fn run_migration_chain(
             5 => migrate_to_v5(&transaction)?,
             6 => migrate_to_v6(&transaction)?,
             7 => migrate_to_v7(&transaction)?,
+            8 => migrate_to_v8(&transaction)?,
             _ => return Err(format!("Unknown user data migration step {step}")),
         }
         transaction
@@ -1910,6 +1987,239 @@ fn migrate_to_v7(transaction: &Connection) -> CommandResult<()> {
             .map_err(|error| format!("Cannot seed annotation v7 ledger: {error}"))?;
     }
     Ok(())
+}
+
+/// v8: local PDF comment threads. Existing live PDF reflections become the
+/// first message in a one-thread-per-excerpt discussion; Markdown and EPUB
+/// reflections remain unchanged.
+fn migrate_to_v8(transaction: &Connection) -> CommandResult<()> {
+    let migrated_at = now_millis();
+    transaction
+        .execute_batch(
+            "CREATE TABLE comment_authors (
+                 id TEXT PRIMARY KEY,
+                 name TEXT NOT NULL,
+                 is_default INTEGER NOT NULL DEFAULT 0,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 deleted_at INTEGER
+             );
+             CREATE UNIQUE INDEX comment_authors_one_default
+                 ON comment_authors(is_default) WHERE is_default = 1 AND deleted_at IS NULL;
+             CREATE TABLE pdf_comment_threads (
+                 id TEXT PRIMARY KEY,
+                 library_root TEXT NOT NULL,
+                 annotation_id TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 deleted_at INTEGER,
+                 UNIQUE(library_root, annotation_id)
+             );
+             CREATE INDEX pdf_comment_threads_by_annotation
+                 ON pdf_comment_threads(library_root, annotation_id, updated_at);
+             CREATE TABLE pdf_comment_messages (
+                 id TEXT PRIMARY KEY,
+                 library_root TEXT NOT NULL,
+                 thread_id TEXT NOT NULL,
+                 author_id TEXT NOT NULL,
+                 body TEXT NOT NULL,
+                 created_at INTEGER NOT NULL,
+                 updated_at INTEGER NOT NULL,
+                 deleted_at INTEGER
+             );
+             CREATE INDEX pdf_comment_messages_by_thread
+                 ON pdf_comment_messages(library_root, thread_id, created_at, id);",
+        )
+        .map_err(|error| format!("Cannot create PDF comment schema: {error}"))?;
+    transaction
+        .execute(
+            "INSERT INTO comment_authors(
+                 id, name, is_default, created_at, updated_at, deleted_at
+             ) VALUES ('local-me', '我', 1, ?1, ?1, NULL)",
+            params![migrated_at as i64],
+        )
+        .map_err(|error| format!("Cannot seed the local comment author: {error}"))?;
+
+    // Separate table namespaces allow the source annotation id to be the
+    // deterministic migration id for both the thread and its first message.
+    transaction
+        .execute_batch(
+            "INSERT INTO pdf_comment_threads(
+                 id, library_root, annotation_id, created_at, updated_at, deleted_at
+             )
+             SELECT r.entry_id, r.library_root, r.entry_id,
+                    r.created_at, r.updated_at, NULL
+             FROM reflections r
+             JOIN excerpts e
+               ON e.id = r.entry_id AND e.library_root = r.library_root
+             WHERE r.deleted_at IS NULL
+               AND e.deleted_at IS NULL
+               AND e.anchor_json LIKE '%\"format\":\"pdfText\"%';
+             INSERT INTO pdf_comment_messages(
+                 id, library_root, thread_id, author_id, body,
+                 created_at, updated_at, deleted_at
+             )
+             SELECT r.entry_id, r.library_root, r.entry_id, 'local-me', r.body,
+                    r.created_at, r.updated_at, NULL
+             FROM reflections r
+             JOIN excerpts e
+               ON e.id = r.entry_id AND e.library_root = r.library_root
+             WHERE r.deleted_at IS NULL
+               AND e.deleted_at IS NULL
+               AND e.anchor_json LIKE '%\"format\":\"pdfText\"%';
+             UPDATE reflections
+             SET deleted_at = updated_at
+             WHERE deleted_at IS NULL
+               AND entry_id IN (
+                 SELECT annotation_id FROM pdf_comment_threads
+               );",
+        )
+        .map_err(|error| format!("Cannot migrate PDF reflections to comments: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn upsert_comment_author(
+    draft: CommentAuthorDraft,
+    user: State<'_, UserState>,
+) -> CommandResult<CommentAuthor> {
+    validate_annotation_id(&draft.id)?;
+    let name = sanitize_required_text(
+        draft.name,
+        MAX_COMMENT_AUTHOR_NAME_CHARS,
+        "comment author name",
+    )?;
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin comment author update: {error}"))?;
+    let created_at = transaction
+        .query_row(
+            "SELECT created_at FROM comment_authors WHERE id = ?1",
+            params![draft.id],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map_err(|error| sql_error("Cannot read comment author", error))?
+        .map(|value| value as u64)
+        .unwrap_or(now);
+    if draft.make_default {
+        transaction
+            .execute(
+                "UPDATE comment_authors SET is_default = 0 WHERE is_default = 1",
+                [],
+            )
+            .map_err(|error| format!("Cannot change the default comment author: {error}"))?;
+    }
+    let author = CommentAuthor {
+        id: draft.id,
+        name,
+        is_default: draft.make_default,
+        created_at,
+        updated_at: now,
+        deleted_at: None,
+    };
+    upsert_comment_author_row(&transaction, &author)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit comment author update: {error}"))?;
+    Ok(author)
+}
+
+#[tauri::command]
+pub fn create_pdf_comment_thread(
+    draft: CreatePdfCommentDraft,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<PdfCommentMutation> {
+    let root = normalize_root(&current_root(&library)?);
+    validate_annotation_id(&draft.thread_id)?;
+    validate_annotation_id(&draft.message_id)?;
+    validate_annotation_id(&draft.annotation_id)?;
+    validate_annotation_id(&draft.author_id)?;
+    let body = sanitize_required_text(draft.body, MAX_ANNOTATION_NOTE_CHARS, "comment")?;
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin PDF comment creation: {error}"))?;
+    ensure_pdf_comment_parent(&transaction, &root, &draft.annotation_id)?;
+    ensure_live_comment_author(&transaction, &draft.author_id)?;
+    let exists: i64 = transaction
+        .query_row(
+            "SELECT count(*) FROM pdf_comment_threads
+             WHERE library_root = ?1 AND annotation_id = ?2 AND deleted_at IS NULL",
+            params![root, draft.annotation_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Cannot check PDF comment thread", error))?;
+    if exists > 0 {
+        return Err("This annotation already has a comment thread".to_owned());
+    }
+    let thread = PdfCommentThread {
+        id: draft.thread_id,
+        annotation_id: draft.annotation_id,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    let message = PdfCommentMessage {
+        id: draft.message_id,
+        thread_id: thread.id.clone(),
+        author_id: draft.author_id,
+        body,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    upsert_pdf_comment_thread_row(&transaction, &root, &thread)?;
+    upsert_pdf_comment_message_row(&transaction, &root, &message)?;
+    sync_comments_to_excerpt_search(&transaction, &root, &thread.annotation_id)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit PDF comment creation: {error}"))?;
+    Ok(PdfCommentMutation { thread, message })
+}
+
+#[tauri::command]
+pub fn reply_to_pdf_comment(
+    draft: ReplyToPdfCommentDraft,
+    library: State<'_, AppState>,
+    user: State<'_, UserState>,
+) -> CommandResult<PdfCommentMutation> {
+    let root = normalize_root(&current_root(&library)?);
+    validate_annotation_id(&draft.message_id)?;
+    validate_annotation_id(&draft.thread_id)?;
+    validate_annotation_id(&draft.author_id)?;
+    let body = sanitize_required_text(draft.body, MAX_ANNOTATION_NOTE_CHARS, "comment")?;
+    let now = now_millis();
+    let mut connection = lock_user(&user)?;
+    let transaction = connection
+        .transaction()
+        .map_err(|error| format!("Cannot begin PDF comment reply: {error}"))?;
+    ensure_live_comment_author(&transaction, &draft.author_id)?;
+    let mut thread = read_pdf_comment_thread_row(&transaction, &root, &draft.thread_id)?
+        .filter(|item| item.deleted_at.is_none())
+        .ok_or_else(|| "Comment thread was not found".to_owned())?;
+    ensure_pdf_comment_parent(&transaction, &root, &thread.annotation_id)?;
+    let message = PdfCommentMessage {
+        id: draft.message_id,
+        thread_id: thread.id.clone(),
+        author_id: draft.author_id,
+        body,
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    };
+    thread.updated_at = now;
+    upsert_pdf_comment_thread_row(&transaction, &root, &thread)?;
+    upsert_pdf_comment_message_row(&transaction, &root, &message)?;
+    sync_comments_to_excerpt_search(&transaction, &root, &thread.annotation_id)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit PDF comment reply: {error}"))?;
+    Ok(PdfCommentMutation { thread, message })
 }
 
 #[derive(Debug, Clone)]
@@ -2609,6 +2919,29 @@ fn purge_expired_tombstones(connection: &Connection, now: u64) -> CommandResult<
             params![cutoff as i64],
         )
         .map_err(|error| format!("Cannot clean up expired review enrollments: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM pdf_comment_messages
+             WHERE (deleted_at IS NOT NULL AND deleted_at < ?1)
+                OR thread_id NOT IN (SELECT id FROM pdf_comment_threads)",
+            params![cutoff as i64],
+        )
+        .map_err(|error| format!("Cannot clean up expired PDF comment messages: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM pdf_comment_threads
+             WHERE (deleted_at IS NOT NULL AND deleted_at < ?1)
+                OR annotation_id NOT IN (SELECT id FROM excerpts)",
+            params![cutoff as i64],
+        )
+        .map_err(|error| format!("Cannot clean up expired PDF comment threads: {error}"))?;
+    connection
+        .execute(
+            "DELETE FROM pdf_comment_messages
+             WHERE thread_id NOT IN (SELECT id FROM pdf_comment_threads)",
+            [],
+        )
+        .map_err(|error| format!("Cannot clean up orphaned PDF comment messages: {error}"))?;
     Ok(())
 }
 
@@ -4139,6 +4472,39 @@ fn reflection_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Reflection> 
     })
 }
 
+fn comment_author_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<CommentAuthor> {
+    Ok(CommentAuthor {
+        id: row.get(0)?,
+        name: row.get(1)?,
+        is_default: row.get::<_, i64>(2)? != 0,
+        created_at: row.get::<_, i64>(3)? as u64,
+        updated_at: row.get::<_, i64>(4)? as u64,
+        deleted_at: row.get::<_, Option<i64>>(5)?.map(|value| value as u64),
+    })
+}
+
+fn pdf_comment_thread_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PdfCommentThread> {
+    Ok(PdfCommentThread {
+        id: row.get(0)?,
+        annotation_id: row.get(1)?,
+        created_at: row.get::<_, i64>(2)? as u64,
+        updated_at: row.get::<_, i64>(3)? as u64,
+        deleted_at: row.get::<_, Option<i64>>(4)?.map(|value| value as u64),
+    })
+}
+
+fn pdf_comment_message_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<PdfCommentMessage> {
+    Ok(PdfCommentMessage {
+        id: row.get(0)?,
+        thread_id: row.get(1)?,
+        author_id: row.get(2)?,
+        body: row.get(3)?,
+        created_at: row.get::<_, i64>(4)? as u64,
+        updated_at: row.get::<_, i64>(5)? as u64,
+        deleted_at: row.get::<_, Option<i64>>(6)?.map(|value| value as u64),
+    })
+}
+
 fn review_enrollment_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<ReviewEnrollment> {
     Ok(ReviewEnrollment {
         excerpt_id: row.get(0)?,
@@ -4159,6 +4525,10 @@ const EXCERPT_COLUMNS: &str = "id, relative_path, source_text, anchor_json, sour
 const PLACE_COLUMNS: &str = "id, relative_path, title, target_json, source_revision_json,
      legacy_color, legacy_selected_text, sort_index, created_at, updated_at, deleted_at";
 const REFLECTION_COLUMNS: &str = "entry_id, entry_kind, body, created_at, updated_at, deleted_at";
+const COMMENT_AUTHOR_COLUMNS: &str = "id, name, is_default, created_at, updated_at, deleted_at";
+const COMMENT_THREAD_COLUMNS: &str = "id, annotation_id, created_at, updated_at, deleted_at";
+const COMMENT_MESSAGE_COLUMNS: &str =
+    "id, thread_id, author_id, body, created_at, updated_at, deleted_at";
 const ENROLLMENT_COLUMNS: &str = "excerpt_id, enrolled_at, box, due_at, last_reviewed_at,
      total_reviews, suspended, updated_at, deleted_at";
 
@@ -4353,6 +4723,110 @@ fn load_reflections(
     )
 }
 
+fn read_pdf_comment_thread_row(
+    connection: &Connection,
+    root: &str,
+    id: &str,
+) -> CommandResult<Option<PdfCommentThread>> {
+    connection
+        .query_row(
+            &format!(
+                "SELECT {COMMENT_THREAD_COLUMNS} FROM pdf_comment_threads
+                 WHERE library_root = ?1 AND id = ?2"
+            ),
+            params![root, id],
+            pdf_comment_thread_from_row,
+        )
+        .optional()
+        .map_err(|error| sql_error("Cannot read PDF comment thread", error))
+}
+
+fn ensure_live_comment_author(connection: &Connection, id: &str) -> CommandResult<()> {
+    let exists: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM comment_authors WHERE id = ?1 AND deleted_at IS NULL",
+            params![id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Cannot verify comment author", error))?;
+    if exists == 0 {
+        return Err("Comment author was not found".to_owned());
+    }
+    Ok(())
+}
+
+fn ensure_pdf_comment_parent(
+    connection: &Connection,
+    root: &str,
+    annotation_id: &str,
+) -> CommandResult<Excerpt> {
+    let excerpt = read_excerpt_row(connection, root, annotation_id)?
+        .filter(|item| item.deleted_at.is_none())
+        .ok_or_else(|| "PDF annotation was not found".to_owned())?;
+    if !matches!(&excerpt.anchor, SourceAnchor::PdfText { .. }) {
+        return Err("Comments currently support PDF annotations only".to_owned());
+    }
+    Ok(excerpt)
+}
+
+fn load_comment_authors(connection: &Connection) -> CommandResult<Vec<CommentAuthor>> {
+    query_mapped(
+        connection,
+        &format!(
+            "SELECT {COMMENT_AUTHOR_COLUMNS} FROM comment_authors
+             WHERE deleted_at IS NULL
+             ORDER BY is_default DESC, created_at ASC, id ASC"
+        ),
+        [],
+        comment_author_from_row,
+        "Cannot list comment authors",
+    )
+}
+
+fn load_document_comment_threads(
+    connection: &Connection,
+    root: &str,
+    annotation_ids: &HashSet<String>,
+) -> CommandResult<Vec<PdfCommentThread>> {
+    let threads = query_mapped(
+        connection,
+        &format!(
+            "SELECT {COMMENT_THREAD_COLUMNS} FROM pdf_comment_threads
+             WHERE library_root = ?1 AND deleted_at IS NULL
+             ORDER BY created_at ASC, id ASC"
+        ),
+        params![root],
+        pdf_comment_thread_from_row,
+        "Cannot list PDF comment threads",
+    )?;
+    Ok(threads
+        .into_iter()
+        .filter(|thread| annotation_ids.contains(&thread.annotation_id))
+        .collect())
+}
+
+fn load_document_comment_messages(
+    connection: &Connection,
+    root: &str,
+    thread_ids: &HashSet<String>,
+) -> CommandResult<Vec<PdfCommentMessage>> {
+    let messages = query_mapped(
+        connection,
+        &format!(
+            "SELECT {COMMENT_MESSAGE_COLUMNS} FROM pdf_comment_messages
+             WHERE library_root = ?1 AND deleted_at IS NULL
+             ORDER BY created_at ASC, id ASC"
+        ),
+        params![root],
+        pdf_comment_message_from_row,
+        "Cannot list PDF comment messages",
+    )?;
+    Ok(messages
+        .into_iter()
+        .filter(|message| thread_ids.contains(&message.thread_id))
+        .collect())
+}
+
 fn reflection_map(
     connection: &Connection,
     root: &str,
@@ -4404,11 +4878,22 @@ fn list_document_annotation_rows(
     .into_iter()
     .filter(|item| excerpt_ids.contains(&item.excerpt_id))
     .collect();
+    let annotation_ids: HashSet<String> = excerpts.iter().map(|item| item.id.clone()).collect();
+    let comment_threads = load_document_comment_threads(connection, root, &annotation_ids)?;
+    let thread_ids: HashSet<String> = comment_threads
+        .iter()
+        .map(|thread| thread.id.clone())
+        .collect();
+    let comment_messages = load_document_comment_messages(connection, root, &thread_ids)?;
+    let comment_authors = load_comment_authors(connection)?;
     Ok(DocumentAnnotationBundle {
         excerpts,
         places,
         reflections,
         review_enrollments,
+        comment_authors,
+        comment_threads,
+        comment_messages,
     })
 }
 
@@ -4597,6 +5082,139 @@ fn upsert_reflection_row(
     )
 }
 
+fn upsert_comment_author_row(connection: &Connection, author: &CommentAuthor) -> CommandResult<()> {
+    connection
+        .execute(
+            "INSERT INTO comment_authors(
+                 id, name, is_default, created_at, updated_at, deleted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 name = excluded.name,
+                 is_default = excluded.is_default,
+                 updated_at = excluded.updated_at,
+                 deleted_at = excluded.deleted_at",
+            params![
+                author.id,
+                author.name,
+                i64::from(author.is_default),
+                author.created_at as i64,
+                author.updated_at as i64,
+                author.deleted_at.map(|value| value as i64),
+            ],
+        )
+        .map_err(|error| sql_error("Cannot save comment author", error))?;
+    Ok(())
+}
+
+fn upsert_pdf_comment_thread_row(
+    connection: &Connection,
+    root: &str,
+    thread: &PdfCommentThread,
+) -> CommandResult<()> {
+    connection
+        .execute(
+            "INSERT INTO pdf_comment_threads(
+                 id, library_root, annotation_id, created_at, updated_at, deleted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+             ON CONFLICT(id) DO UPDATE SET
+                 library_root = excluded.library_root,
+                 annotation_id = excluded.annotation_id,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at,
+                 deleted_at = excluded.deleted_at
+             WHERE pdf_comment_threads.library_root = excluded.library_root",
+            params![
+                thread.id,
+                root,
+                thread.annotation_id,
+                thread.created_at as i64,
+                thread.updated_at as i64,
+                thread.deleted_at.map(|value| value as i64),
+            ],
+        )
+        .map_err(|error| sql_error("Cannot save PDF comment thread", error))?;
+    verify_row_owned(
+        connection,
+        "SELECT count(*) FROM pdf_comment_threads WHERE id = ?1 AND library_root = ?2",
+        &thread.id,
+        root,
+        "PDF comment thread",
+    )
+}
+
+fn upsert_pdf_comment_message_row(
+    connection: &Connection,
+    root: &str,
+    message: &PdfCommentMessage,
+) -> CommandResult<()> {
+    connection
+        .execute(
+            "INSERT INTO pdf_comment_messages(
+                 id, library_root, thread_id, author_id, body,
+                 created_at, updated_at, deleted_at
+             ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+             ON CONFLICT(id) DO UPDATE SET
+                 library_root = excluded.library_root,
+                 thread_id = excluded.thread_id,
+                 author_id = excluded.author_id,
+                 body = excluded.body,
+                 created_at = excluded.created_at,
+                 updated_at = excluded.updated_at,
+                 deleted_at = excluded.deleted_at
+             WHERE pdf_comment_messages.library_root = excluded.library_root",
+            params![
+                message.id,
+                root,
+                message.thread_id,
+                message.author_id,
+                message.body,
+                message.created_at as i64,
+                message.updated_at as i64,
+                message.deleted_at.map(|value| value as i64),
+            ],
+        )
+        .map_err(|error| sql_error("Cannot save PDF comment message", error))?;
+    verify_row_owned(
+        connection,
+        "SELECT count(*) FROM pdf_comment_messages WHERE id = ?1 AND library_root = ?2",
+        &message.id,
+        root,
+        "PDF comment message",
+    )
+}
+
+fn sync_comments_to_excerpt_search(
+    connection: &Connection,
+    root: &str,
+    annotation_id: &str,
+) -> CommandResult<()> {
+    let excerpt = read_excerpt_row(connection, root, annotation_id)?
+        .ok_or_else(|| "PDF annotation was not found".to_owned())?;
+    let comments: String = connection
+        .query_row(
+            "SELECT COALESCE(group_concat(m.body, ' '), '')
+             FROM pdf_comment_messages m
+             JOIN pdf_comment_threads t
+               ON t.id = m.thread_id AND t.library_root = m.library_root
+             WHERE t.library_root = ?1 AND t.annotation_id = ?2
+               AND t.deleted_at IS NULL AND m.deleted_at IS NULL",
+            params![root, annotation_id],
+            |row| row.get(0),
+        )
+        .map_err(|error| sql_error("Cannot build PDF comment search text", error))?;
+    connection
+        .execute(
+            "UPDATE excerpts SET searchable_text = ?1 WHERE library_root = ?2 AND id = ?3",
+            params![
+                build_searchable_text(Some(&excerpt.source_text), Some(&comments)),
+                root,
+                annotation_id,
+            ],
+        )
+        .map_err(|error| sql_error("Cannot update PDF comment search text", error))?;
+    Ok(())
+}
+
 fn upsert_review_enrollment_row(
     connection: &Connection,
     root: &str,
@@ -4712,6 +5330,25 @@ fn set_annotation_entry_deleted_row(
                         upsert_reflection_row(connection, root, &reflection)?;
                     }
                 }
+                connection
+                    .execute(
+                        "UPDATE pdf_comment_threads
+                         SET deleted_at = NULL, updated_at = ?1
+                         WHERE library_root = ?2 AND annotation_id = ?3 AND deleted_at = ?4",
+                        params![now as i64, root, id, previous as i64],
+                    )
+                    .map_err(|error| sql_error("Cannot restore PDF comment thread", error))?;
+                connection
+                    .execute(
+                        "UPDATE pdf_comment_messages
+                         SET deleted_at = NULL, updated_at = ?1
+                         WHERE library_root = ?2 AND deleted_at = ?3 AND thread_id IN (
+                           SELECT id FROM pdf_comment_threads
+                           WHERE library_root = ?2 AND annotation_id = ?4
+                         )",
+                        params![now as i64, root, previous as i64, id],
+                    )
+                    .map_err(|error| sql_error("Cannot restore PDF comment messages", error))?;
             }
             excerpt.updated_at = now;
             if deleted {
@@ -4722,6 +5359,25 @@ fn set_annotation_entry_deleted_row(
                     reflection.updated_at = now;
                     upsert_reflection_row(connection, root, &reflection)?;
                 }
+                connection
+                    .execute(
+                        "UPDATE pdf_comment_messages
+                         SET deleted_at = ?1, updated_at = ?1
+                         WHERE library_root = ?2 AND deleted_at IS NULL AND thread_id IN (
+                           SELECT id FROM pdf_comment_threads
+                           WHERE library_root = ?2 AND annotation_id = ?3 AND deleted_at IS NULL
+                         )",
+                        params![now as i64, root, id],
+                    )
+                    .map_err(|error| sql_error("Cannot delete PDF comment messages", error))?;
+                connection
+                    .execute(
+                        "UPDATE pdf_comment_threads
+                         SET deleted_at = ?1, updated_at = ?1
+                         WHERE library_root = ?2 AND annotation_id = ?3 AND deleted_at IS NULL",
+                        params![now as i64, root, id],
+                    )
+                    .map_err(|error| sql_error("Cannot delete PDF comment thread", error))?;
             }
             let reflection = read_reflection_row(connection, root, id)?;
             upsert_excerpt_row(
@@ -5019,6 +5675,7 @@ fn create_excerpt_rows(
         .map_err(|error| format!("Cannot begin excerpt creation: {error}"))?;
     ensure_v6_root_writable(&transaction, root)?;
     let source_revision = source_revision_for_path(&transaction, root, &draft.relative_path, now)?;
+    let is_pdf = matches!(&draft.anchor, SourceAnchor::PdfText { .. });
     let source_text = draft.source_text;
     let appearance = draft.appearance;
     let excerpt = Excerpt {
@@ -5037,22 +5694,43 @@ fn create_excerpt_rows(
         legacy_title: None,
         legacy_selected_text: Some(source_text),
     };
-    let reflection = reflection_body.map(|body| Reflection {
-        entry_id: excerpt.id.clone(),
-        entry_kind: AnnotationEntryKind::Excerpt,
-        body,
+    let reflection = if is_pdf {
+        None
+    } else {
+        reflection_body.as_ref().map(|body| Reflection {
+            entry_id: excerpt.id.clone(),
+            entry_kind: AnnotationEntryKind::Excerpt,
+            body: body.clone(),
+            created_at: now,
+            updated_at: now,
+            deleted_at: None,
+        })
+    };
+    let comment_thread = (is_pdf && reflection_body.is_some()).then(|| PdfCommentThread {
+        id: excerpt.id.clone(),
+        annotation_id: excerpt.id.clone(),
         created_at: now,
         updated_at: now,
         deleted_at: None,
     });
-    upsert_excerpt_row(
-        &transaction,
-        root,
-        &excerpt,
-        reflection.as_ref().map(|item| item.body.as_str()),
-    )?;
+    let comment_message = comment_thread.as_ref().map(|thread| PdfCommentMessage {
+        id: excerpt.id.clone(),
+        thread_id: thread.id.clone(),
+        author_id: "local-me".to_owned(),
+        body: reflection_body.clone().unwrap_or_default(),
+        created_at: now,
+        updated_at: now,
+        deleted_at: None,
+    });
+    upsert_excerpt_row(&transaction, root, &excerpt, reflection_body.as_deref())?;
     if let Some(reflection) = &reflection {
         upsert_reflection_row(&transaction, root, reflection)?;
+    }
+    if let Some(thread) = &comment_thread {
+        upsert_pdf_comment_thread_row(&transaction, root, thread)?;
+    }
+    if let Some(message) = &comment_message {
+        upsert_pdf_comment_message_row(&transaction, root, message)?;
     }
     refresh_v6_migration_ledger(&transaction, root, now)?;
     transaction
@@ -5061,6 +5739,8 @@ fn create_excerpt_rows(
     Ok(ExcerptCaptureResult {
         excerpt,
         reflection,
+        comment_thread,
+        comment_message,
     })
 }
 
@@ -5090,6 +5770,9 @@ fn document_annotation_bundle_row_count(snapshot: &DocumentAnnotationBundle) -> 
         .saturating_add(snapshot.places.len())
         .saturating_add(snapshot.reflections.len())
         .saturating_add(snapshot.review_enrollments.len())
+        .saturating_add(snapshot.comment_authors.len())
+        .saturating_add(snapshot.comment_threads.len())
+        .saturating_add(snapshot.comment_messages.len())
 }
 
 fn validate_document_annotation_bundle(
@@ -5219,6 +5902,72 @@ fn validate_document_annotation_bundle(
             return Err("Restore payload contains duplicate review enrollments".to_owned());
         }
     }
+
+    let mut author_ids = HashSet::new();
+    for author in &snapshot.comment_authors {
+        if author.deleted_at.is_some() {
+            return Err("Restore payload cannot contain comment author tombstones".to_owned());
+        }
+        validate_annotation_id(&author.id)?;
+        let normalized = sanitize_required_text(
+            author.name.clone(),
+            MAX_COMMENT_AUTHOR_NAME_CHARS,
+            "comment author name",
+        )?;
+        if normalized != author.name {
+            return Err("Restore payload contains a non-canonical comment author".to_owned());
+        }
+        validate_restore_timestamp_order(author.created_at, author.updated_at)?;
+        if !author_ids.insert(author.id.clone()) {
+            return Err("Restore payload contains duplicate comment authors".to_owned());
+        }
+    }
+
+    let mut thread_ids = HashSet::new();
+    for thread in &snapshot.comment_threads {
+        if thread.deleted_at.is_some() {
+            return Err("Restore payload cannot contain comment thread tombstones".to_owned());
+        }
+        validate_annotation_id(&thread.id)?;
+        validate_annotation_id(&thread.annotation_id)?;
+        let parent = snapshot
+            .excerpts
+            .iter()
+            .find(|excerpt| excerpt.id == thread.annotation_id)
+            .ok_or_else(|| "Restore payload contains an orphan comment thread".to_owned())?;
+        if !matches!(&parent.anchor, SourceAnchor::PdfText { .. }) {
+            return Err("Restore payload contains a non-PDF comment thread".to_owned());
+        }
+        validate_restore_timestamp_order(thread.created_at, thread.updated_at)?;
+        if !thread_ids.insert(thread.id.clone()) {
+            return Err("Restore payload contains duplicate comment threads".to_owned());
+        }
+    }
+
+    let mut message_ids = HashSet::new();
+    for message in &snapshot.comment_messages {
+        if message.deleted_at.is_some() {
+            return Err("Restore payload cannot contain comment message tombstones".to_owned());
+        }
+        validate_annotation_id(&message.id)?;
+        validate_annotation_id(&message.thread_id)?;
+        validate_annotation_id(&message.author_id)?;
+        if !thread_ids.contains(&message.thread_id) {
+            return Err("Restore payload contains an orphan comment message".to_owned());
+        }
+        if !author_ids.contains(&message.author_id) {
+            return Err("Restore payload contains a comment with no local author".to_owned());
+        }
+        let normalized =
+            sanitize_required_text(message.body.clone(), MAX_ANNOTATION_NOTE_CHARS, "comment")?;
+        if normalized != message.body {
+            return Err("Restore payload contains a non-canonical comment".to_owned());
+        }
+        validate_restore_timestamp_order(message.created_at, message.updated_at)?;
+        if !message_ids.insert(message.id.clone()) {
+            return Err("Restore payload contains duplicate comment messages".to_owned());
+        }
+    }
     Ok(snapshot)
 }
 
@@ -5286,6 +6035,18 @@ fn restore_document_annotation_rows(
     for enrollment in &snapshot.review_enrollments {
         upsert_review_enrollment_row(&transaction, root, enrollment)?;
     }
+    for author in &snapshot.comment_authors {
+        upsert_comment_author_row(&transaction, author)?;
+    }
+    for thread in &snapshot.comment_threads {
+        upsert_pdf_comment_thread_row(&transaction, root, thread)?;
+    }
+    for message in &snapshot.comment_messages {
+        upsert_pdf_comment_message_row(&transaction, root, message)?;
+    }
+    for thread in &snapshot.comment_threads {
+        sync_comments_to_excerpt_search(&transaction, root, &thread.annotation_id)?;
+    }
     let refreshed_at = snapshot
         .excerpts
         .iter()
@@ -5298,6 +6059,8 @@ fn restore_document_annotation_rows(
                 .iter()
                 .map(|item| item.updated_at),
         )
+        .chain(snapshot.comment_threads.iter().map(|item| item.updated_at))
+        .chain(snapshot.comment_messages.iter().map(|item| item.updated_at))
         .max()
         .unwrap_or_else(now_millis);
     refresh_v6_migration_ledger(&transaction, root, refreshed_at)?;
@@ -5322,6 +6085,25 @@ fn clear_annotation_rows(
             "Document annotation bundle exceeds the {MAX_DOCUMENT_ANNOTATION_BUNDLE_ROWS}-row limit"
         ));
     }
+    transaction
+        .execute(
+            "DELETE FROM pdf_comment_messages WHERE library_root = ?1 AND thread_id IN (
+                 SELECT id FROM pdf_comment_threads
+                 WHERE library_root = ?1 AND annotation_id IN (
+                   SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
+                 )
+             )",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document comment messages: {error}"))?;
+    transaction
+        .execute(
+            "DELETE FROM pdf_comment_threads WHERE library_root = ?1 AND annotation_id IN (
+                 SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
+             )",
+            params![root, relative_path],
+        )
+        .map_err(|error| format!("Cannot clear document comment threads: {error}"))?;
     transaction
         .execute(
             "DELETE FROM annotations WHERE library_root = ?1 AND relative_path = ?2",
@@ -9348,6 +10130,66 @@ mod tests {
     }
 
     #[test]
+    fn pdf_excerpt_note_becomes_the_first_comment_message() {
+        let state = UserState::in_memory().expect("state");
+        let mut connection = locked(&state);
+        insert_document_row(
+            &connection,
+            ROOT,
+            "paper.pdf",
+            "pmd5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let mut draft = sample_excerpt_draft("pdf-note", "paper.pdf");
+        draft.anchor = SourceAnchor::PdfText {
+            page: 4,
+            view: "original".to_owned(),
+            quote: TextQuoteSelector {
+                exact: "hello world".to_owned(),
+                prefix: String::new(),
+                suffix: String::new(),
+            },
+            rects: vec![],
+            page_width: Some(600.0),
+            page_height: Some(800.0),
+        };
+        let result = create_excerpt_rows(
+            &mut connection,
+            ROOT,
+            draft,
+            Some("  PDF 首条评论  ".to_owned()),
+            1_000,
+        )
+        .expect("PDF capture");
+        assert!(result.reflection.is_none());
+        assert_eq!(
+            result
+                .comment_thread
+                .as_ref()
+                .map(|item| item.annotation_id.as_str()),
+            Some("pdf-note")
+        );
+        assert_eq!(
+            result
+                .comment_message
+                .as_ref()
+                .map(|item| item.body.as_str()),
+            Some("PDF 首条评论")
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM reflections"),
+            0
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM pdf_comment_threads"),
+            1
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM pdf_comment_messages"),
+            1
+        );
+    }
+
+    #[test]
     fn clear_restore_round_trips_all_v6_rows_and_review_state() {
         let state = UserState::in_memory().expect("state");
         let mut connection = locked(&state);
@@ -10094,6 +10936,145 @@ mod tests {
         }
         // 转换缓存文件保持原样（它不是迁移的删除对象）。
         assert!(cache_dir.path().join(LEGACY_CACHE_DB_FILE).is_file());
+    }
+
+    #[test]
+    fn v8_migrates_only_live_pdf_reflections_into_threads() {
+        let connection = Connection::open_in_memory().expect("memory db");
+        connection
+            .execute_batch(
+                "CREATE TABLE excerpts(
+                     id TEXT PRIMARY KEY,
+                     library_root TEXT NOT NULL,
+                     anchor_json TEXT NOT NULL,
+                     deleted_at INTEGER
+                 );
+                 CREATE TABLE reflections(
+                     entry_id TEXT PRIMARY KEY,
+                     entry_kind TEXT NOT NULL,
+                     library_root TEXT NOT NULL,
+                     body TEXT NOT NULL,
+                     created_at INTEGER NOT NULL,
+                     updated_at INTEGER NOT NULL,
+                     deleted_at INTEGER
+                 );
+                 INSERT INTO excerpts VALUES
+                   ('pdf-1', 'C:/library', '{\"format\":\"pdfText\"}', NULL),
+                   ('md-1', 'C:/library', '{\"format\":\"markdown\"}', NULL);
+                 INSERT INTO reflections VALUES
+                   ('pdf-1', 'excerpt', 'C:/library', '旧 PDF 感悟', 10, 20, NULL),
+                   ('md-1', 'excerpt', 'C:/library', '保留的 Markdown 感悟', 11, 21, NULL);",
+            )
+            .expect("v7 fixture");
+
+        migrate_to_v8(&connection).expect("v8 migration");
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM pdf_comment_threads"),
+            1
+        );
+        assert_eq!(
+            count_rows(&connection, "SELECT count(*) FROM pdf_comment_messages"),
+            1
+        );
+        let migrated_body: String = connection
+            .query_row("SELECT body FROM pdf_comment_messages", [], |row| {
+                row.get(0)
+            })
+            .expect("migrated body");
+        assert_eq!(migrated_body, "旧 PDF 感悟");
+        let pdf_deleted: Option<i64> = connection
+            .query_row(
+                "SELECT deleted_at FROM reflections WHERE entry_id = 'pdf-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("pdf reflection tombstone");
+        let markdown_deleted: Option<i64> = connection
+            .query_row(
+                "SELECT deleted_at FROM reflections WHERE entry_id = 'md-1'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("markdown reflection");
+        assert_eq!(pdf_deleted, Some(20));
+        assert_eq!(markdown_deleted, None);
+    }
+
+    #[test]
+    fn pdf_comment_rows_follow_annotation_delete_and_restore() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        insert_document_row(
+            &connection,
+            ROOT,
+            "paper.pdf",
+            "pmd5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        );
+        let mut draft = sample_excerpt_draft("pdf-comment", "paper.pdf");
+        draft.anchor = SourceAnchor::PdfText {
+            page: 2,
+            view: "original".to_owned(),
+            quote: TextQuoteSelector {
+                exact: "hello world".to_owned(),
+                prefix: String::new(),
+                suffix: String::new(),
+            },
+            rects: vec![],
+            page_width: Some(600.0),
+            page_height: Some(800.0),
+        };
+        persist_excerpt(&connection, draft, 1_000);
+        let thread = PdfCommentThread {
+            id: "thread-1".to_owned(),
+            annotation_id: "pdf-comment".to_owned(),
+            created_at: 1_100,
+            updated_at: 1_100,
+            deleted_at: None,
+        };
+        let message = PdfCommentMessage {
+            id: "message-1".to_owned(),
+            thread_id: thread.id.clone(),
+            author_id: "local-me".to_owned(),
+            body: "第一条评论".to_owned(),
+            created_at: 1_100,
+            updated_at: 1_100,
+            deleted_at: None,
+        };
+        upsert_pdf_comment_thread_row(&connection, ROOT, &thread).expect("thread");
+        upsert_pdf_comment_message_row(&connection, ROOT, &message).expect("message");
+        sync_comments_to_excerpt_search(&connection, ROOT, "pdf-comment").expect("search");
+        let before = list_document_annotation_rows(&connection, ROOT, "paper.pdf").expect("list");
+        assert_eq!(before.comment_threads, vec![thread.clone()]);
+        assert_eq!(before.comment_messages, vec![message.clone()]);
+
+        set_annotation_entry_deleted_row(
+            &connection,
+            ROOT,
+            "pdf-comment",
+            &AnnotationEntryKind::Excerpt,
+            true,
+            2_000,
+        )
+        .expect("delete");
+        let deleted =
+            list_document_annotation_rows(&connection, ROOT, "paper.pdf").expect("deleted");
+        assert!(deleted.comment_threads.is_empty());
+        assert!(deleted.comment_messages.is_empty());
+
+        set_annotation_entry_deleted_row(
+            &connection,
+            ROOT,
+            "pdf-comment",
+            &AnnotationEntryKind::Excerpt,
+            false,
+            3_000,
+        )
+        .expect("restore");
+        let restored =
+            list_document_annotation_rows(&connection, ROOT, "paper.pdf").expect("restored");
+        assert_eq!(restored.comment_threads.len(), 1);
+        assert_eq!(restored.comment_messages.len(), 1);
+        assert_eq!(restored.comment_messages[0].body, "第一条评论");
     }
 
     /// 数据目录与缓存目录解析为同一文件（目录重合）→ 不迁移不复制。

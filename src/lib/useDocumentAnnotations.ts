@@ -2,13 +2,16 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
   clearDocumentAnnotations,
   createExcerpt,
+  createPdfCommentThread,
   deleteAnnotation,
   listDocumentAnnotations,
   restoreAnnotationEntry,
   restoreDocumentAnnotations,
+  replyToPdfComment,
   setReviewEnrollment,
   updateExcerptAppearance,
   upsertAnnotation,
+  upsertCommentAuthor,
   upsertReflection,
   type Annotation,
   type AnnotationColor,
@@ -21,7 +24,13 @@ import {
   type DocumentAnnotationBundle,
   type ExcerptDraft,
 } from "./annotationModel";
-import { isAnnotationMarkKind } from "./annotations";
+import { createAnnotationId, isAnnotationMarkKind } from "./annotations";
+import {
+  defaultCommentAuthor,
+  type CommentAuthor,
+  type PdfCommentMessage,
+  type PdfCommentThread,
+} from "./comments/commentModel";
 
 const MAX_UNDO = 20;
 
@@ -32,6 +41,18 @@ type UndoEntry =
 
 function emptyBundle(): DocumentAnnotationBundle {
   return { excerpts: [], places: [], reflections: [], reviewEnrollments: [] };
+}
+
+function commentAuthors(bundle: DocumentAnnotationBundle): CommentAuthor[] {
+  return bundle.commentAuthors ?? [];
+}
+
+function commentThreads(bundle: DocumentAnnotationBundle): PdfCommentThread[] {
+  return bundle.commentThreads ?? [];
+}
+
+function commentMessages(bundle: DocumentAnnotationBundle): PdfCommentMessage[] {
+  return bundle.commentMessages ?? [];
 }
 
 function hasBundleEntries(bundle: DocumentAnnotationBundle): boolean {
@@ -208,9 +229,25 @@ export function useDocumentAnnotations(relativePath: string | null) {
                   (item) => item.entryId !== captured.reflection?.entryId,
                 ),
               ]
-            : bundleRef.current.reflections.filter(
+              : bundleRef.current.reflections.filter(
                 (item) => item.entryId !== captured.excerpt.id,
               ),
+          commentThreads: captured.commentThread
+            ? [
+                captured.commentThread,
+                ...commentThreads(bundleRef.current).filter(
+                  (item) => item.id !== captured.commentThread?.id,
+                ),
+              ]
+            : commentThreads(bundleRef.current),
+          commentMessages: captured.commentMessage
+            ? [
+                ...commentMessages(bundleRef.current).filter(
+                  (item) => item.id !== captured.commentMessage?.id,
+                ),
+                captured.commentMessage,
+              ]
+            : commentMessages(bundleRef.current),
         };
         commitBundle(next);
         dataVersionRef.current += 1;
@@ -228,6 +265,11 @@ export function useDocumentAnnotations(relativePath: string | null) {
         const existing = annotationsRef.current.find((item) => item.id === id);
         if (!existing) return;
         const entryKind = entryKindForAnnotation(existing);
+        const removedThreadIds = new Set(
+          commentThreads(bundleRef.current)
+            .filter((thread) => thread.annotationId === id)
+            .map((thread) => thread.id),
+        );
         await deleteAnnotation(id);
         if (documentEpochRef.current !== epoch) return;
         commitBundle({
@@ -236,6 +278,12 @@ export function useDocumentAnnotations(relativePath: string | null) {
           reflections: bundleRef.current.reflections.filter((item) => item.entryId !== id),
           reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
             (item) => item.excerptId !== id,
+          ),
+          commentThreads: commentThreads(bundleRef.current).filter(
+            (thread) => thread.annotationId !== id,
+          ),
+          commentMessages: commentMessages(bundleRef.current).filter(
+            (message) => !removedThreadIds.has(message.threadId),
           ),
         });
         dataVersionRef.current += 1;
@@ -273,6 +321,11 @@ export function useDocumentAnnotations(relativePath: string | null) {
       if (!entry) return false;
 
       if (entry.type === "create") {
+        const removedThreadIds = new Set(
+          commentThreads(bundleRef.current)
+            .filter((thread) => thread.annotationId === entry.id)
+            .map((thread) => thread.id),
+        );
         await deleteAnnotation(entry.id);
         if (documentEpochRef.current !== epoch) return true;
         commitBundle({
@@ -281,6 +334,12 @@ export function useDocumentAnnotations(relativePath: string | null) {
           reflections: bundleRef.current.reflections.filter((item) => item.entryId !== entry.id),
           reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
             (item) => item.excerptId !== entry.id,
+          ),
+          commentThreads: commentThreads(bundleRef.current).filter(
+            (thread) => thread.annotationId !== entry.id,
+          ),
+          commentMessages: commentMessages(bundleRef.current).filter(
+            (message) => !removedThreadIds.has(message.threadId),
           ),
         });
         dataVersionRef.current += 1;
@@ -364,6 +423,105 @@ export function useDocumentAnnotations(relativePath: string | null) {
     [commitBundle, runMutation],
   );
 
+  const savePdfComment = useCallback(
+    async (annotationId: string, body: string, authorId?: string) => {
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const author = authorId ?? defaultCommentAuthor(commentAuthors(bundleRef.current))?.id;
+        if (!author) throw new Error("请先创建一个本地评论身份");
+        const saved = await createPdfCommentThread({
+          threadId: createAnnotationId(),
+          messageId: createAnnotationId(),
+          annotationId,
+          authorId: author,
+          body,
+        });
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          commentThreads: [
+            saved.thread,
+            ...commentThreads(bundleRef.current).filter(
+              (item) => item.id !== saved.thread.id,
+            ),
+          ],
+          commentMessages: [
+            ...commentMessages(bundleRef.current).filter(
+              (item) => item.id !== saved.message.id,
+            ),
+            saved.message,
+          ],
+        });
+        dataVersionRef.current += 1;
+        return saved;
+      });
+    },
+    [commitBundle, runMutation],
+  );
+
+  const replyPdfComment = useCallback(
+    async (threadId: string, body: string, authorId?: string) => {
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const author = authorId ?? defaultCommentAuthor(commentAuthors(bundleRef.current))?.id;
+        if (!author) throw new Error("请先创建一个本地评论身份");
+        const saved = await replyToPdfComment({
+          messageId: createAnnotationId(),
+          threadId,
+          authorId: author,
+          body,
+        });
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          commentThreads: [
+            saved.thread,
+            ...commentThreads(bundleRef.current).filter(
+              (item) => item.id !== saved.thread.id,
+            ),
+          ],
+          commentMessages: [
+            ...commentMessages(bundleRef.current).filter(
+              (item) => item.id !== saved.message.id,
+            ),
+            saved.message,
+          ],
+        });
+        dataVersionRef.current += 1;
+        return saved;
+      });
+    },
+    [commitBundle, runMutation],
+  );
+
+  const saveCommentAuthor = useCallback(
+    async (name: string, makeDefault = true) => {
+      const epoch = documentEpochRef.current;
+      return runMutation(async () => {
+        const saved = await upsertCommentAuthor({
+          id: createAnnotationId(),
+          name,
+          makeDefault,
+        });
+        if (documentEpochRef.current !== epoch) return saved;
+        commitBundle({
+          ...bundleRef.current,
+          commentAuthors: [
+            ...commentAuthors(bundleRef.current)
+              .filter((item) => item.id !== saved.id)
+              .map((item) =>
+                saved.isDefault && item.isDefault ? { ...item, isDefault: false } : item,
+              ),
+            saved,
+          ],
+        });
+        dataVersionRef.current += 1;
+        return saved;
+      });
+    },
+    [commitBundle, runMutation],
+  );
+
   const setEnrollment = useCallback(
     async (excerptId: string, enabled: boolean) => {
       const epoch = documentEpochRef.current;
@@ -400,6 +558,9 @@ export function useDocumentAnnotations(relativePath: string | null) {
     save,
     saveExcerpt,
     saveReflection,
+    savePdfComment,
+    replyPdfComment,
+    saveCommentAuthor,
     setEnrollment,
     remove,
     clearAll,
