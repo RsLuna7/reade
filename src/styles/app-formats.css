@@ -332,20 +332,51 @@
 }
 .article-error-card button:hover { border-color: var(--accent); }
 
-.article-shell--pdf { max-width: none; padding-right: 28px; padding-left: 28px; }
+.article-shell--pdf {
+  max-width: none;
+  /* Inline size of this shell is the reading column, so the toolbar can
+     stick to that width instead of the wide page strip. */
+  container-type: inline-size;
+  --pdf-shell-inline-pad: 28px;
+  padding-right: var(--pdf-shell-inline-pad);
+  padding-left: var(--pdf-shell-inline-pad);
+}
 .article-shell--pdf .article-header { max-width: 920px; margin-right: auto; margin-left: auto; }
 
 .pdf-reader { min-width: 0; color: var(--ink); }
-.pdf-toolbar {
+/* The page strip can be wider than the column and scroll with .reading-scroll.
+   The reader has to span that strip, or a sticky toolbar is clamped to the
+   column box and slides away with the first screen of content. */
+.pdf-reader:has(.pdf-original-layout[data-comment-rail="true"]) {
+  width: max-content;
+  min-width: 100%;
+}
+.pdf-toolbar-anchor {
   position: sticky;
   z-index: 4;
   top: 12px;
+  left: var(--pdf-shell-inline-pad, 0px);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 100%;
+  width: 100cqi;
+  margin-bottom: 24px;
+  pointer-events: none;
+}
+.pdf-toolbar-anchor .pdf-region-hint {
+  position: static;
+  margin: 10px 0 0;
+  pointer-events: auto;
+}
+.pdf-toolbar {
   display: flex;
   flex-wrap: wrap;
   width: fit-content;
   max-width: 100%;
-  margin: 0 auto 24px;
+  margin: 0;
   padding: 5px;
+  pointer-events: auto;
   gap: 6px;
   border: 1px solid var(--line-strong);
   border-radius: 11px;
@@ -763,6 +794,14 @@
   line-height: 1.5;
 }
 .pdf-comment-draft textarea::placeholder { color: var(--muted); }
+/* Comment fields show focus with the accent border, not the UA outline. */
+.pdf-comment-draft textarea:focus-visible,
+.pdf-comment-composer textarea:focus-visible,
+.pdf-comment-edit:focus-visible {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 22%, transparent);
+}
 .pdf-comment-draft-actions {
   display: flex;
   justify-content: flex-end;

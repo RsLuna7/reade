@@ -284,6 +284,19 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.pdf-comment-edit-cancel\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/s);
   });
 
+  it("keeps the PDF toolbar centered on the reading column when the page strip scrolls sideways", () => {
+    expect(css).toMatch(/\.article-shell--pdf\s*\{[^}]*container-type:\s*inline-size/s);
+    expect(css).toMatch(/\.pdf-toolbar-anchor\s*\{[^}]*position:\s*sticky/s);
+    expect(css).toMatch(/\.pdf-toolbar-anchor\s*\{[^}]*left:\s*var\(--pdf-shell-inline-pad,\s*0px\)/s);
+    expect(css).toMatch(/\.pdf-toolbar-anchor\s*\{[^}]*width:\s*100cqi/s);
+    expect(css).toMatch(
+      /\.pdf-reader:has\(\.pdf-original-layout\[data-comment-rail="true"\]\)\s*\{[^}]*width:\s*max-content/s,
+    );
+    expect(css).toMatch(
+      /\.pdf-reader:has\(\.pdf-original-layout\[data-comment-rail="true"\]\)\s*\{[^}]*min-width:\s*100%/s,
+    );
+  });
+
   it("scales PDF pages via a live width variable during wheel-zoom", () => {
     expect(css).toMatch(
       /\.pdf-page\s*\{[^}]*width:\s*var\(--pdf-live-page-width,\s*var\(--pdf-page-width\)\)/s,

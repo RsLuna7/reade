@@ -229,6 +229,7 @@ import {
   type PendingSelection,
 } from "./lib/annotationCapture";
 import { commentTargetForSelection } from "./lib/comments/commentPlacement";
+import { commentDraftPlacement } from "./lib/comments/commentDraftPlacement";
 import { defaultCommentAuthor } from "./lib/comments/commentModel";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
@@ -448,6 +449,9 @@ function LibrarySwitcherPopover({
 
 
 export { MotionNotice, ReadingSettingsPanel, TocNavigation };
+
+/** CSS Custom Highlight for the passage a new PDF comment is being written on. */
+const COMMENT_DRAFT_HIGHLIGHT = "reade-comment-draft";
 
 function App() {
   const snapshot = useReaderStore((state) => state.snapshot);
@@ -2035,10 +2039,26 @@ function App() {
 
   useEffect(() => {
     if (pdfCommentsEnabled) return;
+    clearSentenceHighlight(COMMENT_DRAFT_HIGHLIGHT);
     commentSelectionRef.current = null;
     setCommentComposerOpen(false);
     setCommentDraft("");
   }, [pdfCommentsEnabled]);
+
+  const cancelPdfCommentDraft = useCallback(() => {
+    clearSentenceHighlight(COMMENT_DRAFT_HIGHLIGHT);
+    commentSelectionRef.current = null;
+    setCommentComposerOpen(false);
+    setCommentDraft("");
+    setPendingSelection(null);
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  // A draft belongs to the passage it was opened on; switching documents drops it.
+  useEffect(() => {
+    if (!commentComposerOpenRef.current) return;
+    cancelPdfCommentDraft();
+  }, [cancelPdfCommentDraft, currentPath]);
 
   const commitPdfComment = useCallback(async () => {
     const pending = commentSelectionRef.current ?? pendingSelection;
@@ -2066,6 +2086,7 @@ function App() {
         await savePdfComment(captured.excerpt.id, body, undefined, { anchorCreated: true });
         setActivePdfCommentAnnotationId(captured.excerpt.id);
       }
+      clearSentenceHighlight(COMMENT_DRAFT_HIGHLIGHT);
       commentSelectionRef.current = null;
       setCommentComposerOpen(false);
       setCommentDraft("");
@@ -5645,6 +5666,15 @@ function App() {
             pdfCommentsEnabled && currentContent?.kind === "pdf" && pdfViewMode === "original"
               ? () => {
                   commentSelectionRef.current = pendingSelection;
+                  // The draft takes focus and collapses the selection; keep
+                  // the commented passage visibly marked until save or cancel.
+                  const selection = window.getSelection();
+                  if (selection && selection.rangeCount > 0) {
+                    applySentenceHighlight(
+                      COMMENT_DRAFT_HIGHLIGHT,
+                      selection.getRangeAt(0).cloneRange(),
+                    );
+                  }
                   setCommentDraft("");
                   setCommentComposerOpen(true);
                 }
@@ -5665,7 +5695,10 @@ function App() {
         {commentComposerOpen && (commentSelectionRef.current ?? pendingSelection) ? (
           <form
             className="pdf-comment-draft"
-            style={{ left: toolbarPos.x, top: toolbarPos.y }}
+            style={commentDraftPlacement(
+              (commentSelectionRef.current ?? pendingSelection)!.rect,
+              { width: window.innerWidth, height: window.innerHeight },
+            )}
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {
               event.preventDefault();
@@ -5675,22 +5708,24 @@ function App() {
             <label>
               <span className="sr-only">批注</span>
               <textarea
+                autoFocus
                 value={commentDraft}
-                placeholder="写下批注"
+                placeholder="写下批注（Ctrl+Enter 保存，Esc 取消）"
                 onChange={(event) => setCommentDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    cancelPdfCommentDraft();
+                  } else if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
+                    event.preventDefault();
+                    void commitPdfComment();
+                  }
+                }}
               />
             </label>
             <div className="pdf-comment-draft-actions">
-              <button
-                type="button"
-                onClick={() => {
-                  commentSelectionRef.current = null;
-                  setCommentComposerOpen(false);
-                  setCommentDraft("");
-                  setPendingSelection(null);
-                  window.getSelection()?.removeAllRanges();
-                }}
-              >
+              <button type="button" onClick={cancelPdfCommentDraft}>
                 取消
               </button>
               <button type="submit" disabled={!commentDraft.trim()}>保存</button>

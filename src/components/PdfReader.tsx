@@ -449,6 +449,24 @@ function findReadingRoot(host: HTMLElement | null): HTMLElement | null {
   return host?.closest<HTMLElement>(".reading-scroll") ?? null;
 }
 
+/**
+ * Width the page and the comment rail share. The reader grows past the
+ * column while the rail is shown, so measure the PDF shell's content box.
+ */
+function commentColumnWidth(reader: HTMLElement): number {
+  const shell = reader.closest<HTMLElement>(".article-shell--pdf");
+  if (shell) {
+    const style = window.getComputedStyle(shell);
+    const width =
+      shell.clientWidth -
+      (Number.parseFloat(style.paddingLeft) || 0) -
+      (Number.parseFloat(style.paddingRight) || 0);
+    if (width > 0) return width;
+  }
+  const scrollWidth = findReadingRoot(reader)?.clientWidth ?? 0;
+  return scrollWidth > 0 ? scrollWidth : reader.clientWidth;
+}
+
 function pdfReferenceLine(scrollRoot: HTMLElement, toolbar: HTMLElement | null): number {
   const viewport = scrollRoot.getBoundingClientRect();
   const toolbarBottom = toolbar?.getBoundingClientRect().bottom ?? viewport.top;
@@ -1140,9 +1158,8 @@ export function PdfReader({
     if (!reader) return;
     const measure = () => {
       const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
-      const scrollWidth = findReadingRoot(reader)?.clientWidth ?? 0;
       const available = hasPdfComments
-        ? (scrollWidth > 0 ? scrollWidth : reader.clientWidth)
+        ? commentColumnWidth(reader)
         : (pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth);
       setSpreadCapable(canSpread(window.innerWidth, available));
     };
@@ -1645,10 +1662,19 @@ export function PdfReader({
       scaleFollowsWidthRef.current = true;
       // 适宽语义(plan-pdf-spread §2):双页 = 两页 + 列距填满容器。
       const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
-      const scrollWidth = findReadingRoot(reader)?.clientWidth ?? 0;
       const availableWidth = hasPdfComments
-        ? (scrollWidth > 0 ? scrollWidth : reader.clientWidth)
+        ? commentColumnWidth(reader)
         : (pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth);
+      // Refit is a layout change like zoom: keep the passage under the
+      // reading line (the rail appearing must not jump pages).
+      if (!pendingPositionRef.current && reader.querySelector(".pdf-page")) {
+        pendingPositionRef.current = captureCurrentPosition(
+          reader,
+          toolbarRef.current,
+          currentPageRef.current,
+          ".pdf-page",
+        );
+      }
       const nativeForFit = commentFitNativeWidth(
         nativeWidth,
         spreadActive,
@@ -2046,6 +2072,7 @@ export function PdfReader({
   }, [mode, pageSelector, reading, scale, session, setActivePage]);
 
   return <div className={`pdf-reader${regionSelect ? " pdf-region-select-active" : ""}`} ref={rootRef}>
+    <div className="pdf-toolbar-anchor">
     <div className="pdf-toolbar" role="toolbar" aria-label="PDF 阅读工具" ref={toolbarRef}>
       <div className="pdf-toolbar-group pdf-mode-toggle" data-mode={mode}>
         <span className="pdf-mode-indicator" aria-hidden="true" />
@@ -2191,6 +2218,7 @@ export function PdfReader({
         {calibrateError && <span className="pdf-page-calibrate-error">{calibrateError}</span>}
       </div>
     )}
+    </div>
     {error && (
       <div className="pdf-state pdf-state--error">
         {error}

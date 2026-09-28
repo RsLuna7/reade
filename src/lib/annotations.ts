@@ -848,6 +848,80 @@ export function createBookmarkAnnotation(input: {
 
 export type RectLike = Pick<DOMRect, "left" | "top" | "width" | "height">;
 
+/** How many em-widths of same-line gap still count as one highlight run. */
+const INLINE_HIGHLIGHT_GAP_EM = 1.6;
+
+function verticalOverlap(left: AnnotationRect, right: AnnotationRect): number {
+  return Math.min(left.y + left.h, right.y + right.h) - Math.max(left.y, right.y);
+}
+
+function unionAnnotationRect(left: AnnotationRect, right: AnnotationRect): AnnotationRect {
+  const x = Math.min(left.x, right.x);
+  const y = Math.min(left.y, right.y);
+  return {
+    x,
+    y,
+    w: Math.max(left.x + left.w, right.x + right.w) - x,
+    h: Math.max(left.y + left.h, right.y + right.h) - y,
+  };
+}
+
+/**
+ * PDF text runs (mixed CJK and Latin) each produce their own client rect.
+ * Join runs on the same line when the gap is only a glyph or a word space,
+ * so one selection paints as one bar per line.
+ */
+export function mergeInlineAnnotationRects(
+  rects: readonly AnnotationRect[],
+  pageAspect = Math.SQRT2,
+): AnnotationRect[] {
+  const usable = rects.filter(
+    (rect) =>
+      Number.isFinite(rect.x) &&
+      Number.isFinite(rect.y) &&
+      Number.isFinite(rect.w) &&
+      Number.isFinite(rect.h) &&
+      rect.w > 0 &&
+      rect.h > 0,
+  );
+  const ordered = usable
+    .map((rect, index) => ({ rect, index }))
+    .sort((left, right) => left.rect.y - right.rect.y || left.rect.x - right.rect.x || left.index - right.index);
+  const merged: AnnotationRect[] = [];
+  let line: AnnotationRect[] = [];
+  const flush = () => {
+    if (!line.length) return;
+    const byX = line.slice().sort((left, right) => left.x - right.x);
+    let current = byX[0];
+    if (!current) return;
+    for (const rect of byX.slice(1)) {
+      const gap = rect.x - (current.x + current.w);
+      const allowance = Math.max(current.h, rect.h) * pageAspect * INLINE_HIGHLIGHT_GAP_EM;
+      if (gap <= allowance) {
+        current = unionAnnotationRect(current, rect);
+      } else {
+        merged.push(current);
+        current = rect;
+      }
+    }
+    merged.push(current);
+    line = [];
+  };
+  for (const item of ordered) {
+    const previous = line[line.length - 1];
+    const overlap = previous ? verticalOverlap(previous, item.rect) : 0;
+    const minHeight = previous ? Math.min(previous.h, item.rect.h) : 0;
+    if (previous && overlap >= minHeight * 0.45) {
+      line.push(item.rect);
+      continue;
+    }
+    flush();
+    line.push(item.rect);
+  }
+  flush();
+  return merged;
+}
+
 export function normalizePdfRects(
   clientRects: ArrayLike<RectLike>,
   pageRect: RectLike,
@@ -865,7 +939,8 @@ export function normalizePdfRects(
       h: rect.height / height,
     });
   }
-  return rects.slice(0, 64);
+  const aspect = height > 0 && width > 0 ? height / width : Math.SQRT2;
+  return mergeInlineAnnotationRects(rects, aspect).slice(0, 64);
 }
 
 export interface ResolvedPdfHighlight {
@@ -965,7 +1040,7 @@ export function resolvePdfHighlightRects(input: {
     }
     if (stored.length) {
       return {
-        rects: stored,
+        rects: mergeInlineAnnotationRects(stored, pageRect && pageRect.width > 0 ? pageRect.height / pageRect.width : Math.SQRT2),
         method: null,
         resolution: { status: "geometricFallback", page },
       };
@@ -977,7 +1052,7 @@ export function resolvePdfHighlightRects(input: {
     };
   }
   if (stored.length) {
-    return { rects: stored, method: null, resolution: { status: "unchecked" } };
+    return { rects: mergeInlineAnnotationRects(stored), method: null, resolution: { status: "unchecked" } };
   }
   return {
     rects: [],

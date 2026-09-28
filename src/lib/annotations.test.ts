@@ -141,6 +141,35 @@ describe("annotations helpers", () => {
     expect(atScale1).toEqual(atScale2);
     expect(atScale1).toEqual([{ x: 0.1, y: 50 / 700, w: 0.2, h: 20 / 700 }]);
   });
+
+  it("joins same-line pdf text runs into one highlight bar", () => {
+    const page = { left: 0, top: 0, width: 500, height: 700 };
+    const rects = normalizePdfRects(
+      [
+        { left: 40, top: 100, width: 48, height: 18 },
+        { left: 92, top: 102, width: 36, height: 14 },
+        { left: 132, top: 100, width: 40, height: 18 },
+        { left: 40, top: 140, width: 80, height: 18 },
+      ],
+      page,
+    );
+    expect(rects).toHaveLength(2);
+    expect(rects[0]?.x).toBeCloseTo(40 / 500);
+    expect(rects[0]?.w).toBeCloseTo((172 - 40) / 500);
+    expect(rects[1]?.y).toBeCloseTo(140 / 700);
+  });
+
+  it("keeps a wide same-line hole as two highlight bars", () => {
+    const page = { left: 0, top: 0, width: 500, height: 700 };
+    const rects = normalizePdfRects(
+      [
+        { left: 40, top: 100, width: 40, height: 18 },
+        { left: 200, top: 100, width: 40, height: 18 },
+      ],
+      page,
+    );
+    expect(rects).toHaveLength(2);
+  });
 });
 
 describe("findTextQuote disambiguation", () => {

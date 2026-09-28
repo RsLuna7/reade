@@ -1095,6 +1095,11 @@
   background-color: var(--selection);
 }
 
+/* 正在写批注的选区：输入框拿走焦点后选区会折叠，用它保留落点。 */
+::highlight(reade-comment-draft) {
+  background-color: var(--selection);
+}
+
 ::highlight(reade-find-match) {
   background-color: color-mix(in srgb, var(--accent-soft) 72%, transparent);
 }
