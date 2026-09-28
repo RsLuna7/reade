@@ -7,6 +7,7 @@ import {
   type PdfCommentMessage,
   type PdfCommentThread,
 } from "../../lib/comments/commentModel";
+import { pdfCommentErrorMessage } from "../../lib/comments/commentErrors";
 import { CommentAvatar } from "./CommentAvatar";
 
 function commentTime(timestamp: number): string {
@@ -96,7 +97,7 @@ export function PdfCommentConversation({
       setEditingId(null);
       setEditingBody("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(pdfCommentErrorMessage(cause));
     } finally {
       setSaving(false);
     }
@@ -109,7 +110,7 @@ export function PdfCommentConversation({
     try {
       await onDeleteMessage(messageId);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(pdfCommentErrorMessage(cause));
     } finally {
       setSaving(false);
     }
@@ -131,7 +132,7 @@ export function PdfCommentConversation({
       await onSubmit(body, authorId);
       setDraft("");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : String(cause));
+      setError(pdfCommentErrorMessage(cause));
     } finally {
       setSaving(false);
     }

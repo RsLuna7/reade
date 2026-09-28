@@ -847,6 +847,52 @@ describe("annotation mark editing (B1)", () => {
     expect(screen.queryByRole("dialog", { name: "编辑标注" })).not.toBeInTheDocument();
     selection.removeAllRanges();
   });
+
+  // The click the browser fires after a drag lands where the mouse was
+  // released, often just past the last selected glyph.
+  it.each([
+    ["a drag that ends past the selected text", { shiftKey: false }, { x: 10, y: 50 }],
+    ["a Shift+click that extends the selection", { shiftKey: true }, { x: 180, y: 120 }],
+  ])("keeps the selection after %s", async (_label, modifiers, down) => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body p")).not.toBeNull();
+    });
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.getClientRects = () =>
+      [{ left: 0, right: 100, top: 40, bottom: 60 }] as unknown as DOMRectList;
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.mouseDown(paragraph, { clientX: down.x, clientY: down.y, ...modifiers });
+    fireEvent.click(paragraph, { clientX: 180, clientY: 120, ...modifiers });
+    expect(selection.isCollapsed).toBe(false);
+    selection.removeAllRanges();
+  });
+
+  it("still collapses a leftover selection on a plain click outside it", async () => {
+    setMarkdownState();
+    const view = render(<App />);
+    await waitFor(() => {
+      expect(view.container.querySelector(".markdown-body p")).not.toBeNull();
+    });
+    const paragraph = view.container.querySelector<HTMLElement>(".markdown-body p")!;
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.getClientRects = () =>
+      [{ left: 0, right: 100, top: 40, bottom: 60 }] as unknown as DOMRectList;
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    fireEvent.mouseDown(paragraph, { clientX: 180, clientY: 120 });
+    fireEvent.click(paragraph, { clientX: 181, clientY: 120 });
+    expect(selection.isCollapsed).toBe(true);
+  });
 });
 
 describe("selection capture upgrade (B2/B3)", () => {

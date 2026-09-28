@@ -231,6 +231,8 @@ import {
 import { commentTargetForSelection } from "./lib/comments/commentPlacement";
 import { commentDraftPlacement } from "./lib/comments/commentDraftPlacement";
 import { writePdfComment } from "./lib/comments/commentWrite";
+import { pdfCommentErrorMessage } from "./lib/comments/commentErrors";
+import { isSelectionGestureClick } from "./lib/selectionGesture";
 import { defaultCommentAuthor } from "./lib/comments/commentModel";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
@@ -587,6 +589,12 @@ function App() {
   // Ctrl+Enter twice must not create two highlights and two threads.
   const [commentSaving, setCommentSaving] = useState(false);
   const commentSavingRef = useRef(false);
+  // The draft follows its passage while the reader scrolls or the window resizes.
+  const commentDraftRangeRef = useRef<Range | null>(null);
+  const [commentDraftAnchor, setCommentDraftAnchor] = useState<{
+    rect: PendingSelection["rect"];
+    viewport: { width: number; height: number };
+  } | null>(null);
   const [noteDraft, setNoteDraft] = useState<
     | { mode: "edit"; annotationId: string; text: string }
     | { mode: "comment"; annotationId: string; text: string }
@@ -2064,6 +2072,39 @@ function App() {
     cancelPdfCommentDraft();
   }, [cancelPdfCommentDraft, currentPath]);
 
+  useEffect(() => {
+    if (!commentComposerOpen) {
+      commentDraftRangeRef.current = null;
+      setCommentDraftAnchor(null);
+      return;
+    }
+    let frame: number | null = null;
+    const measure = () => {
+      frame = null;
+      const box = commentDraftRangeRef.current?.getBoundingClientRect();
+      setCommentDraftAnchor((previous) => {
+        // A zoom re-renders the PDF text layer and detaches the range (a zero
+        // box); keep the last position rather than jumping to the corner.
+        const rect =
+          box && (box.width > 0 || box.height > 0)
+            ? { left: box.left, top: box.top, width: box.width, height: box.height }
+            : previous?.rect ?? commentSelectionRef.current?.rect;
+        if (!rect) return previous;
+        return { rect, viewport: { width: window.innerWidth, height: window.innerHeight } };
+      });
+    };
+    const schedule = () => {
+      if (frame === null) frame = window.requestAnimationFrame(measure);
+    };
+    window.addEventListener("scroll", schedule, true);
+    window.addEventListener("resize", schedule);
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame);
+      window.removeEventListener("scroll", schedule, true);
+      window.removeEventListener("resize", schedule);
+    };
+  }, [commentComposerOpen]);
+
   const commitPdfComment = useCallback(async () => {
     const pending = commentSelectionRef.current ?? pendingSelection;
     const body = commentDraft.trim();
@@ -2101,7 +2142,7 @@ function App() {
       closeToolbar();
       showNotice("批注已保存");
     } catch (cause) {
-      showNotice(cause instanceof Error ? cause.message : String(cause));
+      showNotice(pdfCommentErrorMessage(cause));
     } finally {
       commentSavingRef.current = false;
       setCommentSaving(false);
@@ -3376,10 +3417,19 @@ function App() {
     const reader = readerRef.current;
     if (!reader || !currentContent) return;
     // 事件委托:点击正文中的标注 mark 打开编辑气泡。
+    let pressedAt: { x: number; y: number } | null = null;
+    const onMouseDown = (event: MouseEvent) => {
+      pressedAt = { x: event.clientX, y: event.clientY };
+    };
     const onClick = (event: MouseEvent) => {
       const selection = window.getSelection();
+      const down = pressedAt;
+      pressedAt = null;
       // 点在仍展开的划选内部时，不把它当成点标注。点到划选外面则收起框选。
       if (selection && !selection.isCollapsed && selection.rangeCount > 0) {
+        // 划选松手或 Shift 扩选后浏览器补发的 click 落在松手处，常在最后一个字外面；
+        // 它属于这次划选，收起选区就等于白划。
+        if (isSelectionGestureClick(down, event)) return;
         const rects = selection.getRangeAt(0).getClientRects();
         let insideSelection = false;
         for (let index = 0; index < rects.length; index += 1) {
@@ -3465,8 +3515,12 @@ function App() {
       setMarkEditor({ annotationId, x, y });
       setPendingSelection(null);
     };
+    reader.addEventListener("mousedown", onMouseDown, true);
     reader.addEventListener("click", onClick);
-    return () => reader.removeEventListener("click", onClick);
+    return () => {
+      reader.removeEventListener("mousedown", onMouseDown, true);
+      reader.removeEventListener("click", onClick);
+    };
   }, [currentContent]);
 
   useEffect(() => {
@@ -5680,10 +5734,9 @@ function App() {
                   // the commented passage visibly marked until save or cancel.
                   const selection = window.getSelection();
                   if (selection && selection.rangeCount > 0) {
-                    applySentenceHighlight(
-                      COMMENT_DRAFT_HIGHLIGHT,
-                      selection.getRangeAt(0).cloneRange(),
-                    );
+                    const range = selection.getRangeAt(0).cloneRange();
+                    commentDraftRangeRef.current = range;
+                    applySentenceHighlight(COMMENT_DRAFT_HIGHLIGHT, range);
                   }
                   setCommentDraft("");
                   setCommentComposerOpen(true);
@@ -5706,8 +5759,8 @@ function App() {
           <form
             className="pdf-comment-draft"
             style={commentDraftPlacement(
-              (commentSelectionRef.current ?? pendingSelection)!.rect,
-              { width: window.innerWidth, height: window.innerHeight },
+              commentDraftAnchor?.rect ?? (commentSelectionRef.current ?? pendingSelection)!.rect,
+              commentDraftAnchor?.viewport ?? { width: window.innerWidth, height: window.innerHeight },
             )}
             onMouseDown={(event) => event.stopPropagation()}
             onSubmit={(event) => {

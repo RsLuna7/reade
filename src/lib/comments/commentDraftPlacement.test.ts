@@ -24,4 +24,15 @@ describe("commentDraftPlacement", () => {
     const placement = commentDraftPlacement({ left: 360, top: 20, width: 400, height: 860 }, viewport);
     expect(placement).toEqual({ left: 360, bottom: 12 });
   });
+
+  // While writing, the passage can scroll out of view; the draft stays reachable.
+  it("stays at the top edge when the selection scrolled above the window", () => {
+    const placement = commentDraftPlacement({ left: 360, top: -400, width: 400, height: 40 }, viewport);
+    expect(placement).toEqual({ left: 360, top: 12 });
+  });
+
+  it("stays at the bottom edge when the selection scrolled below the window", () => {
+    const placement = commentDraftPlacement({ left: 360, top: 1400, width: 400, height: 40 }, viewport);
+    expect(placement).toEqual({ left: 360, bottom: 12 });
+  });
 });

@@ -726,6 +726,8 @@
   z-index: 2;
 }
 
+/* The bubble is painted inside `.pdf-page`, which stays white paper in every
+   theme, so it keeps paper colours and has no dark-theme override. */
 .pdf-comment-bubble {
   position: absolute;
   z-index: 6;

@@ -132,6 +132,14 @@ describe("PdfCommentRail", () => {
     await waitFor(() => expect(document.querySelectorAll(".pdf-comment-card")).toHaveLength(2));
   });
 
+  it.each([false, true])("leaves wheel (ctrl %s) to the reading scroller", async (ctrlKey) => {
+    render(<Harness />);
+    await waitFor(() => expect(screen.getByText("甲评论")).toBeInTheDocument());
+    const wheel = new WheelEvent("wheel", { deltaY: 120, ctrlKey, bubbles: true, cancelable: true });
+    screen.getByRole("complementary", { name: "PDF 评论" }).dispatchEvent(wheel);
+    expect(wheel.defaultPrevented).toBe(false);
+  });
+
   it("renders anchored threads, omits missing anchors, and stacks measured cards", async () => {
     render(<Harness />);
     await waitFor(() => expect(document.querySelectorAll(".pdf-comment-card")).toHaveLength(2));

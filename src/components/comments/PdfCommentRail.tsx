@@ -157,17 +157,6 @@ export function PdfCommentRail({
       });
     };
 
-    const onWheel = (event: WheelEvent) => {
-      const parent = rail.parentElement;
-      const area = parent?.classList.contains("pdf-page-area")
-        ? parent
-        : parent?.querySelector<HTMLElement>(".pdf-page-area");
-      if (!area || area.scrollHeight <= area.clientHeight + 1) return;
-      if (event.deltaY === 0) return;
-      area.scrollTop += event.deltaY;
-      event.preventDefault();
-    };
-
     const observer = new ResizeObserver((entries) => {
       let changed = false;
       for (const entry of entries) {
@@ -208,7 +197,8 @@ export function PdfCommentRail({
     schedule();
     window.addEventListener("scroll", schedule, true);
     window.addEventListener("resize", schedule);
-    rail.addEventListener("wheel", onWheel, { passive: false });
+    // No wheel handler: the rail sits in the reading scroller, so wheel,
+    // wheel-speed and Ctrl+wheel zoom reach `.reading-scroll` natively.
     return () => {
       if (frameRef.current !== null) {
         window.cancelAnimationFrame(frameRef.current);
@@ -218,7 +208,6 @@ export function PdfCommentRail({
       highlights.disconnect();
       window.removeEventListener("scroll", schedule, true);
       window.removeEventListener("resize", schedule);
-      rail.removeEventListener("wheel", onWheel);
     };
   }, [anchorRootRef, layoutKey, layoutRootRef]);
 
