@@ -25,6 +25,12 @@ function commentTime(timestamp: number): string {
   return `${datePart} ${timePart}`;
 }
 
+/** `toISOString` throws on an invalid date; a bad row must not break the card. */
+function commentDateTime(timestamp: number): string | undefined {
+  const date = new Date(timestamp);
+  return Number.isNaN(date.getTime()) ? undefined : date.toISOString();
+}
+
 export function PdfCommentConversation({
   thread,
   messages,
@@ -96,6 +102,19 @@ export function PdfCommentConversation({
     }
   };
 
+  const deleteMessage = async (messageId: string) => {
+    if (!onDeleteMessage) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await onDeleteMessage(messageId);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      setSaving(false);
+    }
+  };
+
   const submit = async () => {
     const body = draft.trim();
     if (!body) {
@@ -151,7 +170,8 @@ export function PdfCommentConversation({
                     className="pdf-comment-icon-button"
                     aria-label="删除"
                     title="删除"
-                    onClick={() => void onDeleteMessage(message.id)}
+                    disabled={saving}
+                    onClick={() => void deleteMessage(message.id)}
                   >
                     <Trash2 aria-hidden="true" />
                   </button>
@@ -209,7 +229,7 @@ export function PdfCommentConversation({
             <p>{message.body}</p>
           )}
           {editing ? null : (
-            <time dateTime={new Date(message.createdAt).toISOString()}>
+            <time dateTime={commentDateTime(message.createdAt)}>
               {commentTime(message.createdAt)}
             </time>
           )}
@@ -231,6 +251,9 @@ export function PdfCommentConversation({
             </li>
           ) : null}
         </ol>
+      ) : null}
+      {!showComposer && !editingId && error ? (
+        <p className="pdf-comment-error" role="alert">{error}</p>
       ) : null}
       {showComposer ? (
         <div className="pdf-comment-composer">

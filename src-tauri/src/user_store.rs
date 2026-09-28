@@ -791,29 +791,43 @@ pub fn update_excerpt_appearance(
         .transaction()
         .map_err(|error| format!("Cannot begin excerpt appearance update: {error}"))?;
     ensure_v6_root_writable(&transaction, &root_key)?;
-    let mut excerpt = read_excerpt_row(&transaction, &root_key, &id)?
+    let excerpt =
+        update_excerpt_appearance_row(&transaction, &root_key, &id, appearance, now_millis())?;
+    refresh_v6_migration_ledger(&transaction, &root_key, excerpt.updated_at)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit excerpt appearance update: {error}"))?;
+    Ok(excerpt)
+}
+
+fn update_excerpt_appearance_row(
+    connection: &Connection,
+    root: &str,
+    id: &str,
+    appearance: ExcerptAppearance,
+    now: u64,
+) -> CommandResult<Excerpt> {
+    let mut excerpt = read_excerpt_row(connection, root, id)?
         .ok_or_else(|| "Excerpt was not found".to_owned())?;
     if excerpt.deleted_at.is_some() {
         return Err("Excerpt was not found".to_owned());
     }
     let tone_changed = excerpt.appearance.tone != appearance.tone;
     excerpt.appearance = appearance;
-    excerpt.updated_at = now_millis();
+    excerpt.updated_at = now;
     if tone_changed {
         excerpt.legacy_color = Some(tone_to_legacy_color(&excerpt.appearance.tone));
     }
     excerpt.legacy_kind = Some(excerpt.appearance.style.clone());
-    let reflection = read_reflection_row(&transaction, &root_key, &id)?;
+    let reflection = read_reflection_row(connection, root, id)?;
     upsert_excerpt_row(
-        &transaction,
-        &root_key,
+        connection,
+        root,
         &excerpt,
         live_reflection_body(reflection.as_ref()),
     )?;
-    refresh_v6_migration_ledger(&transaction, &root_key, excerpt.updated_at)?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Cannot commit excerpt appearance update: {error}"))?;
+    // The row rewrite only carries the reflection; put comment text back.
+    sync_comments_to_excerpt_search(connection, root, id)?;
     Ok(excerpt)
 }
 
@@ -2311,11 +2325,24 @@ pub fn delete_pdf_comment_message(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("Cannot begin PDF comment deletion: {error}"))?;
-    let message = read_live_pdf_comment_message(&transaction, &root, &message_id)?;
-    let thread = read_pdf_comment_thread_row(&transaction, &root, &message.thread_id)?
+    let deletion = delete_pdf_comment_message_row(&transaction, &root, message_id, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit PDF comment deletion: {error}"))?;
+    Ok(deletion)
+}
+
+fn delete_pdf_comment_message_row(
+    connection: &Connection,
+    root: &str,
+    message_id: String,
+    now: u64,
+) -> CommandResult<PdfCommentDeletion> {
+    let message = read_live_pdf_comment_message(connection, root, &message_id)?;
+    let thread = read_pdf_comment_thread_row(connection, root, &message.thread_id)?
         .filter(|item| item.deleted_at.is_none())
         .ok_or_else(|| "Comment thread was not found".to_owned())?;
-    transaction
+    connection
         .execute(
             "UPDATE pdf_comment_messages
              SET deleted_at = ?1, updated_at = ?1
@@ -2323,7 +2350,7 @@ pub fn delete_pdf_comment_message(
             params![now as i64, root, message_id],
         )
         .map_err(|error| sql_error("Cannot delete PDF comment", error))?;
-    let remaining: i64 = transaction
+    let remaining: i64 = connection
         .query_row(
             "SELECT count(*) FROM pdf_comment_messages
              WHERE library_root = ?1 AND thread_id = ?2 AND deleted_at IS NULL",
@@ -2333,7 +2360,7 @@ pub fn delete_pdf_comment_message(
         .map_err(|error| sql_error("Cannot count PDF comments", error))?;
     let mut removed_annotation_id = None;
     if remaining == 0 {
-        transaction
+        connection
             .execute(
                 "UPDATE pdf_comment_threads
                  SET deleted_at = ?1, updated_at = ?1
@@ -2343,21 +2370,19 @@ pub fn delete_pdf_comment_message(
             .map_err(|error| sql_error("Cannot delete PDF comment thread", error))?;
         if thread.anchor_created {
             set_annotation_entry_deleted_row(
-                &transaction,
-                &root,
+                connection,
+                root,
                 &thread.annotation_id,
                 &AnnotationEntryKind::Excerpt,
                 true,
                 now,
             )?;
-            removed_annotation_id = Some(thread.annotation_id);
+            removed_annotation_id = Some(thread.annotation_id.clone());
         }
-    } else {
-        sync_comments_to_excerpt_search(&transaction, &root, &thread.annotation_id)?;
     }
-    transaction
-        .commit()
-        .map_err(|error| format!("Cannot commit PDF comment deletion: {error}"))?;
+    // Also when the thread is gone: a hand-drawn mark stays and must stop
+    // matching the deleted text.
+    sync_comments_to_excerpt_search(connection, root, &thread.annotation_id)?;
     Ok(PdfCommentDeletion {
         message_id,
         thread_id: thread.id,
@@ -2377,27 +2402,38 @@ pub fn clear_pdf_comments(
     let transaction = connection
         .transaction()
         .map_err(|error| format!("Cannot begin clearing PDF comments: {error}"))?;
-    let anchors: Vec<String> = transaction
+    clear_pdf_comment_rows(&transaction, &root, now)?;
+    transaction
+        .commit()
+        .map_err(|error| format!("Cannot commit clearing PDF comments: {error}"))?;
+    Ok(())
+}
+
+fn clear_pdf_comment_rows(connection: &Connection, root: &str, now: u64) -> CommandResult<()> {
+    let threads: Vec<(String, bool)> = connection
         .prepare(
-            "SELECT annotation_id FROM pdf_comment_threads
-             WHERE library_root = ?1 AND deleted_at IS NULL AND anchor_created != 0",
+            "SELECT annotation_id, anchor_created != 0 FROM pdf_comment_threads
+             WHERE library_root = ?1 AND deleted_at IS NULL",
         )
         .map_err(|error| sql_error("Cannot list comment anchors", error))?
-        .query_map(params![root], |row| row.get(0))
+        .query_map(params![root], |row| Ok((row.get(0)?, row.get(1)?)))
         .map_err(|error| sql_error("Cannot list comment anchors", error))?
-        .collect::<Result<Vec<String>, _>>()
+        .collect::<Result<Vec<(String, bool)>, _>>()
         .map_err(|error| sql_error("Cannot list comment anchors", error))?;
-    for annotation_id in anchors {
+    for (annotation_id, anchor_created) in &threads {
+        if !anchor_created {
+            continue;
+        }
         set_annotation_entry_deleted_row(
-            &transaction,
-            &root,
-            &annotation_id,
+            connection,
+            root,
+            annotation_id,
             &AnnotationEntryKind::Excerpt,
             true,
             now,
         )?;
     }
-    transaction
+    connection
         .execute(
             "UPDATE pdf_comment_messages
              SET deleted_at = ?1, updated_at = ?1
@@ -2405,7 +2441,7 @@ pub fn clear_pdf_comments(
             params![now as i64, root],
         )
         .map_err(|error| sql_error("Cannot clear PDF comments", error))?;
-    transaction
+    connection
         .execute(
             "UPDATE pdf_comment_threads
              SET deleted_at = ?1, updated_at = ?1
@@ -2413,9 +2449,13 @@ pub fn clear_pdf_comments(
             params![now as i64, root],
         )
         .map_err(|error| sql_error("Cannot clear PDF comment threads", error))?;
-    transaction
-        .commit()
-        .map_err(|error| format!("Cannot commit clearing PDF comments: {error}"))?;
+    // Hand-drawn marks stay; drop the cleared comment text from their search.
+    for (annotation_id, anchor_created) in &threads {
+        if *anchor_created || read_excerpt_row(connection, root, annotation_id)?.is_none() {
+            continue;
+        }
+        sync_comments_to_excerpt_search(connection, root, annotation_id)?;
+    }
     Ok(())
 }
 
@@ -5403,6 +5443,10 @@ fn upsert_pdf_comment_message_row(
     )
 }
 
+/// Rebuilds an excerpt's search note from its live reflection and live PDF
+/// comments. Writes that rewrite the excerpt row (appearance, restore,
+/// reflection) or drop comments call this afterwards, so search never keeps
+/// deleted comment text nor loses live comment text.
 fn sync_comments_to_excerpt_search(
     connection: &Connection,
     root: &str,
@@ -5410,6 +5454,7 @@ fn sync_comments_to_excerpt_search(
 ) -> CommandResult<()> {
     let excerpt = read_excerpt_row(connection, root, annotation_id)?
         .ok_or_else(|| "PDF annotation was not found".to_owned())?;
+    let reflection = read_reflection_row(connection, root, annotation_id)?;
     let comments: String = connection
         .query_row(
             "SELECT COALESCE(group_concat(m.body, ' '), '')
@@ -5422,11 +5467,19 @@ fn sync_comments_to_excerpt_search(
             |row| row.get(0),
         )
         .map_err(|error| sql_error("Cannot build PDF comment search text", error))?;
+    let note = [
+        live_reflection_body(reflection.as_ref()).unwrap_or(""),
+        comments.as_str(),
+    ]
+    .into_iter()
+    .filter(|part| !part.is_empty())
+    .collect::<Vec<_>>()
+    .join(" ");
     connection
         .execute(
             "UPDATE excerpts SET searchable_text = ?1 WHERE library_root = ?2 AND id = ?3",
             params![
-                build_searchable_text(Some(&excerpt.source_text), Some(&comments)),
+                build_searchable_text(Some(&excerpt.source_text), Some(&note)),
                 root,
                 annotation_id,
             ],
@@ -5515,7 +5568,8 @@ fn sync_reflection_to_entry(
                 root,
                 &excerpt,
                 live_reflection_body(Some(reflection)),
-            )
+            )?;
+            sync_comments_to_excerpt_search(connection, root, &reflection.entry_id)
         }
         AnnotationEntryKind::Place => Ok(()),
     }
@@ -5606,7 +5660,8 @@ fn set_annotation_entry_deleted_row(
                 &excerpt,
                 live_reflection_body(reflection.as_ref()),
             )?;
-            Ok(())
+            // A restore brings comment threads back; keep their text searchable.
+            sync_comments_to_excerpt_search(connection, root, id)
         }
         AnnotationEntryKind::Place => {
             let mut place = read_reading_place_row(connection, root, id)?
@@ -11297,6 +11352,160 @@ mod tests {
         assert_eq!(restored.comment_threads.len(), 1);
         assert_eq!(restored.comment_messages.len(), 1);
         assert_eq!(restored.comment_messages[0].body, "第一条评论");
+        assert!(excerpt_search_text(&connection, "pdf-comment").contains("第一条评论"));
+    }
+
+    fn excerpt_search_text(connection: &Connection, id: &str) -> String {
+        connection
+            .query_row(
+                "SELECT searchable_text FROM excerpts WHERE library_root = ?1 AND id = ?2",
+                params![ROOT, id],
+                |row| row.get(0),
+            )
+            .expect("searchable text")
+    }
+
+    /// A PDF mark on paper.pdf with one comment thread holding `bodies`.
+    fn seed_commented_pdf_mark(
+        connection: &Connection,
+        id: &str,
+        anchor_created: bool,
+        bodies: &[&str],
+    ) {
+        if count_rows(
+            connection,
+            "SELECT count(*) FROM documents WHERE relative_path = 'paper.pdf'",
+        ) == 0
+        {
+            insert_document_row(
+                connection,
+                ROOT,
+                "paper.pdf",
+                "pmd5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            );
+        }
+        let mut draft = sample_excerpt_draft(id, "paper.pdf");
+        draft.anchor = SourceAnchor::PdfText {
+            page: 2,
+            view: "original".to_owned(),
+            quote: TextQuoteSelector {
+                exact: "hello world".to_owned(),
+                prefix: String::new(),
+                suffix: String::new(),
+            },
+            rects: vec![],
+            page_width: Some(600.0),
+            page_height: Some(800.0),
+        };
+        persist_excerpt(connection, draft, 1_000);
+        let thread = PdfCommentThread {
+            id: format!("{id}-thread"),
+            annotation_id: id.to_owned(),
+            created_at: 1_100,
+            updated_at: 1_100,
+            deleted_at: None,
+            anchor_created,
+        };
+        upsert_pdf_comment_thread_row(connection, ROOT, &thread).expect("thread");
+        for (index, body) in bodies.iter().enumerate() {
+            let message = PdfCommentMessage {
+                id: format!("{id}-message-{index}"),
+                thread_id: thread.id.clone(),
+                author_id: "local-me".to_owned(),
+                body: (*body).to_owned(),
+                created_at: 1_100 + index as u64,
+                updated_at: 1_100 + index as u64,
+                deleted_at: None,
+            };
+            upsert_pdf_comment_message_row(connection, ROOT, &message).expect("message");
+        }
+        sync_comments_to_excerpt_search(connection, ROOT, id).expect("search");
+    }
+
+    #[test]
+    fn appearance_change_keeps_pdf_comment_text_searchable() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        seed_commented_pdf_mark(&connection, "pdf-mark", false, &["页边讨论"]);
+        assert!(excerpt_search_text(&connection, "pdf-mark").contains("页边讨论"));
+
+        update_excerpt_appearance_row(
+            &connection,
+            ROOT,
+            "pdf-mark",
+            ExcerptAppearance {
+                style: ExcerptStyle::Underline,
+                tone: ExcerptTone::Sage,
+            },
+            2_000,
+        )
+        .expect("appearance");
+        assert!(excerpt_search_text(&connection, "pdf-mark").contains("页边讨论"));
+    }
+
+    #[test]
+    fn deleting_the_last_comment_on_a_manual_mark_drops_it_from_search() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        seed_commented_pdf_mark(&connection, "pdf-mark", false, &["要删的讨论"]);
+
+        let deletion = delete_pdf_comment_message_row(
+            &connection,
+            ROOT,
+            "pdf-mark-message-0".to_owned(),
+            2_000,
+        )
+        .expect("delete");
+        assert!(deletion.thread_deleted);
+        assert_eq!(deletion.removed_annotation_id, None);
+        let search = excerpt_search_text(&connection, "pdf-mark");
+        assert!(!search.contains("要删的讨论"));
+        assert!(
+            search.contains("hello world"),
+            "the mark itself stays searchable"
+        );
+    }
+
+    #[test]
+    fn deleting_one_reply_keeps_the_rest_searchable() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        seed_commented_pdf_mark(&connection, "pdf-mark", false, &["第一条", "第二条"]);
+
+        let deletion = delete_pdf_comment_message_row(
+            &connection,
+            ROOT,
+            "pdf-mark-message-1".to_owned(),
+            2_000,
+        )
+        .expect("delete");
+        assert!(!deletion.thread_deleted);
+        let search = excerpt_search_text(&connection, "pdf-mark");
+        assert!(search.contains("第一条"));
+        assert!(!search.contains("第二条"));
+    }
+
+    #[test]
+    fn clearing_pdf_comments_scrubs_manual_mark_search_and_removes_auto_marks() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        seed_commented_pdf_mark(&connection, "manual-mark", false, &["手动讨论"]);
+        seed_commented_pdf_mark(&connection, "auto-mark", true, &["自动讨论"]);
+
+        clear_pdf_comment_rows(&connection, ROOT, 2_000).expect("clear");
+        let search = excerpt_search_text(&connection, "manual-mark");
+        assert!(!search.contains("手动讨论"));
+        assert!(search.contains("hello world"));
+        let bundle = list_document_annotation_rows(&connection, ROOT, "paper.pdf").expect("list");
+        assert!(bundle.comment_threads.is_empty());
+        assert_eq!(
+            bundle
+                .excerpts
+                .iter()
+                .map(|item| item.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["manual-mark"],
+        );
     }
 
     /// 数据目录与缓存目录解析为同一文件（目录重合）→ 不迁移不复制。

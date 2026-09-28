@@ -836,6 +836,9 @@ describe("annotation mark editing (B1)", () => {
 
     const range = document.createRange();
     range.selectNodeContents(mark);
+    // jsdom has no Range layout; the click lands inside the selected text.
+    range.getClientRects = () =>
+      [{ left: 0, right: 100, top: 40, bottom: 80 }] as unknown as DOMRectList;
     const selection = window.getSelection()!;
     selection.removeAllRanges();
     selection.addRange(range);

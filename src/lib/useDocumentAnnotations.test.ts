@@ -402,6 +402,35 @@ describe("atomic actions and undo semantics", () => {
     expect(result.current.canUndo).toBe(true);
   });
 
+  it("drops the create step when a new excerpt is silently rolled back", async () => {
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.saveExcerpt(
+        {
+          id: "ex-rollback",
+          relativePath: "docs/a.md",
+          sourceText: "quoted line",
+          anchor: {
+            format: "markdown" as const,
+            quote: { exact: "quoted line", prefix: "", suffix: "" },
+            headingId: null,
+          },
+          appearance: { style: "highlight" as const, tone: "sand" as const },
+          sortIndex: "M|00000|00000000",
+        },
+        null,
+      );
+    });
+    expect(result.current.canUndo).toBe(true);
+    await act(async () => result.current.remove("ex-rollback", { recordUndo: false }));
+    expect(result.current.bundle.excerpts).toEqual([]);
+    expect(result.current.canUndo).toBe(false);
+    backendMocks.deleteAnnotation.mockClear();
+    await act(async () => expect(result.current.undo()).resolves.toBe(false));
+    expect(backendMocks.deleteAnnotation).not.toHaveBeenCalled();
+  });
+
   it("records undo only for new entries and undoes creation", async () => {
     const { result } = renderAnnotations("docs/a.md");
     await waitFor(() => expect(result.current.loading).toBe(false));

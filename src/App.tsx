@@ -230,6 +230,7 @@ import {
 } from "./lib/annotationCapture";
 import { commentTargetForSelection } from "./lib/comments/commentPlacement";
 import { commentDraftPlacement } from "./lib/comments/commentDraftPlacement";
+import { writePdfComment } from "./lib/comments/commentWrite";
 import { defaultCommentAuthor } from "./lib/comments/commentModel";
 import { useDocumentAnnotations } from "./lib/useDocumentAnnotations";
 import { DocumentAnnotationsView } from "./components/DocumentAnnotationsView";
@@ -583,6 +584,9 @@ function App() {
   const commentComposerOpenRef = useRef(false);
   const commentSelectionRef = useRef<PendingSelection | null>(null);
   commentComposerOpenRef.current = commentComposerOpen;
+  // Ctrl+Enter twice must not create two highlights and two threads.
+  const [commentSaving, setCommentSaving] = useState(false);
+  const commentSavingRef = useRef(false);
   const [noteDraft, setNoteDraft] = useState<
     | { mode: "edit"; annotationId: string; text: string }
     | { mode: "comment"; annotationId: string; text: string }
@@ -2065,27 +2069,29 @@ function App() {
     const body = commentDraft.trim();
     if (!pending || !currentPath || !body) return;
     if (pending.locator.kind !== "pdf" || pending.locator.view !== "original") return;
+    if (commentSavingRef.current) return;
+    commentSavingRef.current = true;
+    setCommentSaving(true);
     try {
       const target = commentTargetForSelection(
         pending,
         annotations,
         annotationBundle.commentThreads ?? [],
       );
-      if (target?.threadId) {
-        await replyPdfComment(target.threadId, body);
-        setActivePdfCommentAnnotationId(target.annotationId);
-      } else if (target) {
-        await savePdfComment(target.annotationId, body, undefined, { anchorCreated: false });
-        setActivePdfCommentAnnotationId(target.annotationId);
-      } else {
-        const draft = buildExcerptDraftFromPending(currentPath, pending, {
-          style: "highlight",
-          tone: excerptTone,
-        });
-        const captured = await saveExcerpt(draft, null);
-        await savePdfComment(captured.excerpt.id, body, undefined, { anchorCreated: true });
-        setActivePdfCommentAnnotationId(captured.excerpt.id);
-      }
+      const annotationId = await writePdfComment(target, body, {
+        reply: (threadId, text) => replyPdfComment(threadId, text),
+        createThread: (id, text, anchorCreated) =>
+          savePdfComment(id, text, undefined, { anchorCreated }),
+        createAnchor: async () => {
+          const draft = buildExcerptDraftFromPending(currentPath, pending, {
+            style: "highlight",
+            tone: excerptTone,
+          });
+          return (await saveExcerpt(draft, null)).excerpt.id;
+        },
+        removeAnchor: (id) => removeAnnotation(id, { recordUndo: false }),
+      });
+      setActivePdfCommentAnnotationId(annotationId);
       clearSentenceHighlight(COMMENT_DRAFT_HIGHLIGHT);
       commentSelectionRef.current = null;
       setCommentComposerOpen(false);
@@ -2096,6 +2102,9 @@ function App() {
       showNotice("批注已保存");
     } catch (cause) {
       showNotice(cause instanceof Error ? cause.message : String(cause));
+    } finally {
+      commentSavingRef.current = false;
+      setCommentSaving(false);
     }
   }, [
     annotationBundle.commentThreads,
@@ -2105,6 +2114,7 @@ function App() {
     currentPath,
     excerptTone,
     pendingSelection,
+    removeAnnotation,
     replyPdfComment,
     saveExcerpt,
     savePdfComment,
@@ -5728,7 +5738,9 @@ function App() {
               <button type="button" onClick={cancelPdfCommentDraft}>
                 取消
               </button>
-              <button type="submit" disabled={!commentDraft.trim()}>保存</button>
+              <button type="submit" disabled={commentSaving || !commentDraft.trim()}>
+                {commentSaving ? "正在保存…" : "保存"}
+              </button>
             </div>
           </form>
         ) : null}

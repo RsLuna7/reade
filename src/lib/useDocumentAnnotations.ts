@@ -292,10 +292,17 @@ export function useDocumentAnnotations(relativePath: string | null) {
         dataVersionRef.current += 1;
         if (options?.recordUndo !== false) {
           pushUndo({ type: "delete", id, entryKind });
+        } else {
+          // A silent removal (rolling back a half-finished write) leaves no
+          // entry to undo; drop its create step so undo cannot hit a ghost.
+          undoStackRef.current = undoStackRef.current.filter(
+            (entry) => !(entry.type === "create" && entry.id === id),
+          );
+          syncUndoFlag();
         }
       });
     },
-    [commitBundle, pushUndo, runMutation],
+    [commitBundle, pushUndo, runMutation, syncUndoFlag],
   );
 
   const clearAll = useCallback(async () => {

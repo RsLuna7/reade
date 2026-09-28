@@ -76,4 +76,37 @@ describe("PdfCommentConversation", () => {
     fireEvent.keyDown(screen.getByRole("textbox", { name: "修改评论" }), { key: "Escape" });
     expect(screen.queryByRole("textbox", { name: "修改评论" })).not.toBeInTheDocument();
   });
+
+  it.each([true, false])("shows a failed delete instead of dropping it (composer %s)", async (showComposer) => {
+    const onDeleteMessage = vi.fn(async () => {
+      throw new Error("删除失败");
+    });
+    render(
+      <PdfCommentConversation
+        thread={thread}
+        messages={messages}
+        authors={authors}
+        showComposer={showComposer}
+        onSubmit={vi.fn(async () => undefined)}
+        onDeleteMessage={onDeleteMessage}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole("button", { name: "删除" })[1]!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("删除失败");
+    expect(onDeleteMessage).toHaveBeenCalledWith("reply");
+    expect(screen.getAllByRole("button", { name: "删除" })[1]).toBeEnabled();
+  });
+
+  it("renders a message whose timestamp is not a valid date", () => {
+    render(
+      <PdfCommentConversation
+        thread={thread}
+        messages={[{ ...messages[0]!, createdAt: Number.NaN }]}
+        authors={authors}
+        onSubmit={vi.fn(async () => undefined)}
+      />,
+    );
+    expect(screen.getByText("缺失如此")).toBeInTheDocument();
+    expect(document.querySelector("time")).not.toHaveAttribute("datetime");
+  });
 });
