@@ -556,9 +556,14 @@ export function useDocumentAnnotations(relativePath: string | null) {
   );
 
   const clearPdfCommentThreads = useCallback(async () => {
-    await clearPdfComments();
+    // Queued like every other write, so an in-flight reply cannot land after
+    // the clear and resurrect a thread in the local bundle.
+    await runMutation(async () => {
+      await clearPdfComments();
+      dataVersionRef.current += 1;
+    });
     await reload();
-  }, [reload]);
+  }, [reload, runMutation]);
 
   const saveCommentAuthor = useCallback(
     async (name: string, makeDefault = true, id?: string) => {

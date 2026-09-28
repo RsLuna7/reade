@@ -99,6 +99,7 @@ beforeEach(() => {
   });
   vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (this: HTMLElement) {
     if (this.classList.contains("test-layout")) return { top: 100 } as DOMRect;
+    if (this.classList.contains("late-highlight")) return { top: 400, width: 10, height: 10 } as DOMRect;
     if (this.dataset.annotationId === "a" && this.classList.contains("pdf-user-highlight")) {
       return { top: this.classList.contains("pdf-user-highlight--lead") ? 220 : 280 } as DOMRect;
     }
@@ -138,6 +139,38 @@ describe("PdfCommentRail", () => {
     const wheel = new WheelEvent("wheel", { deltaY: 120, ctrlKey, bubbles: true, cancelable: true });
     screen.getByRole("complementary", { name: "PDF 评论" }).dispatchEvent(wheel);
     expect(wheel.defaultPrevented).toBe(false);
+  });
+
+  it("places a card once a lazy page paints its highlight layer", async () => {
+    render(
+      <div className="test-layout">
+        <div className="pdf-pages">
+          <div className="pdf-user-highlight-layer" />
+        </div>
+        <PdfCommentRail
+          threads={[threads[0]!]}
+          messages={messages}
+          authors={authors}
+          annotations={annotations}
+          activeAnnotationId={null}
+          onActivate={vi.fn()}
+          onReply={vi.fn(async () => undefined)}
+        />
+      </div>,
+    );
+    const slot = await waitFor(() => {
+      const found = document.querySelector<HTMLElement>('.pdf-comment-card-position[data-annotation-id="a"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(slot.dataset.placed).toBeUndefined();
+
+    const mark = document.createElement("span");
+    mark.className = "pdf-user-highlight pdf-user-highlight--lead late-highlight";
+    mark.dataset.annotationId = "a";
+    document.querySelector(".pdf-user-highlight-layer")!.append(mark);
+    await waitFor(() => expect(slot).toHaveStyle({ top: "400px" }));
+    expect(slot.dataset.placed).toBe("true");
   });
 
   it("renders anchored threads, omits missing anchors, and stacks measured cards", async () => {

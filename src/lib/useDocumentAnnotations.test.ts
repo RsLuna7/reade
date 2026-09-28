@@ -34,6 +34,7 @@ const backendMocks = vi.hoisted(() => ({
   createPdfCommentThread: vi.fn(),
   replyToPdfComment: vi.fn(),
   upsertCommentAuthor: vi.fn(),
+  clearPdfComments: vi.fn(),
 }));
 
 vi.mock("./backend", () => backendMocks);
@@ -577,6 +578,63 @@ describe("atomic actions and undo semantics", () => {
     expect(result.current.bundle.commentAuthors?.find((item) => item.id === "local-me")?.name)
       .toBe("书房");
     expect(result.current.bundle.commentAuthors?.filter((item) => item.id === "local-me")).toHaveLength(1);
+  });
+
+  it("queues the PDF comment clear behind an in-flight reply", async () => {
+    serverBundle = bundleFromAnnotations([
+      makeAnnotation("pdf-1", {
+        relativePath: "paper.pdf",
+        locator: {
+          kind: "pdf",
+          page: 2,
+          view: "original",
+          quote: "quote",
+          prefix: "",
+          suffix: "",
+          rects: [],
+        },
+        sortIndex: "P|00002|00000000",
+      }),
+    ]);
+    serverBundle.commentAuthors = [
+      { id: "local-me", name: "我", isDefault: true, createdAt: 1, updatedAt: 1, deletedAt: null },
+    ];
+    const { result } = renderAnnotations("paper.pdf");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    await act(async () => {
+      await result.current.savePdfComment("pdf-1", "首条评论", "local-me");
+    });
+    const threadId = result.current.bundle.commentThreads?.[0]?.id;
+
+    const order: string[] = [];
+    const gate = deferred<void>();
+    const reply = backendMocks.replyToPdfComment.getMockImplementation()!;
+    backendMocks.replyToPdfComment.mockImplementationOnce(async (draft: ReplyToPdfCommentDraft) => {
+      await gate.promise;
+      order.push("reply");
+      return reply(draft);
+    });
+    backendMocks.clearPdfComments.mockImplementation(async () => {
+      order.push("clear");
+      serverBundle.commentThreads = [];
+      serverBundle.commentMessages = [];
+    });
+
+    let pending: Promise<unknown> = Promise.resolve();
+    act(() => {
+      pending = Promise.all([
+        result.current.replyPdfComment(threadId!, "晚到的回复", "local-me"),
+        result.current.clearPdfCommentThreads(),
+      ]);
+    });
+    await Promise.resolve();
+    expect(order).toEqual([]);
+    gate.resolve();
+    await act(async () => {
+      await pending;
+    });
+    expect(order).toEqual(["reply", "clear"]);
+    await waitFor(() => expect(result.current.bundle.commentThreads ?? []).toEqual([]));
   });
 
   it("recolors an existing mark through the v6 appearance command", async () => {

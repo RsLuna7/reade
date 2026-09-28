@@ -5041,9 +5041,13 @@ fn load_comment_authors(connection: &Connection) -> CommandResult<Vec<CommentAut
     )
 }
 
+/// Threads of one document. The SQL narrows to the document's excerpts
+/// (`excerpts_by_doc` index) so opening a PDF does not read the whole
+/// library's comments; `annotation_ids` then keeps exactly the listed marks.
 fn load_document_comment_threads(
     connection: &Connection,
     root: &str,
+    relative_path: &str,
     annotation_ids: &HashSet<String>,
 ) -> CommandResult<Vec<PdfCommentThread>> {
     let threads = query_mapped(
@@ -5051,9 +5055,12 @@ fn load_document_comment_threads(
         &format!(
             "SELECT {COMMENT_THREAD_COLUMNS} FROM pdf_comment_threads
              WHERE library_root = ?1 AND deleted_at IS NULL
+               AND annotation_id IN (
+                 SELECT id FROM excerpts WHERE library_root = ?1 AND relative_path = ?2
+               )
              ORDER BY created_at ASC, id ASC"
         ),
-        params![root],
+        params![root, relative_path],
         pdf_comment_thread_from_row,
         "Cannot list PDF comment threads",
     )?;
@@ -5066,6 +5073,7 @@ fn load_document_comment_threads(
 fn load_document_comment_messages(
     connection: &Connection,
     root: &str,
+    relative_path: &str,
     thread_ids: &HashSet<String>,
 ) -> CommandResult<Vec<PdfCommentMessage>> {
     let messages = query_mapped(
@@ -5073,9 +5081,14 @@ fn load_document_comment_messages(
         &format!(
             "SELECT {COMMENT_MESSAGE_COLUMNS} FROM pdf_comment_messages
              WHERE library_root = ?1 AND deleted_at IS NULL
+               AND thread_id IN (
+                 SELECT t.id FROM pdf_comment_threads t
+                 JOIN excerpts e ON e.id = t.annotation_id AND e.library_root = t.library_root
+                 WHERE t.library_root = ?1 AND e.relative_path = ?2
+               )
              ORDER BY created_at ASC, id ASC"
         ),
-        params![root],
+        params![root, relative_path],
         pdf_comment_message_from_row,
         "Cannot list PDF comment messages",
     )?;
@@ -5137,12 +5150,14 @@ fn list_document_annotation_rows(
     .filter(|item| excerpt_ids.contains(&item.excerpt_id))
     .collect();
     let annotation_ids: HashSet<String> = excerpts.iter().map(|item| item.id.clone()).collect();
-    let comment_threads = load_document_comment_threads(connection, root, &annotation_ids)?;
+    let comment_threads =
+        load_document_comment_threads(connection, root, relative_path, &annotation_ids)?;
     let thread_ids: HashSet<String> = comment_threads
         .iter()
         .map(|thread| thread.id.clone())
         .collect();
-    let comment_messages = load_document_comment_messages(connection, root, &thread_ids)?;
+    let comment_messages =
+        load_document_comment_messages(connection, root, relative_path, &thread_ids)?;
     let comment_authors = load_comment_authors(connection)?;
     Ok(DocumentAnnotationBundle {
         excerpts,
@@ -11372,19 +11387,32 @@ mod tests {
         anchor_created: bool,
         bodies: &[&str],
     ) {
-        if count_rows(
-            connection,
-            "SELECT count(*) FROM documents WHERE relative_path = 'paper.pdf'",
-        ) == 0
-        {
+        seed_commented_pdf_mark_in(connection, "paper.pdf", id, anchor_created, bodies);
+    }
+
+    fn seed_commented_pdf_mark_in(
+        connection: &Connection,
+        relative_path: &str,
+        id: &str,
+        anchor_created: bool,
+        bodies: &[&str],
+    ) {
+        let existing: i64 = connection
+            .query_row(
+                "SELECT count(*) FROM documents WHERE relative_path = ?1",
+                params![relative_path],
+                |row| row.get(0),
+            )
+            .expect("count documents");
+        if existing == 0 {
             insert_document_row(
                 connection,
                 ROOT,
-                "paper.pdf",
+                relative_path,
                 "pmd5:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             );
         }
-        let mut draft = sample_excerpt_draft(id, "paper.pdf");
+        let mut draft = sample_excerpt_draft(id, relative_path);
         draft.anchor = SourceAnchor::PdfText {
             page: 2,
             view: "original".to_owned(),
@@ -11420,6 +11448,32 @@ mod tests {
             upsert_pdf_comment_message_row(connection, ROOT, &message).expect("message");
         }
         sync_comments_to_excerpt_search(connection, ROOT, id).expect("search");
+    }
+
+    #[test]
+    fn document_bundle_lists_only_that_documents_comments() {
+        let state = UserState::in_memory().expect("state");
+        let connection = locked(&state);
+        seed_commented_pdf_mark_in(&connection, "paper.pdf", "here", false, &["本篇", "回复"]);
+        seed_commented_pdf_mark_in(&connection, "other.pdf", "there", false, &["别篇"]);
+
+        let bundle = list_document_annotation_rows(&connection, ROOT, "paper.pdf").expect("list");
+        assert_eq!(
+            bundle
+                .comment_threads
+                .iter()
+                .map(|thread| thread.annotation_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["here"],
+        );
+        assert_eq!(
+            bundle
+                .comment_messages
+                .iter()
+                .map(|message| message.body.as_str())
+                .collect::<Vec<_>>(),
+            vec!["本篇", "回复"],
+        );
     }
 
     #[test]

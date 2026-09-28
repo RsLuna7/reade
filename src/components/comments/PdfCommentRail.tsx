@@ -46,12 +46,12 @@ export function PdfCommentRail({
   const railRef = useRef<HTMLElement>(null);
   const frameRef = useRef<number | null>(null);
   const heightsRef = useRef(new Map<string, number>());
-  const annotationsRef = useRef(annotations);
-  annotationsRef.current = annotations;
   const annotationsById = useMemo(
     () => new Map(annotations.map((annotation) => [annotation.id, annotation])),
     [annotations],
   );
+  const annotationsByIdRef = useRef(annotationsById);
+  annotationsByIdRef.current = annotationsById;
   const ordered = useMemo(
     () =>
       threads
@@ -87,7 +87,7 @@ export function PdfCommentRail({
         const measured = measurePdfCommentAnchor(queryRoot, rail, annotationId);
         let desiredY = measured?.desiredY ?? null;
         if (desiredY == null && layout) {
-          const annotation = annotationsRef.current.find((item) => item.id === annotationId);
+          const annotation = annotationsByIdRef.current.get(annotationId);
           const pageNumber = annotation?.locator.kind === "pdf" ? annotation.locator.page : null;
           const page =
             pageNumber == null
@@ -111,13 +111,13 @@ export function PdfCommentRail({
         });
       }
       const layouts = layoutCommentCards(inputs);
-      const placed = new Set(layouts.map((item) => item.id));
+      const layoutsById = new Map(layouts.map((item) => [item.id, item]));
       const viewHeight = rail.clientHeight;
       let inView = viewHeight <= 0;
       for (const slot of slots) {
         const annotationId = slot.dataset.annotationId;
-        const layoutItem = layouts.find((item) => item.id === annotationId);
-        if (!annotationId || !layoutItem || !placed.has(annotationId)) continue;
+        const layoutItem = annotationId ? layoutsById.get(annotationId) : undefined;
+        if (!layoutItem) continue;
         slot.style.top = `${layoutItem.renderY}px`;
         slot.dataset.placed = "true";
         if (
@@ -181,21 +181,23 @@ export function PdfCommentRail({
     });
     const pages = (layoutRootRef?.current ?? rail.parentElement)?.querySelector(".pdf-pages");
     if (pages) observer.observe(pages);
+    // Only the highlight layers matter. Checking the record target keeps a
+    // text layer render (thousands of spans in one record) from being walked.
     const highlights = new MutationObserver((records) => {
       for (const record of records) {
-        for (const node of record.addedNodes) {
-          if (!(node instanceof Element)) continue;
-          if (node.classList.contains("pdf-user-highlight")) {
-            schedule();
-            return;
-          }
+        const target = record.target;
+        if (target instanceof Element && target.classList.contains("pdf-user-highlight-layer")) {
+          schedule();
+          return;
         }
       }
     });
     if (pages) highlights.observe(pages, { childList: true, subtree: true });
     place();
     schedule();
-    window.addEventListener("scroll", schedule, true);
+    // No scroll listener: the rail scrolls with the pages, so every anchor
+    // offset is scroll-invariant. Lazy pages repaint highlights (observed
+    // above) and zoom resizes the pages (ResizeObserver).
     window.addEventListener("resize", schedule);
     // No wheel handler: the rail sits in the reading scroller, so wheel,
     // wheel-speed and Ctrl+wheel zoom reach `.reading-scroll` natively.
@@ -206,7 +208,6 @@ export function PdfCommentRail({
       }
       observer.disconnect();
       highlights.disconnect();
-      window.removeEventListener("scroll", schedule, true);
       window.removeEventListener("resize", schedule);
     };
   }, [anchorRootRef, layoutKey, layoutRootRef]);

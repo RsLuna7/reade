@@ -10,20 +10,22 @@ import {
 import { pdfCommentErrorMessage } from "../../lib/comments/commentErrors";
 import { CommentAvatar } from "./CommentAvatar";
 
+// Built once: every message of every card formats its time on each render.
+const COMMENT_DATE_FORMAT = new Intl.DateTimeFormat("zh-CN", {
+  year: "numeric",
+  month: "long",
+  day: "numeric",
+});
+const COMMENT_TIME_FORMAT = new Intl.DateTimeFormat("zh-CN", {
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+});
+
 function commentTime(timestamp: number): string {
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
-  const datePart = new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  }).format(date);
-  const timePart = new Intl.DateTimeFormat("zh-CN", {
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(date);
-  return `${datePart} ${timePart}`;
+  return `${COMMENT_DATE_FORMAT.format(date)} ${COMMENT_TIME_FORMAT.format(date)}`;
 }
 
 /** `toISOString` throws on an invalid date; a bad row must not break the card. */

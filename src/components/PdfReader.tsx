@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from "react";
 import { BookOpen, ChevronLeft, ChevronRight, Columns3, Crop, FileText, Minus, Plus, ScanSearch } from "lucide-react";
 import { AnnotationMode, GlobalWorkerOptions, PDFDataRangeTransport, TextLayer, getDocument, type PDFDocumentProxy, type PDFPageProxy } from "pdfjs-dist";
 import "pdfjs-dist/web/pdf_viewer.css";
@@ -83,6 +83,12 @@ import type {
 } from "../lib/comments/commentModel";
 import { PdfCommentRail } from "./comments/PdfCommentRail";
 import { commentFitNativeWidth, PDF_COMMENT_MARGIN_PX } from "../lib/comments/commentRailLayout";
+import {
+  NO_PAGE_ITEMS,
+  pdfCommentBubblesByPage,
+  pdfMarksByPage,
+  type PdfCommentBubble,
+} from "../lib/comments/pdfPageMarks";
 
 GlobalWorkerOptions.workerSrc = new URL("pdfjs-dist/build/pdf.worker.mjs", import.meta.url).toString();
 const RANGE_CHUNK = 256 * 1024;
@@ -425,7 +431,7 @@ interface PageProps {
   pageNumber: number;
   scale: number;
   initialRatio: number;
-  highlights: Annotation[];
+  highlights: readonly Annotation[];
   fuzzyAnchoring: boolean;
   /** "截取引用"模式(plan-pdf-region-card):已渲染页挂框选层。 */
   regionActive?: boolean;
@@ -437,7 +443,7 @@ interface PageProps {
   /** Corner badge / aria page number (printed when calibrated). */
   badgePage?: number;
   onHighlightResolutions?: (pageNumber: number, items: Array<{ id: string; resolution: AnchorResolution }>) => void;
-  commentBubbles?: Array<{ annotationId: string; top: number; active: boolean }>;
+  commentBubbles?: readonly PdfCommentBubble[];
   onActivateComment?: (annotationId: string) => void;
 }
 
@@ -1075,6 +1081,15 @@ export function PdfReader({
   const readingLoading = readingLoadingKey === sourceKey;
   const spreadActive = spreadIntent && spreadCapable && mode === "original";
   const hasPdfComments = pdfCommentsEnabled && mode === "original" && commentThreads.length > 0;
+  // Grouped once per change so each page keeps the same props between renders.
+  const marksByPage = useMemo(() => pdfMarksByPage(annotations), [annotations]);
+  const bubblesByPage = useMemo(
+    () =>
+      hasPdfComments
+        ? pdfCommentBubblesByPage(annotations, commentThreads, activePdfCommentAnnotationId)
+        : null,
+    [activePdfCommentAnnotationId, annotations, commentThreads, hasPdfComments],
+  );
 
   const setActivePage = useCallback((page: number) => {
     if (currentPageRef.current !== page) {
@@ -2256,29 +2271,9 @@ export function PdfReader({
           regionActive={regionSelect}
           renderMargin={spreadActive ? SPREAD_RENDER_MARGIN : undefined}
           onRegionCapture={onRegionCard}
-          highlights={annotations.filter(
-            (annotation) =>
-              isAnnotationMarkKind(annotation.kind) &&
-              annotation.locator.kind === "pdf" &&
-              annotation.locator.view === "original" &&
-              annotation.locator.page === page,
-          )}
+          highlights={marksByPage.get(page) ?? NO_PAGE_ITEMS}
           onHighlightResolutions={handleHighlightResolutions}
-          commentBubbles={hasPdfComments ? annotations.flatMap((annotation) => {
-            if (annotation.locator.kind !== "pdf" || annotation.locator.page !== page) return [];
-            if (!commentThreads.some((thread) => thread.annotationId === annotation.id && thread.deletedAt == null)) {
-              return [];
-            }
-            const top = annotation.locator.rects.reduce(
-              (min, rect) => Math.min(min, rect.y),
-              Number.POSITIVE_INFINITY,
-            );
-            return [{
-              annotationId: annotation.id,
-              top: Number.isFinite(top) ? top : 0.08,
-              active: activePdfCommentAnnotationId === annotation.id,
-            }];
-          }) : []}
+          commentBubbles={bubblesByPage?.get(page) ?? NO_PAGE_ITEMS}
           onActivateComment={(annotationId) =>
             (onSelectPdfComment ?? onActivatePdfComment)?.(annotationId)
           }
