@@ -78,6 +78,7 @@ Web 兼容维护使用 `pnpm dev:web`、`pnpm build:web`、`pnpm preview:web`；
 - 行为变化更新对应测试；修改 URL、HTML、资源读取、CSP、capability 或 Mermaid 必须补安全回归测试。
 - 跨模块变更完成前至少运行 `pnpm test`、`pnpm typecheck`、`cargo test` 和 `cargo clippy`（Rust 使用上方 manifest 参数）；Rust 改动另查 fmt。
 - 排版、滚动、目录跟随或响应式变化须用真实 Tauri 窗口或浏览器截图验证明暗主题与窄窗口；测试通过不等于视觉验收。
+- 新增用户可见功能完成前，用 computer use 在真实桌面窗口里按真人路径走主流程和相关边界情况。测试通过不等于这次验收；工具不可用时列出没走到的交互。做法见 [Agent 参考](docs/agent-reference.md) 的「新功能的真人交互验收」。
 - CI 已含前端与 Windows Rust 验证，Pages 发布依赖 verify 门禁；不能以 CI 代替本地相关验证。
 - 完成时说明修改的文件与行为、原因、实际验证结果，以及未验证项、风险和限制。
 

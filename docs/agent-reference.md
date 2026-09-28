@@ -70,6 +70,16 @@
 
 `.github/workflows/verify.yml` 在 PR 和被调用时运行前端测试、类型检查、桌面前端构建、Web 兼容构建，以及 Windows Rust test/fmt/clippy。`.github/workflows/deploy-pages.yml` 在 main push 或手动触发时先调用 verify，再构建发布 Pages。具体门禁以 workflow 为准，本地仍需验证相关改动。
 
+## 新功能的真人交互验收
+
+新增会改变阅读、标注、设置或导航的功能时，相关测试之外还要用 computer use 做一次验收。computer use 在后台驱动真实窗口，点击、输入、滚动和拖动窗口，不把测试通过或单张截图当成验收。
+
+1. 启动当前分支的桌面开发窗口（`pnpm tauri dev`）。不要用还没有这次改动的已安装正式版。
+2. 按真人会做的顺序操作：点、输入、保存、取消、切换开关、滚动、改变窗口大小。一条路径至少走完，不要只打开界面看一眼。
+3. 覆盖主路径，以及这个功能真正会碰到的边界：空状态、关掉再打开、还没保存就离开、双页或窄窗口。外观变了再看一遍暗色。
+4. 某条路径失败就先改，再把那条路径重走一遍。
+5. 完成时写清走过的路径和结果。computer use 不可用时，列出没有执行的交互，不要写成已验收。
+
 ## 指令维护
 
 详细反馈与蒸馏流程见 [智能体闭环](agent-skills-loop.md)。长流程留在 `.agents/skills/` 或 `tools/skills/`，不要复制到常驻规则或嵌套 `AGENTS.md`。Skills 经人审维护；Cursor Memory 不作为仓库规范。组件组合可按需读取 `vercel-composition-patterns`，设计评审按任务匹配 impeccable 等技能。
