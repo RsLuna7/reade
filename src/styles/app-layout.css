@@ -208,11 +208,9 @@
   to { opacity: 1; translate: 0 0; }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .library-dropdown-menu { animation: none; }
-  .library-dropdown-trigger,
-  .library-dropdown-trigger > svg { transition: none; }
-}
+:root[data-motion="off"] .library-dropdown-menu { animation: none; }
+:root[data-motion="off"] .library-dropdown-trigger,
+:root[data-motion="off"] .library-dropdown-trigger > svg { transition: none; }
 
 .library-range {
   display: flex;
