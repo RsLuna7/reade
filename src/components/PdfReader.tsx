@@ -82,7 +82,7 @@ import type {
   PdfCommentThread,
 } from "../lib/comments/commentModel";
 import { PdfCommentRail } from "./comments/PdfCommentRail";
-import { commentFitNativeWidth, PDF_COMMENT_MARGIN_PX } from "../lib/comments/commentRailLayout";
+import { commentFitContainerWidth, PDF_COMMENT_MARGIN_PX } from "../lib/comments/commentRailLayout";
 import {
   NO_PAGE_ITEMS,
   pdfCommentBubblesByPage,
@@ -1173,8 +1173,9 @@ export function PdfReader({
     if (!reader) return;
     const measure = () => {
       const pageAreaWidth = pageAreaRef.current?.clientWidth ?? 0;
+      // The comment margin is a fixed width the two pages cannot use.
       const available = hasPdfComments
-        ? commentColumnWidth(reader)
+        ? commentFitContainerWidth(commentColumnWidth(reader), PDF_COMMENT_MARGIN_PX)
         : (pageAreaWidth > 0 ? pageAreaWidth : reader.clientWidth);
       setSpreadCapable(canSpread(window.innerWidth, available));
     };
@@ -1690,14 +1691,13 @@ export function PdfReader({
           ".pdf-page",
         );
       }
-      const nativeForFit = commentFitNativeWidth(
-        nativeWidth,
-        spreadActive,
+      const widthForPages = commentFitContainerWidth(
+        availableWidth,
         hasPdfComments ? PDF_COMMENT_MARGIN_PX : 0,
       );
       const fitted = spreadActive
-        ? spreadFitScale(availableWidth, nativeForFit)
-        : singleFitScale(availableWidth, nativeForFit);
+        ? spreadFitScale(widthForPages, nativeWidth)
+        : singleFitScale(widthForPages, nativeWidth);
       commitPdfScale(fitted);
     } catch {
       // Session replacement can reject getPage; the new session will fit itself.
@@ -1754,8 +1754,8 @@ export function PdfReader({
   }, [fitWidth, hasPdfComments, session]);
 
   // While scale is still fit-to-width, a window or pane resize refits the
-  // page. The comment margin is part of that fit, then grows with later zoom
-  // and can scroll out of the window.
+  // page. The comment margin is part of that fit and keeps its width under
+  // later zoom; a page zoomed past the column scrolls it out of the window.
   useEffect(() => {
     const reader = rootRef.current;
     const area = (hasPdfComments ? findReadingRoot(reader) : pageAreaRef.current) ?? reader;
@@ -2253,10 +2253,6 @@ export function PdfReader({
       className="pdf-original-layout"
       data-comment-rail={hasPdfComments ? "true" : undefined}
       ref={originalLayoutRef}
-      style={hasPdfComments ? {
-        "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px`,
-        "--pdf-native-page-width": `${nativePageWidth ?? 820}px`,
-      } as React.CSSProperties : undefined}
     >
       <div className="pdf-page-area" ref={pageAreaRef}>
       <div className="pdf-pages" ref={pagesRef} data-spread={spreadActive ? "true" : undefined} style={{ "--pdf-page-width": `${Math.round((nativePageWidth ?? 820) * scale)}px` } as React.CSSProperties}>

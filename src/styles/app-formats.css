@@ -410,13 +410,19 @@
   align-items: stretch;
   grid-template-columns: minmax(0, 1fr);
 }
-/* Word print layout: the page and its comment margin are one zoomed strip.
-   Center the strip when it fits the column; when it does not, the reading
-   scroller moves both together. The margin stays on the page's right edge
-   at every zoom, including 100%, instead of sitting in the window center. */
+/* The page is what gets centered. The comment margin hangs in the blank space
+   on its right at a fixed UI size, whatever the zoom. Leftover width goes to
+   the first spacer until it equals the margin, then the second spacer and the
+   rail split the rest, so the page sits in the middle of the column. With
+   less room the page gives up only the missing part of its centering; past
+   that the reading scroller moves the page and its margin together.
+   No item's flex base differs from its content size, so `max-content` is the
+   page plus one margin and never forces a sideways scroll early. */
 .pdf-original-layout[data-comment-rail="true"] {
+  --pdf-comment-card-width: 264px;
+  --pdf-comment-gap: 12px;
+  --pdf-comment-margin: calc(var(--pdf-comment-card-width) + var(--pdf-comment-gap));
   display: flex;
-  justify-content: center;
   align-items: flex-start;
   width: max-content;
   min-width: 100%;
@@ -424,14 +430,22 @@
   margin: 0;
   overflow: visible;
 }
+.pdf-original-layout[data-comment-rail="true"]::before {
+  content: "";
+  flex: 9999 0 0px;
+  max-width: var(--pdf-comment-margin);
+}
 .pdf-original-layout[data-comment-rail="true"] .pdf-page-area {
   display: flex;
-  flex: 0 0 auto;
+  flex: 1 0 auto;
   align-items: stretch;
   position: relative;
-  width: max-content;
   overflow: visible;
   min-height: auto;
+}
+.pdf-original-layout[data-comment-rail="true"] .pdf-page-area::before {
+  content: "";
+  flex: 1 0 0px;
 }
 .pdf-original-layout[data-comment-rail="true"] .pdf-pages {
   flex: 0 0 auto;
@@ -440,64 +454,30 @@
   align-items: flex-start;
 }
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-rail {
-  --pdf-comment-scale: calc(var(--pdf-live-page-width, var(--pdf-page-width, 820px)) / var(--pdf-native-page-width, 820px));
   position: relative;
-  flex: 0 0 auto;
+  flex: 1 0 var(--pdf-comment-margin);
   align-self: stretch;
-  width: calc(300px * var(--pdf-comment-scale));
-  margin-left: calc(12px * var(--pdf-comment-scale));
   overflow: visible;
   border-left: 0;
   background: transparent;
-  font-size: calc(13px * var(--pdf-comment-scale));
 }
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-meta strong,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message p,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-composer textarea,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit {
-  font-size: 1em;
+/* The rail takes whatever is left of the column; the cards keep their width. */
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-card-position,
+.pdf-original-layout[data-comment-rail="true"] .pdf-comment-rail-hint {
+  right: auto;
+  left: var(--pdf-comment-gap);
+  width: var(--pdf-comment-card-width);
 }
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message time,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-actions button,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-composer button {
-  font-size: 0.85em;
-}
-/* The message row is a fixed 32px track in the shared card styles. Zoom only
-   grew the avatar (and its em size used the avatar's own smaller font), so the
-   circle slid over the name. Keep the track, gap, inset, and avatar on the
-   same scale as the rail. */
+/* A narrower card than the shared styles assume: a smaller avatar leaves the
+   text column its width. */
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-message {
-  grid-template-columns: calc(32px * var(--pdf-comment-scale)) minmax(0, 1fr);
-  column-gap: calc(10px * var(--pdf-comment-scale));
+  grid-template-columns: 26px minmax(0, 1fr);
+  column-gap: 8px;
 }
 .pdf-original-layout[data-comment-rail="true"] .pdf-comment-avatar {
-  width: calc(32px * var(--pdf-comment-scale));
-  height: calc(32px * var(--pdf-comment-scale));
-  font-size: calc(12px * var(--pdf-comment-scale));
-}
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-card .pdf-comment-conversation {
-  gap: calc(10px * var(--pdf-comment-scale));
-  padding:
-    calc(12px * var(--pdf-comment-scale))
-    calc(12px * var(--pdf-comment-scale))
-    calc(10px * var(--pdf-comment-scale));
-}
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-replies {
-  margin-left: calc(4px * var(--pdf-comment-scale));
-  padding-left: calc(12px * var(--pdf-comment-scale));
-}
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-message-actions button.pdf-comment-icon-button {
-  width: calc(26px * var(--pdf-comment-scale));
-  height: calc(26px * var(--pdf-comment-scale));
-}
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit-actions button {
-  width: calc(32px * var(--pdf-comment-scale));
-  height: calc(28px * var(--pdf-comment-scale));
-}
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-icon-button svg,
-.pdf-original-layout[data-comment-rail="true"] .pdf-comment-edit-actions svg {
-  width: calc(15px * var(--pdf-comment-scale));
-  height: calc(15px * var(--pdf-comment-scale));
+  width: 26px;
+  height: 26px;
+  font-size: 11px;
 }
 .pdf-page-area {
   min-width: 0;

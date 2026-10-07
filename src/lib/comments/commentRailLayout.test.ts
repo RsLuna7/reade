@@ -1,16 +1,21 @@
 import { describe, expect, it } from "vitest";
-import { PDF_COMMENT_MARGIN_PX, commentFitNativeWidth, layoutCommentCards } from "./commentRailLayout";
+import { PDF_COMMENT_MARGIN_PX, commentFitContainerWidth, layoutCommentCards } from "./commentRailLayout";
 
 describe("comment margin fit", () => {
   it("reserves the card track and the gap that sit beside the page", () => {
-    expect(PDF_COMMENT_MARGIN_PX).toBe(312);
+    expect(PDF_COMMENT_MARGIN_PX).toBe(276);
   });
 
-  it("widens the fit target by the margin and leaves a zero margin unchanged", () => {
-    expect(commentFitNativeWidth(600, false, 0)).toBe(600);
-    expect(commentFitNativeWidth(600, true, 0)).toBe(600);
-    expect(commentFitNativeWidth(600, false, 300)).toBe(900);
-    expect(commentFitNativeWidth(600, true, 300)).toBe(750);
+  it("takes the fixed margin out of the width the pages may fill", () => {
+    expect(commentFitContainerWidth(1200, 0)).toBe(1200);
+    expect(commentFitContainerWidth(1200)).toBe(1200);
+    expect(commentFitContainerWidth(1200, 276)).toBe(924);
+  });
+
+  it("never reports a negative width and ignores a bad margin", () => {
+    expect(commentFitContainerWidth(200, 276)).toBe(0);
+    expect(commentFitContainerWidth(1200, Number.NaN)).toBe(1200);
+    expect(commentFitContainerWidth(1200, -40)).toBe(1200);
   });
 });
 

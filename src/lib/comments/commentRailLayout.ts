@@ -1,20 +1,18 @@
 export const COMMENT_CARD_GAP = 12;
 
-/** Card track plus the gap beside the page, at scale 1. It multiplies with the page scale. */
-export const PDF_COMMENT_MARGIN_PX = 312;
+/**
+ * Card track plus the gap beside the page. A fixed UI size: it does not follow
+ * the page zoom. Mirrors `--pdf-comment-card-width` + `--pdf-comment-gap`.
+ */
+export const PDF_COMMENT_MARGIN_PX = 276;
 
 /**
- * Native width to feed the existing fit-width helpers so the page and a
- * scale-sized comment track share the window. A zero margin leaves it unchanged.
+ * Container width to feed the existing fit-width helpers so the pages fill
+ * what the comment margin leaves. A zero margin leaves it unchanged.
  */
-export function commentFitNativeWidth(
-  nativeWidth: number,
-  spread: boolean,
-  marginPx = 0,
-): number {
-  if (!(nativeWidth > 0)) return nativeWidth;
+export function commentFitContainerWidth(containerWidth: number, marginPx = 0): number {
   const margin = Number.isFinite(marginPx) ? Math.max(0, marginPx) : 0;
-  return spread ? nativeWidth + margin / 2 : nativeWidth + margin;
+  return Math.max(0, containerWidth - margin);
 }
 
 export interface CommentCardInput {

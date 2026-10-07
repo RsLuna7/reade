@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { PDF_COMMENT_MARGIN_PX } from "./lib/comments/commentRailLayout";
 import { THEME_IDS, THEME_META } from "./lib/themes";
 
 const appCssUrl = new URL("./App.css", import.meta.url);
@@ -252,33 +253,49 @@ describe("application CSS isolation", () => {
     expect(css).toMatch(/\.pdf-page\s*\{[^}]*--scale-round-y:\s*1px/s);
   });
 
-  it("centers the zoomed PDF page with its comment margin beside the page", () => {
+  it("centers the PDF page itself and hangs the comment margin in the space on its right", () => {
+    const rail = String.raw`\.pdf-original-layout\[data-comment-rail="true"\]`;
+    // Centering the page-plus-margin strip is what pushed the page off-center.
+    expect(css).not.toMatch(new RegExp(String.raw`${rail}\s*\{[^}]*justify-content:\s*center`, "s"));
+    // The first spacer hands the page up to one margin of leftover width, then
+    // the second spacer and the rail split the rest, which centers the page.
     expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s*\{[^}]*justify-content:\s*center/s,
+      new RegExp(String.raw`${rail}::before\s*\{[^}]*flex:\s*9999 0 0px[^}]*max-width:\s*var\(--pdf-comment-margin\)`, "s"),
+    );
+    expect(css).toMatch(new RegExp(String.raw`${rail}\s+\.pdf-page-area::before\s*\{[^}]*flex:\s*1 0 0px`, "s"));
+    expect(css).toMatch(new RegExp(String.raw`${rail}\s+\.pdf-page-area\s*\{[^}]*display:\s*flex`, "s"));
+    expect(css).toMatch(
+      new RegExp(String.raw`${rail}\s+\.pdf-comment-rail\s*\{[^}]*flex:\s*1 0 var\(--pdf-comment-margin\)`, "s"),
+    );
+    expect(css).toMatch(new RegExp(String.raw`${rail}\s+\.pdf-comment-rail\s*\{[^}]*position:\s*relative`, "s"));
+    expect(css).not.toMatch(new RegExp(String.raw`${rail}\s+\.pdf-comment-rail\s*\{[^}]*left:\s*100%`, "s"));
+  });
+
+  it("keeps the comment margin at a fixed UI size instead of following the page zoom", () => {
+    expect(css).not.toMatch(/--pdf-comment-scale/);
+    const cardWidth = Number(/--pdf-comment-card-width:\s*(\d+)px/.exec(css)?.[1]);
+    const gap = Number(/--pdf-comment-gap:\s*(\d+)px/.exec(css)?.[1]);
+    // Fit-to-width subtracts this same margin in PdfReader.
+    expect(cardWidth + gap).toBe(PDF_COMMENT_MARGIN_PX);
+    expect(css).toMatch(
+      /--pdf-comment-margin:\s*calc\(var\(--pdf-comment-card-width\) \+ var\(--pdf-comment-gap\)\)/,
     );
     expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-page-area\s*\{[^}]*display:\s*flex/s,
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-card-position[^{]*\{[^}]*width:\s*var\(--pdf-comment-card-width\)/s,
     );
     expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-rail\s*\{[^}]*position:\s*relative/s,
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*width:\s*26px[^}]*height:\s*26px/s,
     );
-    expect(css).not.toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-rail\s*\{[^}]*left:\s*100%/s,
+    expect(css).toMatch(
+      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-message\s*\{[^}]*grid-template-columns:\s*26px minmax\(0,\s*1fr\)/s,
     );
+    expect(css).toMatch(/\.pdf-comment-message p\s*\{[^}]*font-size:\s*13px/s);
+    expect(css).toMatch(/\.pdf-comment-message time\s*\{[^}]*font-size:\s*11px/s);
+  });
+
+  it("keeps the PDF comment accent and reply styling", () => {
     expect(css).toMatch(/\.pdf-comment-bubble:hover[\s\S]{0,180}color:\s*#5b5fc7/);
     expect(css).toMatch(/\.pdf-comment-card:hover[\s\S]{0,240}border-color:\s*#5b5fc7/);
-    expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-message\s*\{[^}]*grid-template-columns:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
-    );
-    expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*width:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
-    );
-    expect(css).toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*height:\s*calc\(32px \* var\(--pdf-comment-scale\)\)/s,
-    );
-    expect(css).not.toMatch(
-      /\.pdf-original-layout\[data-comment-rail="true"\]\s+\.pdf-comment-avatar\s*\{[^}]*width:\s*2\.46em/s,
-    );
     expect(css).toMatch(/\.pdf-comment-replies\s*\{[^}]*border-left:\s*2px solid/s);
     expect(css).toMatch(/\.pdf-comment-edit-confirm\s*\{[^}]*background:\s*#5b5fc7/s);
     expect(css).toMatch(/\.pdf-comment-edit-cancel\s*\{[^}]*border:\s*1px solid var\(--line-strong\)/s);
