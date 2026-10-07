@@ -75,13 +75,13 @@
 
 ## 下载
 
-当前版本是 **Reade 0.3.0**，面向 **Windows 10/11 x64**。
+当前版本是 **Reade 0.3.1**，面向 **Windows 10/11 x64**。
 
-1. 从 **[Releases](https://github.com/RsLuna7/reade/releases/latest)** 下载 `Reade_0.3.0_x64-setup.exe`。
+1. 从 **[Releases](https://github.com/RsLuna7/reade/releases/latest)** 下载 `Reade_0.3.1_x64-setup.exe`。
 2. 运行前核对 SHA-256：
 
    ```
-   1F6F8AC54196A2E3CFE8D5E497BB97F1675E634021D1B7A6827F0CD01FCE80AE
+   39EE33B613EB18B2676997106C28E70388C96EA635CF961A9E6948549EABC1CF
    ```
 
 3. 需要 Microsoft Edge **WebView2**。大多数 Windows 10/11 已自带。

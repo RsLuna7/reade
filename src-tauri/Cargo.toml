@@ -1,6 +1,6 @@
 [package]
 name = "reade"
-version = "0.3.0"
+version = "0.3.1"
 description = "A local-first long-form document reader for Windows"
 authors = ["Reade"]
 edition = "2021"

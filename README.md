@@ -75,13 +75,13 @@ The [user guide](docs/USER_GUIDE.md) covers day-to-day use. This README stays a 
 
 ## Download
 
-The current release is **Reade 0.3.0** for **Windows 10/11 x64**.
+The current release is **Reade 0.3.1** for **Windows 10/11 x64**.
 
-1. Download `Reade_0.3.0_x64-setup.exe` from **[Releases](https://github.com/RsLuna7/reade/releases/latest)**.
+1. Download `Reade_0.3.1_x64-setup.exe` from **[Releases](https://github.com/RsLuna7/reade/releases/latest)**.
 2. Confirm the SHA-256 before you run it:
 
    ```
-   1F6F8AC54196A2E3CFE8D5E497BB97F1675E634021D1B7A6827F0CD01FCE80AE
+   39EE33B613EB18B2676997106C28E70388C96EA635CF961A9E6948549EABC1CF
    ```
 
 3. Microsoft Edge **WebView2** is required. Most Windows 10/11 machines already have it.
