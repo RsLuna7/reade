@@ -182,6 +182,7 @@ import {
   buildTextIndex,
   clearAnnotationMarks,
   collectElementText,
+  createAnnotationId,
   findTextQuote,
   isAnnotationMarkKind,
   rangeFromOffsets,
@@ -223,9 +224,11 @@ import { filterAnnotations, buildLibraryAnchorStatusMap, normalizeAnnotationQuer
 import { REVIEW_DUE_FUTURE_LIMIT_MS } from "./lib/reviewScheduler";
 import {
   buildBookmarkForContext,
+  buildContinuationDrafts,
   buildExcerptDraftFromPending,
   buildMarkFromPending,
   captureReaderSelection,
+  pendingSelectionText,
   type PendingSelection,
 } from "./lib/annotationCapture";
 import { commentTargetForSelection } from "./lib/comments/commentPlacement";
@@ -1208,7 +1211,7 @@ function App() {
   const handleMakeCardFromSelection = useCallback(() => {
     if (!pendingSelection) return;
     setQuoteCardSource({
-      quote: pendingSelection.text,
+      quote: pendingSelectionText(pendingSelection),
       sourceTitle:
         currentDocument?.title ?? (currentPath ? fileName(currentPath) : ""),
     });
@@ -1218,7 +1221,8 @@ function App() {
   /** 选区去空白后 ≥8 字符才可查相关段落(RP §3.3)。 */
   const canFindRelated = Boolean(
     pendingSelection &&
-      pendingSelection.text.replace(/\s+/g, "").length >= RELATED_MIN_SELECTION_CHARS,
+      pendingSelectionText(pendingSelection).replace(/\s+/g, "").length >=
+        RELATED_MIN_SELECTION_CHARS,
   );
 
   const closeRelatedPassages = useCallback(() => {
@@ -1229,7 +1233,7 @@ function App() {
   // 相关段落(RP-D4):点击触发,无防抖;序号守卫丢弃过期响应。
   const handleFindRelated = useCallback(() => {
     if (!pendingSelection) return;
-    const text = pendingSelection.text;
+    const text = pendingSelectionText(pendingSelection);
     const padding = 12;
     const width = 400;
     const x = Math.min(
@@ -1984,8 +1988,17 @@ function App() {
             style: kind,
             tone,
           });
-          const captured = await saveExcerpt(draft, note?.trim() || null);
+          // A cross-page PDF selection becomes one mark per page, undone together.
+          const undoGroup = pending.continuation?.length ? createAnnotationId() : undefined;
+          const captured = await saveExcerpt(
+            draft,
+            note?.trim() || null,
+            undoGroup ? { undoGroup } : undefined,
+          );
           if (captured.commentThread) setActivePdfCommentAnnotationId(captured.excerpt.id);
+          for (const next of buildContinuationDrafts(currentPath, pending, { style: kind, tone })) {
+            await saveExcerpt(next, null, { undoGroup });
+          }
         } else {
           const annotation = buildMarkFromPending(
             currentPath,
@@ -2119,6 +2132,7 @@ function App() {
         annotations,
         annotationBundle.commentThreads ?? [],
       );
+      const undoGroup = pending.continuation?.length ? createAnnotationId() : undefined;
       const annotationId = await writePdfComment(target, body, {
         reply: (threadId, text) => replyPdfComment(threadId, text),
         createThread: (id, text, anchorCreated) =>
@@ -2128,10 +2142,23 @@ function App() {
             style: "highlight",
             tone: excerptTone,
           });
-          return (await saveExcerpt(draft, null)).excerpt.id;
+          return (await saveExcerpt(draft, null, undoGroup ? { undoGroup } : undefined)).excerpt.id;
         },
         removeAnchor: (id) => removeAnnotation(id, { recordUndo: false }),
       });
+      // Later pages of a cross-page selection get plain highlights; the
+      // discussion stays on the first page.
+      let continuationSaved = true;
+      try {
+        for (const next of buildContinuationDrafts(currentPath, pending, {
+          style: "highlight",
+          tone: excerptTone,
+        })) {
+          await saveExcerpt(next, null, { undoGroup });
+        }
+      } catch {
+        continuationSaved = false;
+      }
       setActivePdfCommentAnnotationId(annotationId);
       clearSentenceHighlight(COMMENT_DRAFT_HIGHLIGHT);
       commentSelectionRef.current = null;
@@ -2140,7 +2167,7 @@ function App() {
       setPendingSelection(null);
       window.getSelection()?.removeAllRanges();
       closeToolbar();
-      showNotice("批注已保存");
+      showNotice(continuationSaved ? "批注已保存" : "批注已保存，后面几页的高亮没能保存");
     } catch (cause) {
       showNotice(pdfCommentErrorMessage(cause));
     } finally {
@@ -3068,7 +3095,7 @@ function App() {
   // 120 字符后构造 `?doc=…#text=…`,仅 Web 运行时接线。
   const handleCopySelectionLink = useCallback(async () => {
     if (!pendingSelection || !currentPath) return;
-    const text = normalizeShareText(pendingSelection.text);
+    const text = normalizeShareText(pendingSelectionText(pendingSelection));
     closeToolbar();
     if (!text) {
       showNotice("选区没有可分享的文本。");
