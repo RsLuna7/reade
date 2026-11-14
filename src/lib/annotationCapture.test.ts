@@ -1,6 +1,11 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { captureReaderSelection, buildExcerptDraftFromPending } from "./annotationCapture";
+import {
+  buildContinuationDrafts,
+  buildExcerptDraftFromPending,
+  captureReaderSelection,
+  pendingSelectionText,
+} from "./annotationCapture";
 import { MAX_EXCERPT_CHARS } from "./annotationValidation";
 import { resolvePdfHighlightRects } from "./annotations";
 
@@ -69,6 +74,97 @@ describe("pdf original-view selection capture", () => {
     });
     if (pending!.locator.kind !== "pdf") throw new Error("expected pdf locator");
     expect(pending!.locator.rects).toEqual([{ x: 0.1, y: 0.1, w: 0.5, h: 0.02 }]);
+  });
+
+  function addPdfPage(root: HTMLElement, pageNumber: number, text: string): HTMLElement {
+    const nextPage = document.createElement("section");
+    nextPage.className = "pdf-page";
+    nextPage.dataset.pageNumber = String(pageNumber);
+    const layer = document.createElement("div");
+    layer.className = "textLayer pdf-text-layer";
+    const span = document.createElement("span");
+    span.textContent = text;
+    layer.append(span);
+    nextPage.append(layer);
+    root.append(nextPage);
+    nextPage.getBoundingClientRect = () => rect(0, 0, 800, 1000);
+    return span;
+  }
+
+  function withClientRects<T>(run: () => T): T {
+    // jsdom has no layout; every per-page segment measures the same line.
+    const proto = Range.prototype as unknown as { getClientRects?: () => DOMRectList };
+    const original = proto.getClientRects;
+    proto.getClientRects = () => [rect(80, 900, 400, 20)] as unknown as DOMRectList;
+    try {
+      return run();
+    } finally {
+      if (original) proto.getClientRects = original;
+      else delete proto.getClientRects;
+    }
+  }
+
+  it("splits a selection that crosses pages into one segment per page", () => {
+    const { root, textLayer } = buildPdfPage();
+    const nextSpan = addPdfPage(root, 4, "Second page opening line");
+
+    const range = document.createRange();
+    range.setStart(textLayer.children[1].firstChild as Text, 6);
+    range.setEnd(nextSpan.firstChild as Text, 11);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const pending = withClientRects(() =>
+      captureReaderSelection({ root, kind: "pdf", pdfMode: "original" }),
+    );
+    expect(pending).not.toBeNull();
+    expect(pending!.text).toBe("over the lazy dog");
+    expect(pending!.locator).toMatchObject({ kind: "pdf", page: 3, quote: "over the lazy dog" });
+    if (pending!.locator.kind !== "pdf") throw new Error("expected pdf locator");
+    expect(pending!.locator.rects).toEqual([{ x: 0.1, y: 0.9, w: 0.5, h: 0.02 }]);
+    expect(pendingSelectionText(pending!)).toContain("over the lazy dog");
+    expect(pendingSelectionText(pending!)).toContain("Second page");
+
+    expect(pending!.continuation).toHaveLength(1);
+    const next = pending!.continuation![0]!;
+    expect(next.text).toBe("Second page");
+    expect(next.locator).toMatchObject({
+      kind: "pdf",
+      page: 4,
+      view: "original",
+      quote: "Second page",
+      prefix: "",
+      suffix: " opening line",
+    });
+    expect(next.continuation).toBeUndefined();
+  });
+
+  it("covers pages in the middle and skips a starting page with nothing selected", () => {
+    const { root, textLayer } = buildPdfPage();
+    const middle = addPdfPage(root, 4, "Middle page text");
+    const last = addPdfPage(root, 5, "Last page text");
+
+    const range = document.createRange();
+    // Starts at the very end of page 3's text: nothing of page 3 is selected.
+    range.setStart(textLayer.children[1].firstChild as Text, "jumps over the lazy dog".length);
+    range.setEnd(last.firstChild as Text, 4);
+    const selection = window.getSelection()!;
+    selection.removeAllRanges();
+    selection.addRange(range);
+
+    const pending = withClientRects(() =>
+      captureReaderSelection({ root, kind: "pdf", pdfMode: "original" }),
+    );
+    expect(middle.textContent).toBe("Middle page text");
+    expect(pending).not.toBeNull();
+    expect(pending!.locator).toMatchObject({ kind: "pdf", page: 4, quote: "Middle page text" });
+    expect(pending!.continuation).toHaveLength(1);
+    expect(pending!.continuation![0]!.locator).toMatchObject({
+      kind: "pdf",
+      page: 5,
+      quote: "Last",
+    });
   });
 });
 
@@ -322,5 +418,41 @@ describe("markdown selection to excerpt draft", () => {
     expect(() =>
       buildExcerptDraftFromPending("notes/a.md", pending!, { style: "highlight", tone: "sand" }),
     ).toThrow(/不能超过/);
+  });
+});
+
+describe("cross-page continuation drafts", () => {
+  it("builds one single-page draft per following page", () => {
+    const { root, textLayer } = buildPdfPage();
+    const next = document.createElement("section");
+    next.className = "pdf-page";
+    next.dataset.pageNumber = "4";
+    const layer = document.createElement("div");
+    layer.className = "textLayer pdf-text-layer";
+    const span = document.createElement("span");
+    span.textContent = "Second page opening line";
+    layer.append(span);
+    next.append(layer);
+    root.append(next);
+    next.getBoundingClientRect = () => rect(0, 0, 800, 1000);
+
+    const range = document.createRange();
+    range.setStart(textLayer.children[1].firstChild as Text, 6);
+    range.setEnd(span.firstChild as Text, 6);
+    window.getSelection()!.removeAllRanges();
+    window.getSelection()!.addRange(range);
+    const pending = captureReaderSelection({ root, kind: "pdf", pdfMode: "reading" });
+
+    const drafts = buildContinuationDrafts("papers/a.pdf", pending!, {
+      style: "highlight",
+      tone: "sand",
+    });
+    expect(drafts).toHaveLength(1);
+    expect(drafts[0]).toMatchObject({
+      relativePath: "papers/a.pdf",
+      sourceText: "Second",
+      appearance: { style: "highlight", tone: "sand" },
+    });
+    expect(drafts[0]!.anchor).toMatchObject({ format: "pdfText", page: 4 });
   });
 });

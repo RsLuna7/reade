@@ -38,7 +38,14 @@ import {
 const MAX_UNDO = 20;
 
 type UndoEntry =
-  | { type: "create"; id: string; entryKind: AnnotationEntryKind }
+  | {
+      type: "create";
+      id: string;
+      entryKind: AnnotationEntryKind;
+      /** Same-gesture saves (a selection split across PDF pages) undone together. */
+      group?: string;
+      alsoIds?: string[];
+    }
   | { type: "delete"; id: string; entryKind: AnnotationEntryKind }
   | { type: "clear"; relativePath: string; snapshot: DocumentAnnotationBundle };
 
@@ -214,7 +221,11 @@ export function useDocumentAnnotations(relativePath: string | null) {
   );
 
   const saveExcerpt = useCallback(
-    async (draft: ExcerptDraft, reflectionBody: string | null = null) => {
+    async (
+      draft: ExcerptDraft,
+      reflectionBody: string | null = null,
+      options?: { undoGroup?: string },
+    ) => {
       const epoch = documentEpochRef.current;
       return runMutation(async () => {
         const captured = await createExcerpt(draft, reflectionBody);
@@ -254,7 +265,13 @@ export function useDocumentAnnotations(relativePath: string | null) {
         };
         commitBundle(next);
         dataVersionRef.current += 1;
-        pushUndo({ type: "create", id: captured.excerpt.id, entryKind: "excerpt" });
+        const group = options?.undoGroup;
+        const top = undoStackRef.current[undoStackRef.current.length - 1];
+        if (group && top?.type === "create" && top.group === group) {
+          top.alsoIds = [...(top.alsoIds ?? []), captured.excerpt.id];
+        } else {
+          pushUndo({ type: "create", id: captured.excerpt.id, entryKind: "excerpt", group });
+        }
         return captured;
       });
     },
@@ -331,28 +348,30 @@ export function useDocumentAnnotations(relativePath: string | null) {
       if (!entry) return false;
 
       if (entry.type === "create") {
-        const removedThreadIds = new Set(
-          commentThreads(bundleRef.current)
-            .filter((thread) => thread.annotationId === entry.id)
-            .map((thread) => thread.id),
-        );
-        await deleteAnnotation(entry.id);
-        if (documentEpochRef.current !== epoch) return true;
-        commitBundle({
-          excerpts: bundleRef.current.excerpts.filter((item) => item.id !== entry.id),
-          places: bundleRef.current.places.filter((item) => item.id !== entry.id),
-          reflections: bundleRef.current.reflections.filter((item) => item.entryId !== entry.id),
-          reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
-            (item) => item.excerptId !== entry.id,
-          ),
-          commentThreads: commentThreads(bundleRef.current).filter(
-            (thread) => thread.annotationId !== entry.id,
-          ),
-          commentMessages: commentMessages(bundleRef.current).filter(
-            (message) => !removedThreadIds.has(message.threadId),
-          ),
-        });
-        dataVersionRef.current += 1;
+        for (const id of [entry.id, ...(entry.alsoIds ?? [])]) {
+          const removedThreadIds = new Set(
+            commentThreads(bundleRef.current)
+              .filter((thread) => thread.annotationId === id)
+              .map((thread) => thread.id),
+          );
+          await deleteAnnotation(id);
+          if (documentEpochRef.current !== epoch) return true;
+          commitBundle({
+            excerpts: bundleRef.current.excerpts.filter((item) => item.id !== id),
+            places: bundleRef.current.places.filter((item) => item.id !== id),
+            reflections: bundleRef.current.reflections.filter((item) => item.entryId !== id),
+            reviewEnrollments: bundleRef.current.reviewEnrollments.filter(
+              (item) => item.excerptId !== id,
+            ),
+            commentThreads: commentThreads(bundleRef.current).filter(
+              (thread) => thread.annotationId !== id,
+            ),
+            commentMessages: commentMessages(bundleRef.current).filter(
+              (message) => !removedThreadIds.has(message.threadId),
+            ),
+          });
+          dataVersionRef.current += 1;
+        }
       } else if (entry.type === "delete") {
         await restoreAnnotationEntry(entry.id, entry.entryKind);
         if (documentEpochRef.current !== epoch) return true;

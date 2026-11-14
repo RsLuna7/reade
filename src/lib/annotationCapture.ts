@@ -24,6 +24,18 @@ export interface PendingSelection {
   text: string;
   locator: Exclude<AnnotationLocator, { kind: "bookmark" }>;
   rect: { left: number; top: number; width: number; height: number };
+  /**
+   * Selection that crosses PDF page boundaries: `text`/`locator` describe the
+   * first page, `continuation` holds one entry per following page and
+   * `fullText` the whole selection for copy / lookup actions.
+   */
+  continuation?: PendingSelection[];
+  fullText?: string;
+}
+
+/** Whole-selection text; a cross-page PDF selection's `text` is only its first page. */
+export function pendingSelectionText(pending: PendingSelection): string {
+  return pending.fullText ?? pending.text;
 }
 
 export function captureReaderSelection(input: {
@@ -38,6 +50,97 @@ export function captureReaderSelection(input: {
   return captureRangeLocator({ ...input, range });
 }
 
+/** A selection spanning more pages than this keeps only its first pages. */
+const MAX_PDF_SELECTION_PAGES = 10;
+
+/**
+ * PDF locators hold one page, so a selection dragged across pages is split
+ * per page. The first page with text becomes the primary selection and the
+ * remaining pages ride along in `continuation`, each with its own locator.
+ */
+function capturePdfRangeLocator(input: {
+  root: HTMLElement;
+  range: Range;
+  pdfMode?: "original" | "reading";
+}): PendingSelection | null {
+  const { range } = input;
+  const view = input.pdfMode === "reading" ? "reading" : "original";
+  const { startContainer } = range;
+  const startPage = startContainer instanceof Element
+    ? startContainer.closest<HTMLElement>("[data-page-number]")
+    : startContainer.parentElement?.closest<HTMLElement>("[data-page-number]");
+  if (!startPage) return null;
+  const pages = Array.from(input.root.querySelectorAll<HTMLElement>("[data-page-number]")).filter(
+    (page) => page === startPage || range.intersectsNode(page),
+  );
+  const segments: PendingSelection[] = [];
+  for (const page of pages.slice(0, MAX_PDF_SELECTION_PAGES)) {
+    const segment = capturePdfPageSegment(page, range, view);
+    if (segment) segments.push(segment);
+  }
+  const [primary, ...continuation] = segments;
+  if (!primary) return null;
+  if (!continuation.length) return primary;
+  return {
+    ...primary,
+    fullText: normalizeSelectionText(range.toString()),
+    continuation,
+  };
+}
+
+/** The part of `source` that lies on `page`, captured as a single-page selection. */
+function capturePdfPageSegment(
+  page: HTMLElement,
+  source: Range,
+  view: "original" | "reading",
+): PendingSelection | null {
+  const pageNumber = Number(page.dataset.pageNumber);
+  if (!Number.isFinite(pageNumber)) return null;
+  const textRoot =
+    (view === "reading"
+      ? page.querySelector<HTMLElement>(".markdown-body")
+      : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer")) ?? page;
+  let range = source;
+  const startsHere = textRoot.contains(source.startContainer);
+  const endsHere = textRoot.contains(source.endContainer);
+  if (!startsHere || !endsHere) {
+    range = source.cloneRange();
+    if (!startsHere) range.setStart(textRoot, 0);
+    if (!endsHere) range.setEnd(textRoot, textRoot.childNodes.length);
+  }
+  const text = normalizeSelectionText(range.toString());
+  if (!text) return null;
+  const offsets = rangeOffsetsWithinRoot(textRoot, range);
+  if (!offsets) return null;
+  const quote = serializeTextQuote(collectElementText(textRoot), offsets.start, offsets.end);
+  if (!quote) return null;
+  const pageRect = page.getBoundingClientRect();
+  const rects = view === "original" ? normalizePdfRects(range.getClientRects(), pageRect) : [];
+  const rect = range.getBoundingClientRect();
+  // Page size in PDF points, published by PdfReader on the page element;
+  // snapshotting it keeps the normalized rects convertible offline.
+  const pageWidth = Number(page.dataset.pageWidth);
+  const pageHeight = Number(page.dataset.pageHeight);
+  const pageSize =
+    Number.isFinite(pageWidth) && pageWidth > 0 && Number.isFinite(pageHeight) && pageHeight > 0
+      ? { pageWidth, pageHeight }
+      : null;
+  return {
+    text,
+    locator: {
+      kind: "pdf",
+      page: pageNumber,
+      view,
+      quote: quote.quote,
+      prefix: quote.prefix,
+      suffix: quote.suffix,
+      rects,
+      ...(pageSize ?? {}),
+    },
+    rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
+  };
+}
+
 /**
  * Serializes a DOM Range into the full locator set (quote/prefix/suffix plus
  * per-format hints). Shared by live selection capture and the §5.6 relocate
@@ -49,6 +152,7 @@ export function captureRangeLocator(input: {
   range: Range;
   pdfMode?: "original" | "reading";
 }): PendingSelection | null {
+  if (input.kind === "pdf") return capturePdfRangeLocator(input);
   const { range } = input;
   const text = normalizeSelectionText(range.toString());
   if (!text) return null;
@@ -73,49 +177,6 @@ export function captureRangeLocator(input: {
         // verifies against the quote.
         start: offsets.start,
         end: offsets.end,
-      },
-      rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
-    };
-  }
-
-  if (input.kind === "pdf") {
-    const page = range.startContainer instanceof Element
-      ? range.startContainer.closest<HTMLElement>("[data-page-number]")
-      : range.startContainer.parentElement?.closest<HTMLElement>("[data-page-number]");
-    if (!page) return null;
-    const pageNumber = Number(page.dataset.pageNumber);
-    if (!Number.isFinite(pageNumber)) return null;
-    const view = input.pdfMode === "reading" ? "reading" : "original";
-    const textRoot =
-      (view === "reading"
-        ? page.querySelector<HTMLElement>(".markdown-body")
-        : page.querySelector<HTMLElement>(".pdf-text-layer, .textLayer")) ?? page;
-    const offsets = rangeOffsetsWithinRoot(textRoot, range);
-    if (!offsets) return null;
-    const quote = serializeTextQuote(collectElementText(textRoot), offsets.start, offsets.end);
-    if (!quote) return null;
-    const pageRect = page.getBoundingClientRect();
-    const rects = view === "original" ? normalizePdfRects(range.getClientRects(), pageRect) : [];
-    const rect = range.getBoundingClientRect();
-    // Page size in PDF points, published by PdfReader on the page element;
-    // snapshotting it keeps the normalized rects convertible offline.
-    const pageWidth = Number(page.dataset.pageWidth);
-    const pageHeight = Number(page.dataset.pageHeight);
-    const pageSize =
-      Number.isFinite(pageWidth) && pageWidth > 0 && Number.isFinite(pageHeight) && pageHeight > 0
-        ? { pageWidth, pageHeight }
-        : null;
-    return {
-      text,
-      locator: {
-        kind: "pdf",
-        page: pageNumber,
-        view,
-        quote: quote.quote,
-        prefix: quote.prefix,
-        suffix: quote.suffix,
-        rects,
-        ...(pageSize ?? {}),
       },
       rect: { left: rect.left, top: rect.top, width: rect.width, height: rect.height },
     };
@@ -168,6 +229,17 @@ export function buildExcerptDraftFromPending(
     appearance: { ...appearance },
     sortIndex: deriveAnnotationSortIndex(pending.locator),
   });
+}
+
+/** Drafts for the pages after the first of a cross-page PDF selection. */
+export function buildContinuationDrafts(
+  relativePath: string,
+  pending: PendingSelection,
+  appearance: ExcerptAppearance,
+): ExcerptDraft[] {
+  return (pending.continuation ?? []).map((segment) =>
+    buildExcerptDraftFromPending(relativePath, segment, appearance),
+  );
 }
 
 export function buildMarkFromPending(

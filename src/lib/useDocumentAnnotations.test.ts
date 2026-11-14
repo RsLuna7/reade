@@ -403,6 +403,35 @@ describe("atomic actions and undo semantics", () => {
     expect(result.current.canUndo).toBe(true);
   });
 
+  it("undoes excerpts saved in one undo group together", async () => {
+    const { result } = renderAnnotations("docs/a.md");
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    const draft = (id: string) => ({
+      id,
+      relativePath: "docs/a.md",
+      sourceText: "quoted line",
+      anchor: {
+        format: "markdown" as const,
+        quote: { exact: "quoted line", prefix: "", suffix: "" },
+        headingId: null,
+      },
+      appearance: { style: "highlight" as const, tone: "sand" as const },
+      sortIndex: "M|00000|00000000",
+    });
+    await act(async () => {
+      await result.current.saveExcerpt(draft("solo"), null);
+      await result.current.saveExcerpt(draft("page-1"), null, { undoGroup: "g1" });
+      await result.current.saveExcerpt(draft("page-2"), null, { undoGroup: "g1" });
+    });
+    expect(result.current.bundle.excerpts).toHaveLength(3);
+    await act(async () => expect(result.current.undo()).resolves.toBe(true));
+    expect(result.current.bundle.excerpts.map((item) => item.id)).toEqual(["solo"]);
+    expect(result.current.canUndo).toBe(true);
+    await act(async () => expect(result.current.undo()).resolves.toBe(true));
+    expect(result.current.bundle.excerpts).toEqual([]);
+    expect(result.current.canUndo).toBe(false);
+  });
+
   it("drops the create step when a new excerpt is silently rolled back", async () => {
     const { result } = renderAnnotations("docs/a.md");
     await waitFor(() => expect(result.current.loading).toBe(false));
